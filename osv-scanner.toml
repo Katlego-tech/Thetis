@@ -3,7 +3,7 @@
 [[IgnoredVulns]]
 id = "GHSA-fc5q-39xc-vjpf"
 ignoreUntil = 2026-12-02T00:00:00Z
-reason = "#4: picomatch <=4.0.7 ReDoS, no fixed release (checked 2026-11-18). Dev-only, via vitest 5.1.0 globbing the repo's own test patterns; no user input reaches it. Upgrade when a fix ships."
+reason = "#4: picomatch <=4.0.7 ReDoS, no fixed release (checked 2026-11-18). Dev-only globbing through vitest/vite (tinyglobby -> fdir) and the shadcn CLI (fast-glob -> micromatch -> picomatch 2.3.2, and dotenvx -> picomatch 4.0.7). These tools glob the repo's own paths without user input. shadcn is also a web dependency for its CSS export, so its CLI dependencies remain in the production install graph. Upgrade when a fix ships."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0387"

@@ -5,3 +5,5 @@ packages:
   - "infra"
 allowBuilds:
   esbuild: false  # its binary arrives as an optional dependency; no install script needed
+overrides:
+  "@ts-morph/common@0.27.0>minimatch": "11.0.3"
