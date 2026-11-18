@@ -4,10 +4,14 @@ from urllib.parse import unquote
 import hashlib
 import json
 import re
+import subprocess
 
 root = Path(__file__).resolve().parents[1]
 errors = []
-authored = [root / 'README.md', root / 'DESIGN.md', *sorted((root / 'docs').glob('*.md'))]
+# Only the project's tracked docs: local-only files (git-ignored or excluded) are not checked.
+tracked = subprocess.run(['git', 'ls-files', 'docs/*.md'], cwd=root, capture_output=True,
+                         text=True, check=True).stdout.split()
+authored = [root / 'README.md', root / 'DESIGN.md', *sorted(root / f for f in tracked)]
 for doc in authored:
     for target in re.findall(r'\]\(([^)]+)\)', doc.read_text()):
         if target.startswith(('https://', 'http://', '#', 'mailto:')):
