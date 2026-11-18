@@ -4,14 +4,23 @@ import {
   getCompiledTransactionMessageEncoder,
   getTransactionDecoder,
 } from "@solana/kit";
-import { describe, expect, it } from "vitest";
-import { copy, outcomeCopy } from "../src/lib/copy";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { copy, outcomeCopy, refusalCopy } from "../src/lib/copy";
 import { decodeBase58, decodeBase64, encodeBase58, encodeBase64 } from "../src/lib/encoding";
-import { checkIntentRole, parseIntent, parseOutcome, sameAuthorization } from "../src/lib/relay";
+import {
+  authorizationStatus,
+  checkIntentRole,
+  type Intent,
+  parseCheck,
+  parseIntent,
+  parseOutcome,
+  sameAuthorization,
+} from "../src/lib/relay";
 import { getMessageSignature, signatureIndex, wrapUnsignedTransaction } from "../src/lib/wire";
+import { getIntent, postSignature } from "../src/relay-client";
 
-const sender = address("Vjh6dMxXifovfpqRwhhzp6gVsQUxFv5ZwffNu6QugcY");
-const receiver = address("8dRTJ7KTmCiaziBmZf8skeBtPmwWLHyfEZQpPfu5a5px");
+const sender = address(encodeBase58(new Uint8Array(32).fill(1)));
+const receiver = address(encodeBase58(new Uint8Array(32).fill(2)));
 const sponsor = address("11111111111111111111111111111111");
 const lifetimeToken = blockhash(sponsor);
 const header = {
@@ -40,7 +49,7 @@ const v1Message = messageEncoder.encode({
   instructionHeaders: [],
   instructionPayloads: [],
 });
-const intent = {
+const intent: Intent = {
   role: "sender",
   expectedAddress: sender,
   authorizationBase64: Buffer.from(v1Message).toString("base64"),
@@ -141,6 +150,74 @@ describe("wallet wire bytes", () => {
 });
 
 describe("relay responses", () => {
+  it.each(["UNKNOWN_ROLE", "INTENT_EXPIRED", "BATCH_COMPLETE"])(
+    "parses %s from /intent at HTTP 200",
+    (reason) => {
+      const refusal = { verified: false, reason };
+      expect(parseIntent(refusal, 200)).toEqual(refusal);
+      expect(() => parseIntent(refusal, 503)).toThrow();
+    },
+  );
+
+  it.each([
+    "WRONG_ADDRESS",
+    "BAD_SIGNATURE",
+    "UNKNOWN_ROLE",
+    "ALREADY_SUBMITTED",
+    "INTENT_EXPIRED",
+  ])("parses %s from /signature at HTTP 200", (reason) => {
+    const refusal = { verified: false, reason };
+    expect(parseCheck(refusal, 200)).toEqual(refusal);
+    expect(() => parseCheck(refusal, 503)).toThrow();
+  });
+
+  it("parses BAD_SIGNATURE from /signature at HTTP 400 for malformed requests", () => {
+    const refusal = { verified: false, reason: "BAD_SIGNATURE" };
+    expect(parseCheck(refusal, 400)).toEqual(refusal);
+    expect(() => parseCheck({ ...refusal, reason: "WRONG_ADDRESS" }, 400)).toThrow();
+    expect(() => parseCheck({ verified: true }, 400)).toThrow();
+  });
+
+  it("parses CHAIN_UNAVAILABLE only at HTTP 503 and keeps the loaded authorization eligible for retry", () => {
+    const refusal = { verified: false, reason: "CHAIN_UNAVAILABLE" } as const;
+    expect(parseIntent(refusal, 503)).toEqual(refusal);
+    expect(parseCheck(refusal, 503)).toEqual(refusal);
+    expect(authorizationStatus(intent, refusal)).toBe("CHAIN_UNAVAILABLE");
+    expect(() => parseIntent(refusal, 200)).toThrow();
+    expect(() => parseCheck(refusal, 200)).toThrow();
+    expect(() => parseIntent(intent, 503)).toThrow();
+  });
+
+  it.each(["WRONG_ADDRESS", "BAD_SIGNATURE"])(
+    "parses %s as a recorded route check in /outcome",
+    (reason) => {
+      const response = {
+        ...outcome,
+        checks: { ...outcome.checks, sender: { message: { verified: false, reason } } },
+      };
+      expect(parseOutcome(response)).toEqual(response);
+    },
+  );
+
+  it("rejects unknown codes, refusals on the wrong route, and inconsistent verification results", () => {
+    for (const reason of ["UNRECOGNIZED", "WRONG_ADDRESS", "BAD_SIGNATURE", "ALREADY_SUBMITTED"]) {
+      expect(() => parseIntent({ verified: false, reason })).toThrow();
+    }
+    for (const reason of ["UNRECOGNIZED", "BATCH_COMPLETE"]) {
+      expect(() => parseCheck({ verified: false, reason })).toThrow();
+    }
+    expect(() => parseCheck({ verified: true, reason: "BAD_SIGNATURE" })).toThrow();
+    expect(() => parseCheck({ verified: false })).toThrow();
+    for (const reason of ["UNRECOGNIZED", "CHAIN_UNAVAILABLE", "ALREADY_SUBMITTED"]) {
+      expect(() =>
+        parseOutcome({
+          ...outcome,
+          checks: { ...outcome.checks, sender: { message: { verified: false, reason } } },
+        }),
+      ).toThrow();
+    }
+  });
+
   it("parses a devnet intent and the batch complete refusal", () => {
     expect(parseIntent(intent)).toEqual(intent);
     const refusal = {
@@ -160,10 +237,19 @@ describe("relay responses", () => {
     expect(parseIntent(refusal)).toEqual(refusal);
   });
 
-  it("binds a loaded intent to the selected role and a required signer key", () => {
+  it("accepts an expired signature refusal and rejects extra fields", () => {
+    const refusal = { verified: false, reason: "INTENT_EXPIRED" };
+    expect(parseCheck(refusal)).toEqual(refusal);
+    expect(() => parseCheck({ ...refusal, extra: true })).toThrow("Invalid /signature response");
+  });
+
+  it("uses the relay's expected address for each role and requires it to be a signer", () => {
     const loaded = parseIntent(intent);
     if (!("intent" in loaded)) throw new Error("Expected an intent");
     expect(() => checkIntentRole(loaded, "sender")).not.toThrow();
+    expect(() =>
+      checkIntentRole({ ...loaded, role: "receiver", expectedAddress: receiver }, "receiver"),
+    ).not.toThrow();
     expect(() => checkIntentRole(loaded, "receiver")).toThrow();
     expect(() =>
       checkIntentRole(
@@ -198,6 +284,24 @@ describe("relay responses", () => {
     );
   });
 
+  it("allows a completed batch's route checks only for the submitted authorization", () => {
+    const refusal = { verified: false, reason: "BATCH_COMPLETE" } as const;
+    expect(authorizationStatus(intent, refusal, intent.authorizationSha256)).toBe("current");
+    expect(authorizationStatus(intent, refusal, "a".repeat(64))).toBe("batchComplete");
+    expect(authorizationStatus(intent, refusal)).toBe("batchComplete");
+  });
+
+  it("blocks a pending signature if the relay expired or replaced the loaded intent", () => {
+    expect(authorizationStatus(intent, { ...intent })).toBe("current");
+    expect(authorizationStatus(intent, { verified: false, reason: "INTENT_EXPIRED" })).toBe(
+      "stale",
+    );
+    expect(authorizationStatus(intent, { ...intent, authorizationSha256: "a".repeat(64) })).toBe(
+      "stale",
+    );
+    expect(authorizationStatus(intent, { ...intent, expectedAddress: receiver })).toBe("stale");
+  });
+
   it("rejects unknown fields in the intent, nested intent, and refusal", () => {
     expect(() => parseIntent({ ...intent, extra: true })).toThrow();
     expect(() => parseIntent({ ...intent, intent: { ...intent.intent, extra: true } })).toThrow();
@@ -227,6 +331,13 @@ describe("relay responses", () => {
       state: "waiting",
       checks: { sender: {}, receiver: {} },
     });
+  });
+
+  it("preserves the optional authorization digest and rejects an invalid digest", () => {
+    const submitted = { ...outcome, authorizationSha256: intent.authorizationSha256 };
+    expect(parseOutcome(submitted)).toEqual(submitted);
+    expect(() => parseOutcome({ ...submitted, authorizationSha256: "00" })).toThrow();
+    expect(() => parseOutcome({ ...submitted, authorizationSha256: "g".repeat(64) })).toThrow();
   });
 
   it("rejects unknown fields at every level of an outcome", () => {
@@ -270,13 +381,39 @@ describe("relay responses", () => {
   });
 });
 
+describe("relay HTTP client", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("passes HTTP 503 CHAIN_UNAVAILABLE through for loading and submitting", async () => {
+    const refusal = { verified: false, reason: "CHAIN_UNAVAILABLE" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(Response.json(refusal, { status: 503 }))),
+    );
+    await expect(getIntent("sender")).resolves.toEqual(refusal);
+    await expect(
+      postSignature({ role: "sender", address: sender, route: "message", signatureBase58: "1" }),
+    ).resolves.toEqual(refusal);
+  });
+});
+
 describe("screen copy", () => {
+  it.each([
+    ["WRONG_ADDRESS", "The submitted address does not match this role."],
+    ["BAD_SIGNATURE", "The relay could not verify the signature."],
+    ["UNKNOWN_ROLE", "The relay did not recognize this role."],
+    ["ALREADY_SUBMITTED", "The handover was already submitted."],
+    ["INTENT_EXPIRED", "Intent expired. Reload it."],
+    ["BATCH_COMPLETE", "Ask the operator to run setup"],
+    ["CHAIN_UNAVAILABLE", "The relay can't reach devnet right now. Try again."],
+  ] as const)("uses the %s refusal copy", (reason, message) => {
+    expect(refusalCopy[reason]).toBe(message);
+  });
+
   it("pins all five device states and the account warning", () => {
     expect(copy.connecting).toBe("Connecting…");
     expect(copy.walletRefused).toBe("Wallet refused");
     expect(copy.relayUnreachable).toBe("Run adb reverse tcp:8787 tcp:8787 on the laptop");
-    expect(copy.staleIntent).toBe("Intent expired. Reload it.");
-    expect(copy.batchComplete).toBe("Ask the operator to run setup");
     expect(copy.walletMismatch).toBe("The authorized address does not match this role.");
   });
 

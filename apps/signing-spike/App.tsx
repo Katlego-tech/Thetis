@@ -8,17 +8,23 @@ import {
   Text,
   View,
 } from "react-native";
-import { copy, outcomeCopy, roleCopy, routeCheckCopy, routeCopy } from "./src/lib/copy";
 import {
+  copy,
+  outcomeCopy,
+  refusalCopy,
+  roleCopy,
+  routeCheckCopy,
+  routeCopy,
+} from "./src/lib/copy";
+import {
+  authorizationStatus,
   type Check,
-  expectedAddresses,
   type Intent,
   type Outcome,
   type Role,
   type Route,
   roles,
   routes,
-  sameAuthorization,
 } from "./src/lib/relay";
 import { getIntent, getOutcome, postSignature, RelayUnreachable } from "./src/relay-client";
 import { connectWallet, signWithWallet, type WalletConnection } from "./src/wallet";
@@ -83,7 +89,7 @@ function CheckText({ check }: { check?: Check }) {
   return (
     <View>
       <Text>{check ? copy.verified(check.verified) : copy.notChecked}</Text>
-      {check?.reason !== undefined && <Text selectable>{check.reason}</Text>}
+      {check?.verified === false && <Text selectable>{refusalCopy[check.reason]}</Text>}
     </View>
   );
 }
@@ -133,8 +139,11 @@ export default function App() {
   const [lastCheck, setLastCheck] = useState<{ route: Route; result: Check }>();
   const pending = useRef(false);
   const { outcome, notice: outcomeNotice } = useOutcome();
-  const expectedAddress = expectedAddresses[role];
-  const mismatch = connection !== undefined && connection.address !== expectedAddress;
+  const expectedAddress = intent?.expectedAddress;
+  const mismatch =
+    connection !== undefined &&
+    expectedAddress !== undefined &&
+    connection.address !== expectedAddress;
 
   function selectRole(next: Role) {
     if (pending.current || next === role) return;
@@ -174,39 +183,45 @@ export default function App() {
 
   function showStaleIntent() {
     setIntent(undefined);
-    setNotice({ title: copy.staleIntent });
+    setNotice({ title: refusalCopy.INTENT_EXPIRED });
   }
 
   function loadIntent() {
     void run(copy.loading, async () => {
-      setIntent(undefined);
+      const result = await getIntent(role).catch((error: unknown) => {
+        setIntent(undefined);
+        setLastCheck(undefined);
+        throw error;
+      });
+      if (!("intent" in result) && result.reason === "CHAIN_UNAVAILABLE") {
+        setNotice({ title: refusalCopy.CHAIN_UNAVAILABLE });
+        return;
+      }
       setLastCheck(undefined);
-      const result = await getIntent(role);
       if ("intent" in result) {
         setIntent(result);
-      } else if (result.reason === "BATCH_COMPLETE") {
-        setNotice({ title: copy.batchComplete });
-      } else if (result.reason === "INTENT_EXPIRED") {
-        showStaleIntent();
       } else {
-        setNotice({ title: copy.relayError, detail: result.reason });
+        setIntent(undefined);
+        setNotice({ title: refusalCopy[result.reason] });
       }
     });
   }
 
   async function authorizationIsCurrent(loaded: Intent): Promise<boolean> {
     const latest = await getIntent(loaded.role);
-    if ("intent" in latest) {
-      if (sameAuthorization(loaded, latest)) return true;
+    const submittedDigest =
+      "reason" in latest && latest.reason === "BATCH_COMPLETE"
+        ? (await getOutcome().catch(() => undefined))?.authorizationSha256
+        : undefined;
+    const status = authorizationStatus(loaded, latest, submittedDigest);
+    if (status === "current") return true;
+    if (status === "stale") {
       showStaleIntent();
-      return false;
-    }
-    // The relay keeps verifying routes for the loaded bytes after submission.
-    if (latest.reason === "BATCH_COMPLETE") return true;
-    if (latest.reason === "INTENT_EXPIRED") {
-      showStaleIntent();
+    } else if (status === "batchComplete") {
+      setIntent(undefined);
+      setNotice({ title: refusalCopy.BATCH_COMPLETE });
     } else {
-      setNotice({ title: copy.relayError, detail: latest.reason });
+      setNotice({ title: refusalCopy[status] });
     }
     return false;
   }
@@ -219,20 +234,29 @@ export default function App() {
       setProgress(copy.signing);
       let signed: Awaited<ReturnType<typeof signWithWallet>>;
       try {
-        signed = await signWithWallet(connection, intent, route);
-        setConnection(signed.account);
+        signed = await signWithWallet(connection, intent, route, setConnection);
       } catch (error) {
         setNotice({ title: copy.walletRefused, detail: errorText(error) });
         return;
       }
 
+      setProgress(copy.checkingIntent);
+      if (!(await authorizationIsCurrent(intent))) return;
       setProgress(copy.sending);
-      const result = await postSignature(signed.submission);
-      setLastCheck({ route, result });
-      if (result.reason === "INTENT_EXPIRED") {
+      const result = await postSignature(signed);
+      if (
+        result.verified ||
+        result.reason === "WRONG_ADDRESS" ||
+        result.reason === "BAD_SIGNATURE"
+      ) {
+        setLastCheck({ route, result });
+        if (!result.verified && result.reason === "BAD_SIGNATURE") {
+          await authorizationIsCurrent(intent);
+        }
+      } else if (result.reason === "INTENT_EXPIRED") {
         showStaleIntent();
-      } else if (result.reason === "BAD_SIGNATURE") {
-        await authorizationIsCurrent(intent);
+      } else {
+        setNotice({ title: refusalCopy[result.reason] });
       }
     });
   }
@@ -246,15 +270,12 @@ export default function App() {
       </Text>
       <View style={styles.section}>
         {roles.map((option) => (
-          <View key={option} style={styles.role}>
-            <Button
-              title={roleCopy[option]}
-              disabled={busy || role === option}
-              onPress={() => selectRole(option)}
-            />
-            <Text>{copy.expectedAddress}</Text>
-            <Text selectable>{expectedAddresses[option]}</Text>
-          </View>
+          <Button
+            key={option}
+            title={roleCopy[option]}
+            disabled={busy || role === option}
+            onPress={() => selectRole(option)}
+          />
         ))}
       </View>
       <Button title={copy.connect} onPress={connect} disabled={busy} />
@@ -268,6 +289,8 @@ export default function App() {
       <Button title={copy.loadIntent} onPress={loadIntent} disabled={busy} />
       {intent && (
         <View style={styles.section}>
+          <Text>{copy.expectedAddress}</Text>
+          <Text selectable>{intent.expectedAddress}</Text>
           <Text style={styles.intent}>{intent.intent.text}</Text>
           <Text selectable>
             {copy.fingerprint} {intent.authorizationSha256.slice(0, 8)}
@@ -305,7 +328,6 @@ const styles = StyleSheet.create({
     paddingBottom: 48,
   },
   section: { gap: 8 },
-  role: { gap: 4 },
   title: { fontSize: 24, fontWeight: "bold" },
   heading: { fontSize: 16, fontWeight: "bold" },
   intent: { fontSize: 22 },

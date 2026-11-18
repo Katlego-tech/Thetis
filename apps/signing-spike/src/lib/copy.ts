@@ -1,4 +1,4 @@
-import type { Outcome, Role, Route } from "./relay";
+import type { Outcome, RefusalReason, Role, Route } from "./relay";
 
 export const roleCopy = {
   sender: "Sender · Kopano",
@@ -23,6 +23,16 @@ export const outcomeCopy = {
   unknown: "Outcome unknown: check the explorer",
 } satisfies Record<Outcome["state"], string>;
 
+export const refusalCopy = {
+  WRONG_ADDRESS: "The submitted address does not match this role.",
+  BAD_SIGNATURE: "The relay could not verify the signature.",
+  UNKNOWN_ROLE: "The relay did not recognize this role.",
+  ALREADY_SUBMITTED: "The handover was already submitted.",
+  INTENT_EXPIRED: "Intent expired. Reload it.",
+  BATCH_COMPLETE: "Ask the operator to run setup",
+  CHAIN_UNAVAILABLE: "The relay can't reach devnet right now. Try again.",
+} satisfies Record<RefusalReason, string>;
+
 export const copy = {
   title: "Thetis signing spike",
   connect: "Connect wallet",
@@ -35,8 +45,6 @@ export const copy = {
   walletRefused: "Wallet refused",
   relayUnreachable: "Run adb reverse tcp:8787 tcp:8787 on the laptop",
   relayError: "Relay error",
-  staleIntent: "Intent expired. Reload it.",
-  batchComplete: "Ask the operator to run setup",
   walletMismatch: "The authorized address does not match this role.",
   outcome: "Outcome",
   awaitingOutcome: "Waiting for relay status",

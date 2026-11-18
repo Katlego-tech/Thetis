@@ -10,7 +10,11 @@ export type SignatureSubmission = { role: Role; address: string } & (
   | { route: "transaction"; signedTransactionBase64: string }
 );
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
+async function request<T>(
+  path: string,
+  parse: (body: unknown, status: number) => T,
+  init?: RequestInit,
+): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -22,28 +26,26 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
     });
     if (path === "/outcome" && !response.ok) throw new Error(`/outcome HTTP ${response.status}`);
     // The relay can return a typed refusal in an HTTP error response.
-    return await response.json();
+    return parse(await response.json(), response.status);
   } finally {
     clearTimeout(timeout);
   }
 }
 
 export async function getIntent(role: Role) {
-  const result = parseIntent(await request(`/intent?role=${role}`));
+  const result = await request(`/intent?role=${role}`, parseIntent);
   if ("intent" in result) checkIntentRole(result, role);
   return result;
 }
 
 export async function postSignature(body: SignatureSubmission) {
-  return parseCheck(
-    await request("/signature", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  );
+  return request("/signature", parseCheck, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function getOutcome() {
-  return parseOutcome(await request("/outcome"));
+  return request("/outcome", parseOutcome);
 }

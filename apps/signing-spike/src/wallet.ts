@@ -27,7 +27,7 @@ function walletAddress(account: Account): WalletConnection["addressBase64"] {
   return account.address;
 }
 
-function selectAccount(authorization: AuthorizationResult, expected: string): WalletConnection {
+function selectAccount(authorization: AuthorizationResult, expected?: string): WalletConnection {
   const accounts = authorization.accounts.map((account) => {
     const addressBase64 = walletAddress(account);
     const bytes = decodeBase64(addressBase64);
@@ -44,7 +44,7 @@ function selectAccount(authorization: AuthorizationResult, expected: string): Wa
   };
 }
 
-export async function connectWallet(expected: string): Promise<WalletConnection> {
+export async function connectWallet(expected?: string): Promise<WalletConnection> {
   return transact(async (wallet) =>
     selectAccount(await wallet.authorize(authorizationRequest), expected),
   );
@@ -55,6 +55,7 @@ async function sign(
   connection: WalletConnection,
   intent: Intent,
   route: Route,
+  onAuthorized: (account: WalletConnection) => void,
 ) {
   const authorization = await wallet.authorize({
     ...authorizationRequest,
@@ -62,6 +63,7 @@ async function sign(
   });
   const account = selectAccount(authorization, intent.expectedAddress);
   if (account.address !== intent.expectedAddress) throw new Error(copy.walletMismatch);
+  onAuthorized(account);
 
   const message = decodeBase64(intent.authorizationBase64);
   const common = { role: intent.role, address: account.address };
@@ -89,12 +91,17 @@ async function sign(
     submission = { ...common, route, signedTransactionBase64: signed };
   }
 
-  return { account, submission };
+  return submission;
 }
 
-export async function signWithWallet(connection: WalletConnection, intent: Intent, route: Route) {
+export async function signWithWallet(
+  connection: WalletConnection,
+  intent: Intent,
+  route: Route,
+  onAuthorized: (account: WalletConnection) => void,
+) {
   return transact(
-    (wallet) => sign(wallet, connection, intent, route),
+    (wallet) => sign(wallet, connection, intent, route, onAuthorized),
     connection.walletUri ? { baseUri: connection.walletUri } : undefined,
   );
 }

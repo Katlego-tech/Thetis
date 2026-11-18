@@ -1,11 +1,6 @@
 import { decodeBase58, decodeBase64 } from "./encoding";
 import { signatureIndex } from "./wire";
 
-export const expectedAddresses = {
-  sender: "Vjh6dMxXifovfpqRwhhzp6gVsQUxFv5ZwffNu6QugcY",
-  receiver: "8dRTJ7KTmCiaziBmZf8skeBtPmwWLHyfEZQpPfu5a5px",
-} as const;
-
 export const roles = ["sender", "receiver"] as const;
 export const routes = ["message", "transaction"] as const;
 export const outcomeStates = ["waiting", "submitted", "confirmed", "failed", "unknown"] as const;
@@ -29,29 +24,40 @@ export interface Intent {
   network: "devnet";
 }
 
-export interface Check {
-  verified: boolean;
-  reason?: string;
-}
+const routeRefusals = ["WRONG_ADDRESS", "BAD_SIGNATURE"] as const;
+const intentRefusals = ["UNKNOWN_ROLE", "INTENT_EXPIRED", "BATCH_COMPLETE"] as const;
+const signatureRefusals = [
+  ...routeRefusals,
+  "UNKNOWN_ROLE",
+  "INTENT_EXPIRED",
+  "ALREADY_SUBMITTED",
+] as const;
+type RouteRefusal = (typeof routeRefusals)[number];
+type IntentReason = (typeof intentRefusals)[number] | "CHAIN_UNAVAILABLE";
+type SignatureReason = (typeof signatureRefusals)[number] | "CHAIN_UNAVAILABLE";
+export type RefusalReason = IntentReason | SignatureReason;
 
-interface IntentRefusal {
-  verified: false;
-  reason: "BATCH_COMPLETE" | "INTENT_EXPIRED" | "UNKNOWN_ROLE";
-  message?: string;
-}
+type Refusal<Reason extends RefusalReason> = {
+  [Code in Reason]: { verified: false; reason: Code };
+}[Reason];
+
+export type Check = { verified: true } | Refusal<RouteRefusal>;
+type SignatureCheck = { verified: true } | Refusal<SignatureReason>;
+type IntentRefusal = Refusal<IntentReason> & { message?: string };
 
 export interface Outcome {
   state: (typeof outcomeStates)[number];
   signature?: string;
   error?: string;
   sizeBytes?: number;
+  authorizationSha256?: string;
   checks: Record<Role, Partial<Record<Route, Check>>>;
 }
 
 type Rule = (value: unknown) => boolean;
 type Fields = Record<string, Rule>;
 const isString = (value: unknown): value is string => typeof value === "string";
-const isBoolean = (value: unknown) => typeof value === "boolean";
+const isSha256 = (value: unknown): boolean => isString(value) && /^[a-f0-9]{64}$/i.test(value);
 const isNatural = (value: unknown) =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
@@ -99,13 +105,25 @@ function isDecodedIntent(value: unknown): boolean {
   });
 }
 
-export function parseIntent(value: unknown): Intent | IntentRefusal {
+function isRefusal(value: unknown, reasons: readonly RefusalReason[], optional?: Fields): boolean {
+  return matches(
+    value,
+    {
+      verified: (verified) => verified === false,
+      reason: (reason) => reasons.some((known) => known === reason),
+    },
+    optional,
+  );
+}
+
+export function parseIntent(value: unknown, status = 200): Intent | IntentRefusal {
   if (
+    status === 200 &&
     matches(value, {
       role: (role) => role === "sender" || role === "receiver",
       expectedAddress: isAddress,
       authorizationBase64: isBase64,
-      authorizationSha256: (hash) => isString(hash) && /^[a-f0-9]{64}$/i.test(hash),
+      authorizationSha256: isSha256,
       intent: isDecodedIntent,
       network: (network) => network === "devnet",
     })
@@ -113,27 +131,26 @@ export function parseIntent(value: unknown): Intent | IntentRefusal {
     return value as Intent;
   }
   if (
-    matches(
-      value,
-      {
-        verified: (verified) => verified === false,
-        reason: (reason) =>
-          reason === "BATCH_COMPLETE" || reason === "INTENT_EXPIRED" || reason === "UNKNOWN_ROLE",
-      },
-      { message: isString },
-    )
+    (status === 200 &&
+      (isRefusal(value, intentRefusals) ||
+        isRefusal(value, ["BATCH_COMPLETE"], { message: isString }))) ||
+    (status === 503 && isRefusal(value, ["CHAIN_UNAVAILABLE"]))
   ) {
     return value as IntentRefusal;
   }
   throw new Error("Invalid /intent response");
 }
 
-function isCheck(value: unknown): boolean {
-  return matches(value, { verified: isBoolean }, { reason: isString });
+function isVerified(value: unknown): boolean {
+  return matches(value, { verified: (verified) => verified === true });
+}
+
+function isRouteCheck(value: unknown): boolean {
+  return isVerified(value) || isRefusal(value, routeRefusals);
 }
 
 function isRoleChecks(value: unknown): boolean {
-  return matches(value, {}, { message: isCheck, transaction: isCheck });
+  return matches(value, {}, { message: isRouteCheck, transaction: isRouteCheck });
 }
 
 export function parseOutcome(value: unknown): Outcome {
@@ -144,7 +161,12 @@ export function parseOutcome(value: unknown): Outcome {
         state: (state) => outcomeStates.some((known) => known === state),
         checks: (checks) => matches(checks, { sender: isRoleChecks, receiver: isRoleChecks }),
       },
-      { signature: isString, error: isString, sizeBytes: isNatural },
+      {
+        signature: isString,
+        error: isString,
+        sizeBytes: isNatural,
+        authorizationSha256: isSha256,
+      },
     )
   ) {
     throw new Error("Invalid /outcome response");
@@ -152,15 +174,20 @@ export function parseOutcome(value: unknown): Outcome {
   return value as Outcome;
 }
 
-export function parseCheck(value: unknown): Check {
-  if (!isCheck(value)) throw new Error("Invalid /signature response");
-  return value as Check;
+export function parseCheck(value: unknown, status = 200): SignatureCheck {
+  if (
+    (status === 200 && (isVerified(value) || isRefusal(value, signatureRefusals))) ||
+    (status === 400 && isRefusal(value, ["BAD_SIGNATURE"])) ||
+    (status === 503 && isRefusal(value, ["CHAIN_UNAVAILABLE"]))
+  ) {
+    return value as SignatureCheck;
+  }
+  throw new Error("Invalid /signature response");
 }
 
 export function checkIntentRole(intent: Intent, role: Role): void {
   if (
     intent.role !== role ||
-    intent.expectedAddress !== expectedAddresses[role] ||
     signatureIndex(decodeBase64(intent.authorizationBase64), intent.expectedAddress) === undefined
   ) {
     throw new Error("Relay intent does not match the selected role");
@@ -172,4 +199,20 @@ export function sameAuthorization(loaded: Intent, latest: Intent): boolean {
     loaded.authorizationBase64 === latest.authorizationBase64 &&
     loaded.authorizationSha256 === latest.authorizationSha256
   );
+}
+
+export function authorizationStatus(
+  loaded: Intent,
+  latest: Intent | IntentRefusal,
+  submittedDigest?: string,
+): "current" | "stale" | "batchComplete" | "UNKNOWN_ROLE" | "CHAIN_UNAVAILABLE" {
+  if ("intent" in latest) {
+    return sameAuthorization(loaded, latest) && loaded.expectedAddress === latest.expectedAddress
+      ? "current"
+      : "stale";
+  }
+  if (latest.reason === "BATCH_COMPLETE") {
+    return loaded.authorizationSha256 === submittedDigest ? "current" : "batchComplete";
+  }
+  return latest.reason === "INTENT_EXPIRED" ? "stale" : latest.reason;
 }
