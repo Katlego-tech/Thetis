@@ -427,6 +427,101 @@ describe("signing relay against LiteSVM", () => {
     );
   });
 
+  it("reconciles a lost send response after 180 seconds while the blockhash is still valid", async () => {
+    f.submit.mockRejectedValueOnce(new Error("Send timed out"));
+    f.signatureStatus.mockResolvedValueOnce(null).mockResolvedValueOnce("confirmed");
+    const now = vi.spyOn(performance, "now");
+    f.blockHeight.mockImplementationOnce(async () => {
+      now.mockReturnValue(180_001);
+      return 1000n;
+    });
+    try {
+      now.mockReturnValue(0);
+      await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender"));
+      await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
+      await vi.waitFor(async () =>
+        expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({ state: "confirmed" }),
+      );
+      expect(f.signatureStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("reports unknown after consecutive reconciliation RPC failures", async () => {
+    const error = new Error("RPC unavailable");
+    f.submit.mockRejectedValueOnce(error);
+    f.signatureStatus.mockRejectedValue(error);
+    f.blockHeight.mockRejectedValue(error);
+    await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender"));
+    await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
+    await vi.waitFor(
+      async () =>
+        expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
+          state: "unknown",
+          signature: expect.any(String),
+          error: "RPC unavailable",
+        }),
+      { timeout: 3000 },
+    );
+    expect(f.signatureStatus).toHaveBeenCalledTimes(5);
+    expect(f.blockHeight).toHaveBeenCalledTimes(5);
+  });
+
+  it("refuses a late signature over HTTP and lets both wallets sign refreshed intent", async () => {
+    const initial = await f.relay.intent("sender");
+    if (!("intent" in initial)) throw new Error("Initial intent was refused");
+    const sends = f.submit.mock.calls.length;
+    f.svm.warpToSlot(BigInt(initial.intent.expirySlot));
+    const senderAtExpiry = await f.messageRequest("sender");
+    expect(await f.relay.dispatch("POST", "/signature", senderAtExpiry)).toEqual({ verified: true });
+    f.svm.warpToSlot(BigInt(initial.intent.expirySlot) + 1n);
+    const lateSignature = await f.transactionRequest();
+    const bind = vi.spyOn(Server.prototype, "listen").mockReturnThis();
+    try {
+      const server = listen(f.relay, 8787);
+      const request = Object.assign(Readable.from([JSON.stringify(lateSignature)]), {
+        method: "POST",
+        url: "/signature",
+      });
+      const writeHead = vi.fn();
+      const json = await new Promise<string>((end) =>
+        server.emit("request", request, { writeHead, end }),
+      );
+      expect(writeHead).toHaveBeenCalledWith(200, { "content-type": "application/json" });
+      expect(JSON.parse(json)).toEqual({ verified: false, reason: "INTENT_EXPIRED" });
+    } finally {
+      bind.mockRestore();
+    }
+    expect(f.submit).toHaveBeenCalledTimes(sends);
+    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
+      state: "waiting",
+      checks: { sender: { message: { verified: true } }, receiver: {} },
+    });
+    const [sender, receiver] = await Promise.all([
+      f.relay.intent("sender"),
+      f.relay.intent("receiver"),
+    ]);
+    if (!("authorizationBase64" in sender) || !("authorizationBase64" in receiver)) {
+      throw new Error("Refreshed intent was refused");
+    }
+    expect(sender.authorizationBase64).not.toBe(initial.authorizationBase64);
+    expect(sender.authorizationBase64).toBe(receiver.authorizationBase64);
+    const fresh = Buffer.from(sender.authorizationBase64, "base64");
+    const freshSenderSignature = await f.messageRequest("sender", fresh);
+    const freshReceiverSignature = await f.transactionRequest(undefined, fresh);
+    expect(await f.relay.dispatch("POST", "/signature", freshSenderSignature)).toEqual({
+      verified: true,
+    });
+    expect(await f.relay.dispatch("POST", "/signature", freshReceiverSignature)).toEqual({
+      verified: true,
+    });
+    await vi.waitFor(async () =>
+      expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({ state: "confirmed" }),
+    );
+    expect(f.submit).toHaveBeenCalledTimes(sends + 1);
+  });
+
   it("refreshes expired intent with the current sequence and discards old checks and signatures", async () => {
     const initial = await f.relay.intent("sender");
     if (!("intent" in initial)) throw new Error("Initial intent was refused");
@@ -553,5 +648,28 @@ describe("signing relay against LiteSVM", () => {
       "D32-devnet stale sequence: refused (StaleSequence)",
     ]);
     expect(f.svm.getAccount(f.state.batch)).toEqual(before);
+  });
+
+  it("waits past a repeated blockhash before sending the nonce replay to the Executor", async () => {
+    const firstSend = f.submit.mock.calls.length;
+    const latestBlockhash = f.transport.getLatestBlockhash;
+    const repeated = vi.fn(() => ({
+      blockhash: f.svm.latestBlockhash(),
+      lastValidBlockHeight: 1000n,
+    }));
+    vi.spyOn(f.transport, "getLatestBlockhash").mockImplementation(async () => {
+      // Scratch setup sends three transactions and the original handover sends one more.
+      if (f.submit.mock.calls.length === firstSend + 4 && repeated.mock.calls.length === 0) {
+        return repeated();
+      }
+      return latestBlockhash();
+    });
+    const report = vi.fn();
+    await runRefusalChecks(f.transport, f.sponsor, f.state, report);
+    expect(repeated).toHaveBeenCalledOnce();
+    const [original, replay] = f.submit.mock.calls.slice(firstSend + 3).map(([tx]) => tx);
+    if (!original || !replay) throw new Error("Missing original or replay transaction");
+    expect(getSignatureFromTransaction(replay)).not.toBe(getSignatureFromTransaction(original));
+    expect(report).toHaveBeenCalledWith("D32-devnet replay: refused (NonceMismatch)");
   });
 });

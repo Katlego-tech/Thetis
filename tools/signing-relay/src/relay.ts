@@ -190,10 +190,13 @@ export async function createRelay(
     return signature;
   }
 
-  function verifyRequest(body: unknown): Check {
+  async function verifyRequest(body: unknown): Promise<Check> {
     const request =
       typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
     if (!isRole(request.role)) return refuse("UNKNOWN_ROLE");
+    // Keep the expiry check and signature collection in the same synchronous step.
+    const currentSlot = await transport.getSlot();
+    if (currentSlot > issued.expiry) return refuse("INTENT_EXPIRED");
     const expected = state[request.role].wallet;
     const addressMatches = request.address === expected;
     const signature = addressMatches ? verifiedSignature(request, expected) : null;

@@ -2,12 +2,14 @@ import {
   AccountRole,
   type Address,
   generateKeyPairSigner,
+  getSignatureFromTransaction,
   type KeyPairSigner,
   type ReadonlyUint8Array,
+  type Signature,
   signBytes,
 } from "@solana/kit";
 import { readBatch, readLookupTable, readNonce, setup } from "./setup.ts";
-import { ChainTransactionError, type ChainTransport, sendConfirmed } from "./transport.ts";
+import { ChainTransactionError, type ChainTransport, prepareTransaction } from "./transport.ts";
 import {
   type Authorization,
   account,
@@ -18,6 +20,8 @@ import {
   SIGNER,
   submitInstruction,
 } from "./wire.ts";
+
+const MAX_REPLAY_BLOCKHASH_ATTEMPTS = 5;
 
 async function sign(authorization: Authorization, ...signers: KeyPairSigner[]) {
   return new Map(
@@ -56,25 +60,43 @@ export async function runRefusalChecks(
   const original = authorize(sponsor.address, scratch, nonceBefore, expiry, 0n);
   const originalSignatures = await sign(original, sender, receiver);
 
-  const send = (
+  const prepare = (
     authorization: Authorization,
     signatures: ReadonlyMap<Address, ReadonlyUint8Array>,
   ) =>
-    sendConfirmed(transport, sponsor, [submitInstruction(authorization, signatures)], {
+    prepareTransaction(transport, sponsor, [submitInstruction(authorization, signatures)], {
       tables: { [scratch.lookupTable]: addresses },
     });
 
+  async function send({ transaction, lifetime }: Awaited<ReturnType<typeof prepare>>) {
+    const signature = await transport.send(transaction);
+    await transport.confirm(signature, lifetime);
+  }
+
+  async function prepareReplay(originalSignature: Signature) {
+    for (let attempt = 1; attempt <= MAX_REPLAY_BLOCKHASH_ATTEMPTS; attempt++) {
+      const candidate = await prepare(original, originalSignatures);
+      // A duplicate outer signature can be discarded before the Executor sees the nonce.
+      if (getSignatureFromTransaction(candidate.transaction) !== originalSignature) {
+        return candidate;
+      }
+      if (attempt < MAX_REPLAY_BLOCKHASH_ATTEMPTS) {
+        await transport.waitForSlot(await transport.getSlot());
+      }
+    }
+    throw new Error("Could not obtain a different blockhash for the nonce replay");
+  }
+
   async function expectRefused(
     label: string,
-    authorization: Authorization,
-    signatures: ReadonlyMap<Address, ReadonlyUint8Array>,
+    prepared: Awaited<ReturnType<typeof prepare>>,
     expected: { name: string; program: Address; code: number },
     batch = scratch,
   ) {
     const before = await readBatch(transport, batch);
     const nonce = await readNonce(transport, scratch.nonce, sponsor.address);
     try {
-      await send(authorization, signatures);
+      await send(prepared);
     } catch (error) {
       const firstFailure =
         error instanceof ChainTransactionError
@@ -97,9 +119,10 @@ export async function runRefusalChecks(
     throw new Error(`${label} unexpectedly succeeded`);
   }
 
-  await send(original, originalSignatures);
-  await transport.waitForSlot(await transport.getSlot());
-  await expectRefused("replay", original, originalSignatures, {
+  const originalTransaction = await prepare(original, originalSignatures);
+  await send(originalTransaction);
+  const replay = await prepareReplay(getSignatureFromTransaction(originalTransaction.transaction));
+  await expectRefused("replay", replay, {
     name: "NonceMismatch",
     program: EXECUTOR,
     code: 3,
@@ -112,7 +135,11 @@ export async function runRefusalChecks(
     authorities: [sender.address],
     handoverSigners: [senderSigner, account(scratch.receiver.signer)],
   });
-  await expectRefused("only sender", onlySender, await sign(onlySender, sender), wrongSigner);
+  await expectRefused(
+    "only sender",
+    await prepare(onlySender, await sign(onlySender, sender)),
+    wrongSigner,
+  );
 
   const storedBatch = await readBatch(transport, stored);
   const wrong = authorize(
@@ -131,8 +158,7 @@ export async function runRefusalChecks(
   );
   await expectRefused(
     "wrong signer",
-    wrong,
-    await sign(wrong, sender, receiver),
+    await prepare(wrong, await sign(wrong, sender, receiver)),
     wrongSigner,
     stored,
   );
@@ -144,8 +170,7 @@ export async function runRefusalChecks(
   const invalidSignature = { name: "InvalidSignature", program: SIGNER, code: 3 };
   await expectRefused(
     "altered byte",
-    { ...fresh, bytes: changed },
-    freshSignatures,
+    await prepare({ ...fresh, bytes: changed }, freshSignatures),
     invalidSignature,
   );
   const entries = [...freshSignatures.entries()];
@@ -156,16 +181,16 @@ export async function runRefusalChecks(
       return [key, other[1]] as const;
     }),
   );
-  await expectRefused("swapped signatures", fresh, swapped, invalidSignature);
+  await expectRefused("swapped signatures", await prepare(fresh, swapped), invalidSignature);
 
   const expired = authorize(sponsor.address, scratch, nonce, (await transport.getSlot()) - 1n, 1n);
-  await expectRefused("expired", expired, await sign(expired, sender, receiver), {
+  await expectRefused("expired", await prepare(expired, await sign(expired, sender, receiver)), {
     name: "Expired",
     program: stored.program,
     code: 6001,
   });
   const stale = authorize(sponsor.address, scratch, nonce, expiry, 0n);
-  await expectRefused("stale sequence", stale, await sign(stale, sender, receiver), {
+  await expectRefused("stale sequence", await prepare(stale, await sign(stale, sender, receiver)), {
     name: "StaleSequence",
     program: stored.program,
     code: 6002,

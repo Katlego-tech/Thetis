@@ -25,6 +25,7 @@ import {
 const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 const CONFIRMATION_TIMEOUT_MS = 180_000;
 const STATUS_POLL_MS = 500;
+const MAX_CONSECUTIVE_RPC_FAILURES = 5;
 
 interface Lifetime {
   blockhash: Blockhash;
@@ -71,9 +72,8 @@ export async function reconcileSignature(
   signature: Signature,
   { lastValidBlockHeight }: Lifetime,
 ) {
-  const deadline = performance.now() + CONFIRMATION_TIMEOUT_MS;
-  // A missing or unreachable status cannot prove that the transaction did not land.
-  const getStatus = () => transport.getSignatureStatus(signature).catch(() => null);
+  let consecutiveFailures = 0;
+  const getStatus = () => transport.getSignatureStatus(signature).catch(() => undefined);
   for (;;) {
     const status = await getStatus();
     if (status) return status;
@@ -81,9 +81,11 @@ export async function reconcileSignature(
     const height = await transport.getBlockHeight().catch(() => null);
     if (height !== null && height > lastValidBlockHeight) {
       // Include any confirmation that arrived between the status and height reads.
-      return await getStatus();
+      return (await getStatus()) ?? null;
     }
-    if (performance.now() >= deadline) return null;
+    // A successful poll with no signature status is still a valid RPC response.
+    consecutiveFailures = status === undefined || height === null ? consecutiveFailures + 1 : 0;
+    if (consecutiveFailures >= MAX_CONSECUTIVE_RPC_FAILURES) return null;
     await delay(STATUS_POLL_MS);
   }
 }
