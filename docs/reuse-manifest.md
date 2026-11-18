@@ -14,6 +14,7 @@ before the event (phase 0) unless its date says otherwise.
 | Item | Source | Licence | Date reused | What was changed | Solana-related |
 |---|---|---|---|---|---|
 | Anchor program template (`anchor init` / `anchor new`) | Anchor 1.2.2 CLI | Apache-2.0 | 2026-11-18 | Only the workspace layout and the `Cargo.toml` and `Anchor.toml` skeletons remain; the counter example was replaced in `programs/receipt-spike` and `programs/signing-spike` | yes |
+| Expo app template (`create-expo-app` 5.0.0, `blank-typescript@sdk-58`): `apps/signing-spike/{index.ts,app.json,tsconfig.json,.gitignore}` and `assets/*.png` | Expo (650 Industries) | MIT; licence kept as `apps/signing-spike/LICENSE-expo-template` | 2026-11-18 | `App.tsx` replaced entirely; `app.json` set to Android-only with the Thetis name and package; `.gitignore` excludes the generated `android/` and `ios/`; icons unchanged; the template's agent-instruction and editor-plugin files removed | partly (Mobile Wallet Adapter app) |
 | Supabase project files (`supabase init`): `supabase/config.toml`, `supabase/.gitignore` (PR #9) | Supabase CLI 2.122.1 | MIT | 2026-11-18 | `config.toml` auth settings (sign-up off, email confirmations, site URL), otherwise the generated default; `.gitignore` unchanged | no |
 | Programmatic Signer program binaries (`programs/signing-spike/tests/fixtures/*.so`) (PR #10) | Dumped from Solana devnet: `EdSigVfK…`, `ExecxgyH…`, `Noncedie…` (source: solana-program/ed25519-programmatic-signer) | Apache-2.0 (upstream repository); licence text shipped beside them as `LICENSE-ed25519-programmatic-signer` | 2026-11-18 | Unmodified; SHA-256 checked at test load (ADR 0002) | yes |
 | Programmatic Signer interface crates (PR #10) | crates.io `spl-ed25519-signer-interface`, `spl-message-executor-interface`, `spl-nonce-interface` 1.0.0 | Apache-2.0 | 2026-11-18 | Unmodified; test-only dev-dependencies | yes |
@@ -38,6 +39,7 @@ before the event (phase 0) unless its date says otherwise.
 | Supabase migrations and RLS proof; CI database tests | #9 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 | `tools/signing-relay`: laptop relay for the two-phone signing test (Programmatic Signer instructions encoded from the published IDL; no upstream client copied) | #12 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
+| `apps/signing-spike`: Android app for the two-phone signing test (Mobile Wallet Adapter) | #13 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 
 ## 3. Patterns adapted from the author's other projects
 

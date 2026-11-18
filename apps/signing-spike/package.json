@@ -1,0 +1,26 @@
+{
+  "name": "@thetis/signing-spike",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check . && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@solana-mobile/mobile-wallet-adapter-protocol": "3.0.1",
+    "@solana-mobile/mobile-wallet-adapter-protocol-kit": "3.0.1",
+    "@solana/kit": "8.6.0",
+    "expo": "58.0.23",
+    "expo-dev-client": "58.0.18",
+    "expo-status-bar": "58.0.4",
+    "react": "19.3.0",
+    "react-native": "0.88.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0"
+  }
+}
