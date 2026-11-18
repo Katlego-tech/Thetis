@@ -119,4 +119,4 @@ repository has no NOTICE file.
   (D32 (1)), as `Party` does here.
 - Before the main demo depends on these programs, re-dump them, compare their hashes and re-run
   this suite. They are devnet-only and unaudited, which must be disclosed (D32). The committed
-  binaries are listed in the reuse manifest, `docs/reuse-manifest.md` (PR #11).
+  binaries are listed in the [reuse manifest](../reuse-manifest.md).
