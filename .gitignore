@@ -1,0 +1,44 @@
+# Secrets: names go in .env.example, values stay here
+.env
+.env.*
+!.env.example
+
+# Dependencies and builds
+node_modules/
+.venv/
+__pycache__/
+dist/
+build/
+.next/
+
+# Machine files
+.DS_Store
+
+# Claude Code: agent worktrees live inside the repo, and `git add -A` would commit one as an
+# embedded repo; local settings are per person
+.claude/worktrees/
+.claude/settings.local.json
+
+# Kiro: workspace settings (MCP servers and their keys) are per person
+.kiro/settings/
+.pytest_cache/
+.ruff_cache/
+*.tsbuildinfo
+
+# Solana / Anchor builds and local ledgers
+target/
+test-ledger/
+.anchor/
+
+# Expo / React Native
+.expo/
+android/
+ios/
+
+# AWS CDK synth output and local context
+infra/cdk.out/
+infra/cdk.context.json
+
+# Claude Code: agent worktrees and per-person settings
+.claude/worktrees/
+.claude/settings.local.json
