@@ -47,6 +47,13 @@ The infra tests that CI runs do synthesize each stack in memory. Accepted adviso
 
 Production-path behavior means lender-attested bank records; it does **not** mean permission to deploy with live assets. Both settlement adapters will first run in isolated test environments. The devnet token pool is labelled simulation. The open production lending pool remains a longer-term business hypothesis.
 
+## Built before vs. during the event
+
+Everything in this repository today was built **before** the Dev3Pack build window (27–29
+November 2026), as phase 0. Work done during the window will be listed here, by pull request,
+when it lands. Every reused template, generated file and third-party binary, and the original
+pre-event deliverables, are recorded in the [reuse manifest](docs/reuse-manifest.md).
+
 ## Destination
 
 Master copy: `/home/kirito/Documents/projects/personal/Thetis` (this folder; git initialised 18 November 2026). The staged copy in the feasibility workspace (`Thetis/` and `Thetis-design-package.tar.gz`) is retired and must not be edited; see D28 in the [decision register](docs/decisions.md). All package-authored links are relative.
