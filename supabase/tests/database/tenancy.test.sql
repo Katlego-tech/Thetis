@@ -338,8 +338,8 @@ select results_eq(
 );
 select ok(
   pg_catalog.pg_get_functiondef(pg_catalog.to_regprocedure('public.revoke_membership(uuid)'))
-    ~* 'from[[:space:]]+public[.]organisations.*for[[:space:]]+update of o.*private[.]is_admin',
-  '8. Membership revocation locks the organisation before checking admin status'
+    ~* 'from[[:space:]]+public[.]organisations.*for[[:space:]]+no[[:space:]]+key[[:space:]]+update[[:space:]]+of[[:space:]]+o.*private[.]is_admin',
+  '8. Membership revocation locks the organisation (FOR NO KEY UPDATE) before checking admin status'
 );
 select public.revoke_membership(current_setting('test.second_admin_membership')::uuid);
 set local "request.jwt.claims" = '{"sub":"10000000-0000-4000-8000-000000000006","role":"authenticated","email":"second-admin@example.test"}';

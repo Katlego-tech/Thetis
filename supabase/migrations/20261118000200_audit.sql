@@ -46,7 +46,7 @@ begin
   from public.organisations o
   join public.memberships m on m.organisation_id = o.id
   where m.id = membership_id
-  for update of o;
+  for no key update of o;  -- serialises revocations; still allows FK key-share checks
 
   if not found or not private.is_admin(target_org) or target_user = caller_id then
     raise exception using errcode = 'P0001', message = 'NOT_AUTHORISED';

@@ -43,12 +43,13 @@ declare
   invitation_id uuid;
   token text;
 begin
+  -- Lock the organisation first (the same lock revoke_membership takes), then check admin
+  -- status: a revocation that commits while this waits is seen by the check below. The lock also
+  -- serialises duplicate checks without preventing an expired invitation from being reissued.
+  perform 1 from public.organisations o where o.id = org for no key update;
   if not private.is_admin(org) then
     raise exception using errcode = 'P0001', message = 'NOT_AUTHORISED';
   end if;
-
-  -- Serialize duplicate checks without preventing an expired invitation from being reissued.
-  perform 1 from public.organisations o where o.id = org for no key update;
   if exists (
     select 1 from public.invitations i
     where i.organisation_id = org and pg_catalog.lower(i.email) = pg_catalog.lower($2)

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(13);
+select plan(14);
 
 insert into auth.users (id, email, email_confirmed_at, aud, role) values
   ('11000000-0000-4000-8000-000000000001', 'admin@example.test', now(), 'authenticated', 'authenticated'),
@@ -114,5 +114,10 @@ select is(
 );
 
 reset role;
+select ok(
+  pg_catalog.pg_get_functiondef(pg_catalog.to_regprocedure('public.create_invitation(uuid,text,public.member_role)'))
+    ~* 'from[[:space:]]+public[.]organisations.*for[[:space:]]+no[[:space:]]+key[[:space:]]+update.*private[.]is_admin',
+  '3. Invitation creation locks the organisation before checking admin status'
+);
 select * from finish();
 rollback;
