@@ -164,6 +164,30 @@ jobs:
           set -o pipefail
           pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
 
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13  # v3.2.0
+        with:
+          version: 2.122.1
+
+      - name: Start Supabase
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta,supavisor
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/start-supabase.log"
+
+      - name: Database tests
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            supabase db reset
+            supabase test db
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/database-tests.log"
+
       - name: Scan dependencies for known vulnerabilities
         shell: bash
         env:

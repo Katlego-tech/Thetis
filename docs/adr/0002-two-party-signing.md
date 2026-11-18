@@ -84,19 +84,33 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
   | only fixed addresses (the three Programmatic Signer programs, the program, system program, sysvars) | **1,376 bytes: over the 1,232-byte limit** |
   | fixed addresses plus the handover's own accounts (nonce account, batch, both party records, both wallets, both derived signers) | 1,128 bytes |
 
-  A fixed table is not enough. The sponsor must add each party's accounts (wallet, derived
-  signer, party record, nonce account) to a lookup table when that party is accredited. It must
-  add each batch account when the batch is opened. A table extension is usable only from the
+  A fixed table is not enough, but not every per-handover account has to be in it either. Each
+  account left inline adds about 31 bytes, and the full-table relay has 104 bytes of headroom, so
+  about three of the per-handover accounts can stay inline. The sponsor should add each party's
+  long-lived accounts (wallet, derived signer, party record) to a lookup table when that party
+  is accredited, and should add each approval's nonce account when the approval is created (one
+  nonce account per independently pending approval; see D24). Whether batch accounts need an entry
+  depends on the real instruction's account count. Measure that instead of assuming it.
+- **Don't trade authority checks for bytes.** Storing the derived signers on the batch could
+  replace reading the two party records only if the instruction still checks, at execution
+  time, that each signer's delegation is accredited, unexpired and unrevoked (D32 (1)). A cached
+  key alone would keep accepting a delegation that was revoked after the batch was opened.
+  Re-measure the size with those live checks in place. A table extension is usable only from the
   next slot, so this never happens at handover time. The Thetis account layout should also cut
   per-handover accounts where it can, for example by storing the derived signer on the batch
-  instead of reading two party records. Re-measure once the real instruction exists.
+  Re-measure once the real instruction exists.
 - **Still open, (a):** what the wallets show when asked to sign these bytes. A wallet's
   message-signing prompt may show them as unreadable bytes or refuse them as transaction-like; its
   transaction-signing prompt would sign the same bytes but display an Executor `Execute`
   instruction. Both routes will be tried on Solflare and on Phantom, on real Android phones
-  through Mobile Wallet Adapter, and on the Mock MWA Wallet. If both wallets show only unreadable
-  bytes, the app shows the decoded intent beside the wallet prompt and blind signing is
-  disclosed. If both wallets refuse both routes, D32 is reopened.
+  through Mobile Wallet Adapter, and on the Mock MWA Wallet. The rule applies **per wallet and
+  per signing route**: wherever a prompt shows only unreadable bytes, the app shows the decoded
+  intent beside it and that wallet's blind signing is disclosed, even if the other wallet is
+  readable. If both wallets refuse both routes, D32 is reopened.
+
+The three committed binaries are Apache-2.0 upstream; the licence text sits beside them in
+`programs/signing-spike/tests/fixtures/LICENSE-ed25519-programmatic-signer`. The upstream
+repository has no NOTICE file.
 
 ## Consequences
 
@@ -105,4 +119,4 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
   (D32 (1)), as `Party` does here.
 - Before the main demo depends on these programs, re-dump them, compare their hashes and re-run
   this suite. They are devnet-only and unaudited, which must be disclosed (D32). The committed
-  binaries are listed in the reuse manifest, `docs/reuse-manifest.md` (PR #11).
+  binaries are listed in the [reuse manifest](../reuse-manifest.md).
