@@ -8,6 +8,7 @@ const instance = "fiat-attestation-test";
 const valid = {
   account: "111111111111",
   region: "af-south-1",
+  availabilityZones: "af-south-1a,af-south-1b",
   instance,
   githubRepo: "Katlego-tech/Thetis",
   budgetMonthlyUsd: "25",
@@ -40,6 +41,20 @@ describe("required context", () => {
       expect(() => synth({ ...valid, [key]: invalid })).toThrow(key);
     },
   );
+
+  it("rejects missing or invalid availabilityZones by name", () => {
+    for (const availabilityZones of [
+      undefined,
+      "af-south-1a",
+      "af-south-1a,af-south-1b,af-south-1c",
+      "af-south-1a,us-east-1b",
+      "af-south-1a,af-south-1a",
+      "af-south-1a,af-south-1",
+      ["af-south-1a", "af-south-1b"],
+    ]) {
+      expect(() => synth({ ...valid, availabilityZones })).toThrow("availabilityZones");
+    }
+  });
 });
 
 type PolicyStatement = {
@@ -288,6 +303,12 @@ describe("synthesized deployment", () => {
     worker.resourceCountIs("AWS::EC2::Subnet", 2);
     worker.resourceCountIs("AWS::EC2::NatGateway", 0);
     worker.allResourcesProperties("AWS::EC2::Subnet", { MapPublicIpOnLaunch: true });
+    expect(
+      Object.values(worker.findResources("AWS::EC2::Subnet"))
+        .map(({ Properties }) => Properties.AvailabilityZone)
+        .sort(),
+    ).toEqual(valid.availabilityZones.split(","));
+    expect(assembly.manifest.missing ?? []).toEqual([]);
     worker.hasResourceProperties("AWS::ECS::TaskDefinition", {
       Cpu: "256",
       Memory: "512",
@@ -317,6 +338,20 @@ describe("synthesized deployment", () => {
     );
     expect(dockerfile).toMatch(/^USER node$/m);
     expect(dockerfile).toContain('CMD ["node", "src/main.ts"]');
+  });
+
+  it("waits for both public subnet route table associations and default routes", () => {
+    const worker = template("worker");
+    const associations = worker.findResources("AWS::EC2::SubnetRouteTableAssociation");
+    const routes = worker.findResources("AWS::EC2::Route", {
+      Properties: { DestinationCidrBlock: "0.0.0.0/0", GatewayId: Match.anyValue() },
+    });
+    expect(Object.keys(associations)).toHaveLength(2);
+    expect(Object.keys(routes)).toHaveLength(2);
+    const [service] = Object.values(worker.findResources("AWS::ECS::Service"));
+    expect(service?.DependsOn).toEqual(
+      expect.arrayContaining([...Object.keys(associations), ...Object.keys(routes)]),
+    );
   });
 
   it("notifies the operations topic for Lambda failures and a missing worker", () => {
@@ -365,6 +400,12 @@ describe("synthesized deployment", () => {
         },
         Subscribers: [{ Address: valid.alertEmail, SubscriptionType: "EMAIL" }],
       })),
+    });
+  });
+
+  it("filters monthly budget spend by the settlement instance cost-allocation tag", () => {
+    template("budget").hasResourceProperties("AWS::Budgets::Budget", {
+      Budget: { CostFilters: { TagKeyValue: [`user:instance$${instance}`] } },
     });
   });
 

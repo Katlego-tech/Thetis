@@ -3,6 +3,7 @@ import { CfnBudget } from "aws-cdk-lib/aws-budgets";
 import type { Construct } from "constructs";
 
 interface BudgetStackProps extends StackProps {
+  instance: string;
   budgetMonthlyUsd: number;
   alertEmail: string;
 }
@@ -17,6 +18,7 @@ export class BudgetStack extends Stack {
         budgetType: "COST",
         timeUnit: "MONTHLY",
         budgetLimit: { amount: props.budgetMonthlyUsd, unit: "USD" },
+        costFilters: { TagKeyValue: [`user:instance$${props.instance}`] },
       },
       notificationsWithSubscribers: [
         { notificationType: "ACTUAL", threshold: 80 },

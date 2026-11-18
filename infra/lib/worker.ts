@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { Fn, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import { RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { type IVpc, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Platform } from "aws-cdk-lib/aws-ecr-assets";
 import {
@@ -18,20 +18,22 @@ import type { Construct } from "constructs";
 
 interface WorkerStackProps extends StackProps {
   instance: string;
+  availabilityZones: string[];
 }
 
 export class WorkerStack extends Stack {
   readonly cluster: Cluster;
   readonly service: FargateService;
+  private readonly workerAvailabilityZones: string[];
 
   override get availabilityZones(): string[] {
-    // Resolve AZs in the target account at deployment without a CDK context lookup.
-    const azs = Fn.getAzs(this.region);
-    return [Fn.select(0, azs), Fn.select(1, azs)];
+    // CDK's VPC reads the stack's AZs even when the VPC receives an explicit list.
+    return this.workerAvailabilityZones;
   }
 
   constructor(scope: Construct, id: string, props: WorkerStackProps) {
     super(scope, id, props);
+    this.workerAvailabilityZones = props.availabilityZones;
 
     const vpc = new Vpc(this, "Vpc", {
       natGateways: 0,
@@ -73,6 +75,7 @@ export class WorkerStack extends Stack {
       logging: LogDrivers.awsLogs({ logGroup: workerLogs, streamPrefix: "worker" }),
     });
 
+    const vpcSubnets = { subnetType: SubnetType.PUBLIC };
     this.service = new FargateService(this, "Service", {
       serviceName: "worker",
       cluster: this.cluster as ICluster,
@@ -81,7 +84,8 @@ export class WorkerStack extends Stack {
       assignPublicIp: true,
       circuitBreaker: { rollback: true },
       minHealthyPercent: 100,
-      vpcSubnets: { subnetType: SubnetType.PUBLIC },
+      vpcSubnets,
     });
+    this.service.node.addDependency(vpc.selectSubnets(vpcSubnets).internetConnectivityEstablished);
   }
 }

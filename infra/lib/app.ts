@@ -31,6 +31,19 @@ export function createStacks(app: App) {
     (value) => RegionInfo.get(value).partition === "aws",
     "a known AWS commercial region",
   );
+  const availabilityZones = required(
+    app,
+    "availabilityZones",
+    (value) => {
+      const zones = value.split(",");
+      return (
+        zones.length === 2 &&
+        new Set(zones).size === 2 &&
+        zones.every((zone) => zone.startsWith(region) && /^[a-z]$/.test(zone.slice(region.length)))
+      );
+    },
+    `two distinct comma-separated availability zone names in ${region}`,
+  ).split(",");
   const instance = required(
     app,
     "instance",
@@ -77,11 +90,16 @@ export function createStacks(app: App) {
     instance,
     sponsorKeyArn: secrets.sponsorKey.secretArn,
   });
-  const worker = new WorkerStack(app, `${stackPrefix}-Worker`, { ...settings, instance });
+  const worker = new WorkerStack(app, `${stackPrefix}-Worker`, {
+    ...settings,
+    instance,
+    availabilityZones,
+  });
   const ops = new OpsStack(app, `${stackPrefix}-Ops`, { ...settings, alertEmail, api, worker });
   const budget = new BudgetStack(app, `${stackPrefix}-Budget`, {
     ...settings,
     env: { account, region: budgetRegion },
+    instance,
     budgetMonthlyUsd,
     alertEmail,
   });
