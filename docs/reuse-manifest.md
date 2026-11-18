@@ -14,7 +14,7 @@ before the event (phase 0) unless its date says otherwise.
 | Item | Source | Licence | Date reused | What was changed | Solana-related |
 |---|---|---|---|---|---|
 | Anchor program template (`anchor init` / `anchor new`) | Anchor 1.2.2 CLI | Apache-2.0 | 2026-11-18 | Only the workspace layout and the `Cargo.toml` and `Anchor.toml` skeletons remain; the counter example was replaced in `programs/receipt-spike` and `programs/signing-spike` | yes |
-| Supabase project files (`supabase init`): `supabase/config.toml`, `supabase/.gitignore`, **pending PR #9** | Supabase CLI 2.122.1 | MIT | 2026-11-18 | `config.toml` auth settings (sign-up off, email confirmations, site URL), otherwise the generated default; `.gitignore` unchanged | no |
+| Supabase project files (`supabase init`): `supabase/config.toml`, `supabase/.gitignore` (PR #9) | Supabase CLI 2.122.1 | MIT | 2026-11-18 | `config.toml` auth settings (sign-up off, email confirmations, site URL), otherwise the generated default; `.gitignore` unchanged | no |
 | Programmatic Signer program binaries (`programs/signing-spike/tests/fixtures/*.so`), **pending PR #10** | Dumped from Solana devnet: `EdSigVfK…`, `ExecxgyH…`, `Noncedie…` (source: solana-program/ed25519-programmatic-signer) | Apache-2.0 (upstream repository) | 2026-11-18 | Unmodified; SHA-256 checked at test load (ADR 0002) | yes |
 | Programmatic Signer interface crates, **pending PR #10** | crates.io `spl-ed25519-signer-interface`, `spl-message-executor-interface`, `spl-nonce-interface` 1.0.0 | Apache-2.0 | 2026-11-18 | Unmodified; test-only dev-dependencies | yes |
 | Token-2022 program binary used in tests | Bundled in LiteSVM 0.15.0 (SPL Token-2022 11.0.0), not committed | Apache-2.0 | 2026-11-18 | Unmodified (ADR 0001) | yes |
@@ -34,7 +34,7 @@ before the event (phase 0) unless its date says otherwise.
 | `programs/receipt-spike`: Token-2022 receipt enforcement spike (ADR 0001); CI Rust and Anchor checks (verified Solana and Anchor install, fmt, clippy, build, tests) and Cargo dependency scan | #6 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 | `infra/`, `services/`: AWS CDK app for the API, fee sponsor and worker (not deployed) | #7 | 2026-11-18 | not yet licensed (repository licence pending) | partly (fee sponsor) |
 | Documentation updates for phase-0 progress | #8 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| Supabase migrations and RLS proof; CI database tests | #9 (pending) | 2026-11-18 | not yet licensed (repository licence pending) | no |
+| Supabase migrations and RLS proof; CI database tests | #9 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 (pending) | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 
 **Code from the author's non-Solana work:** the template files in §1 (`.gitattributes`,
