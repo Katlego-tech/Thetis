@@ -1,0 +1,92 @@
+# ADR 0002: Two parties authorise one instruction through the Programmatic Signer
+
+**Status:** accepted for the on-chain part, 18 November 2026 · **Decision:** D32 checks (b) and (c)
+confirmed; check (a) still open (needs the phones) · **Sources:** D23, D24, D27, D32
+
+## Context
+
+D32 chose Anza's Ed25519 Programmatic Signer to verify signed intent messages. Before the Thetis
+account layout is frozen, phase 0 has to show three things:
+
+- **(a)** what a wallet displays when it signs an authorization;
+- **(b)** whether two parties' authorizations can make both of their derived accounts signers of
+  one Thetis instruction;
+- **(c)** whether this works with the fee sponsor as relayer and fee payer, and with Anchor 1.x
+  cross-program calls.
+
+If (b) failed, the fallback was a same-transaction two-step with a transient approval account.
+
+## What was tested
+
+The spike program `programs/signing-spike` is not the Thetis program and is not deployed. Its
+`handover` instruction stands in for a custody handover:
+- it requires **both** parties' Programmatic Signer accounts as signers. Each is derived on chain
+  from `["programmatic-signer", wallet]` under `EdSigVfK1DkeMrjFNDMjwfQaJPhPTtX7jW8uPv3oKEgN`
+  and recorded on a `Party` account;
+- it checks its own expiry slot and an expected sequence number, because the Programmatic Signer
+  has no expiry and its nonce does not detect stale business state.
+
+**What ran:**
+- **The Programmatic Signer programs:** the three devnet binaries, dumped on 18 November 2026 and
+  loaded at their real IDs in LiteSVM 0.15. The test checks each SHA-256 before loading:
+
+  | Program | ID | Last deployed (devnet slot) | SHA-256 |
+  |---|---|---|---|
+  | Ed25519 Signer | `EdSigVfK1DkeMrjFNDMjwfQaJPhPTtX7jW8uPv3oKEgN` | 520437108 | `4824c901…c80b` |
+  | Message Executor | `ExecxgyHYsAXB4c5dZodV1zJZ9hqfsDCYkRDRATrpkFR` | 520437180 | `276692a0…0344` |
+  | Nonce | `Noncediea1fH12usShuQAz28UhgAeuE5Maf32LsMUQB` | 520437035 | `095be5b6…d3f7` |
+
+  The programs are still upgradeable by their authority, `Br2LeifQQeQpAw1r3yE4Fpk3Xo23HrsksE9adbCTqZ2g`.
+  These results hold for these binaries only.
+- **The messages:** the authorization messages were built with the published interface crates
+  `spl-ed25519-signer-interface`, `spl-message-executor-interface` and `spl-nonce-interface`,
+  all 1.0.0.
+- **The parties:** Alice and Bob are plain Ed25519 keys. They sign **only the serialized
+  authorization message**. A separate sponsor key creates the nonce account, then signs and pays
+  for the relay transaction.
+
+## Results (`cargo test -p signing-spike -- --nocapture`)
+
+```text
+D32 two-authority handover: accepted (sequence 1, handed_over true, nonce advanced)
+D32 sponsor fee: paid 5000 lamports (Alice and Bob unchanged)
+D32 replay: refused (NonceMismatch)
+D32 only Alice: refused (WrongSigner)
+D32 Mallory in place of Bob: refused (WrongSigner)
+D32 altered authorization byte: refused (InvalidSignature)
+D32 swapped signatures: refused (InvalidSignature)
+D32 substituted Submit account: refused (AccountKeyMismatch)
+D32 expired: refused (Expired)
+D32 stale sequence: refused (StaleSequence)
+D32 quantity mismatch: refused (QuantityMismatch)
+D32 direct wallets: refused (WrongSigner)
+```
+
+Every refusal also checks that the `Batch` account is byte-identical afterwards.
+
+## Decision
+
+- **(b) is confirmed.** One authorization listing both authorities makes both derived accounts
+  signers of the same instruction. The same-transaction two-step fallback is not needed.
+- **(c) is confirmed.** The sponsor alone signs and pays for the relay. Anchor 1.2.2 receives the
+  call with both signer flags set. The parties never pay fees and never sign a transaction.
+- **Expiry and sequence belong to Thetis.**
+  - The Programmatic Signer nonce stops replay of the same authorization.
+  - A stale-but-fresh authorization is refused only by Thetis's own `expected_sequence` check.
+  - A late one is refused only by its `expiry_slot`, as D32 (2) and (3) require.
+- **New constraint: transaction size.** The two-party relay exceeds the 1,232-byte packet limit
+  unless it uses an **address lookup table**. The test's sponsor creates one. The Thetis sponsor
+  must therefore keep a lookup table of the fixed accounts (the three programs, the Thetis program,
+  common accounts), and the account layout must keep per-handover accounts few. Record each
+  handover's serialized size when the real instruction exists.
+- **Still open, (a):** whether Solflare and Phantom display these bytes readably, show them as
+  unreadable bytes, or refuse them. That is T004b on the user's phones
+  (docs/design/signing-spike.md §3).
+
+## Consequences
+
+- Phones never submit transactions; they return one signature over the authorization bytes (D24).
+- The Thetis `Authority` record stores the wallet key and its derived Programmatic Signer address
+  (D32 (1)), as `Party` does here.
+- Before the main demo depends on these programs, re-dump them, compare their hashes and re-run
+  this suite. They are devnet-only and unaudited, which must be disclosed (D32).

@@ -8,6 +8,7 @@ skip-lint = false
 
 [programs.localnet]
 receipt_spike = "CBKfw6VcsKcQNXL5ZmjgsAu99qMswxreozhqBYeSUAqj"
+signing_spike = "EH7cQ4xmoJ92v2y1JW1xHwVQgtCNvkkVka3jiK1ByQnb"
 
 [provider]
 cluster = "localnet"
