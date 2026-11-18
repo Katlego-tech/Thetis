@@ -103,9 +103,10 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
   message-signing prompt may show them as unreadable bytes or refuse them as transaction-like; its
   transaction-signing prompt would sign the same bytes but display an Executor `Execute`
   instruction. Both routes will be tried on Solflare and on Phantom, on real Android phones
-  through Mobile Wallet Adapter, and on the Mock MWA Wallet. If both wallets show only unreadable
-  bytes, the app shows the decoded intent beside the wallet prompt and blind signing is
-  disclosed. If both wallets refuse both routes, D32 is reopened.
+  through Mobile Wallet Adapter, and on the Mock MWA Wallet. The rule applies **per wallet and
+  per signing route**: wherever a prompt shows only unreadable bytes, the app shows the decoded
+  intent beside it and that wallet's blind signing is disclosed, even if the other wallet is
+  readable. If both wallets refuse both routes, D32 is reopened.
 
 The three committed binaries are Apache-2.0 upstream; the licence text sits beside them in
 `programs/signing-spike/tests/fixtures/LICENSE-ed25519-programmatic-signer`. The upstream
