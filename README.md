@@ -35,8 +35,8 @@ Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm lint && pnpm test                     # TypeScript packages, infra and services
-anchor build && cargo test --workspace     # Anchor program tests (LiteSVM)
+anchor build && cargo test --workspace     # Anchor programs first: the relay tests load the build
+pnpm lint && pnpm test                     # TypeScript packages, infra, services and tools
 supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta,supavisor
 supabase test db                           # database access rules (Supabase CLI 2.122.1)
 ```

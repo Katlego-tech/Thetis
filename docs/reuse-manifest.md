@@ -38,6 +38,7 @@ before the event (phase 0) unless its date says otherwise.
 | Documentation updates for phase-0 progress | #8 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | Supabase migrations and RLS proof; CI database tests | #9 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
+| `tools/signing-relay`: laptop relay for the two-phone signing test (Programmatic Signer instructions encoded from the published IDL; no upstream client copied) | #12 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 | `apps/signing-spike`: Android app for the two-phone signing test (Mobile Wallet Adapter) | #13 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 
 ## 3. Patterns adapted from the author's other projects
