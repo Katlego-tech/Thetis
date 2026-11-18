@@ -1,0 +1,21 @@
+{
+  "captured_on": "2026-11-18",
+  "inputs": [
+    {
+      "source": "/home/kirito/Documents/Dev3Pack feasibility/Thetis_Revised_Project_Document.md",
+      "snapshot": "references/revised-project.md",
+      "sha256": "39f626a9c7d47324387d027e5d9b5ea73a57d113a85b49e2227294ef32fd4842"
+    },
+    {
+      "source": "/home/kirito/Documents/Dev3Pack feasibility/Thetis_Project_Document.md",
+      "snapshot": "references/original-project.md",
+      "sha256": "8573a59954c55cb5b217561c9f3cde16d2763aacc461378de5bd06816c32fc24"
+    },
+    {
+      "source": "/home/kirito/Documents/Dev3Pack feasibility/Thetis Combined Research/reports/Thetis combined business validation.md",
+      "snapshot": "references/combined-research.md",
+      "sha256": "16de3487a4ba9d511efc953a66ca4c0d0c665b0e83010a501d049856b13146b2"
+    }
+  ],
+  "faq_script_sha256": "9a4a1e762431ccc0c894bbf380c672eeab21a06dd9de72e3497641725a4d569e"
+}
