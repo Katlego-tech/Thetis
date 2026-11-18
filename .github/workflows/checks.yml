@@ -41,6 +41,7 @@ jobs:
           curl --retry 3 --retry-all-errors -sSfLO "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
           grep " $tarball\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
           tar -xzf "$tarball" gitleaks
+          mkdir -p "$RUNNER_TEMP/logs"
           # A config that doesn't extend gitleaks' own rules replaces them with none.
           if [ -f "$GITHUB_WORKSPACE/.gitleaks.toml" ] \
              && ! grep -Eq '^[[:space:]]*useDefault[[:space:]]*=[[:space:]]*true' "$GITHUB_WORKSPACE/.gitleaks.toml"; then
@@ -49,7 +50,7 @@ jobs:
           fi
           # The history of the commit being checked, merge commits included.
           ./gitleaks git --redact --no-banner --no-color --exit-code 3 \
-            --log-opts="--full-history --diff-merges=first-parent HEAD" "$GITHUB_WORKSPACE" 2>&1 | tee gitleaks.log
+            --log-opts="--full-history --diff-merges=first-parent HEAD" "$GITHUB_WORKSPACE" 2>&1 | tee gitleaks.log "$RUNNER_TEMP/logs/gitleaks.log"
           # gitleaks exits 0 when the git command under it fails, having scanned nothing.
           if grep -Eq '(^|[^0-9])0 commits scanned|(^| )ERR( |$)' gitleaks.log; then
             echo "::error::gitleaks read no history, so nothing was scanned."
@@ -57,7 +58,23 @@ jobs:
           fi
 
       - name: Check the design documents
-        run: python3 scripts/check_design.py
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          python3 scripts/check_design.py 2>&1 | tee "$RUNNER_TEMP/logs/design-check.log"
 
       # This project's own steps go here: install its pinned dependencies, then lint, type-check
       # and test it with the same commands used locally before a push.
+
+      # Every run keeps its step logs as an artifact, pass or fail, for the longest retention
+      # GitHub allows (90 days), so a failure can be read without re-running it. A new step
+      # writes its output to $RUNNER_TEMP/logs/<step>.log to be kept with them.
+      - name: Keep this run's logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: checks-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/logs/
+          if-no-files-found: warn
+          retention-days: 90
