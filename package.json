@@ -7,8 +7,8 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "lint": "biome check . && pnpm -r --if-present run typecheck",
-    "test": "pnpm -r --if-present run test"
+    "lint": "node scripts/check-workspace-scripts.mjs && biome check . && pnpm -r run typecheck",
+    "test": "node scripts/check-workspace-scripts.mjs && pnpm -r run test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
