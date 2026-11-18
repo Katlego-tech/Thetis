@@ -45,3 +45,6 @@ infra/cdk.context.json
 
 # GitHub Actions run logs archived locally by scripts/ci-logs.sh
 .ci-logs/
+
+# Impeccable working files (decision mocks, review captures)
+apps/web/.impeccable/

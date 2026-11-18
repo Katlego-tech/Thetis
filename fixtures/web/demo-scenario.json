@@ -1,0 +1,115 @@
+{
+  "label": "synthetic",
+  "scenarioVersion": "2026-11-18.1",
+  "sources": [
+    "the demo route and synthetic parties (proposed, awaiting the owner's confirmation)",
+    "docs/domain.md §4",
+    "fixtures/domain/release-examples.json"
+  ],
+  "settlementMode": "FIAT_ATTESTATION_TEST",
+  "network": "devnet",
+  "facilityCurrency": "USD",
+  "currencyMinorDigits": 2,
+  "organisations": [
+    { "id": "thaba", "name": "Thaba Ore Exports", "role": "exporter" },
+    { "id": "kopano", "name": "Kopano Stockyard Custody", "role": "custodian" },
+    { "id": "mosela", "name": "Mosela Haulage", "role": "haulier" },
+    { "id": "unaccredited-haulier", "name": "Unaccredited haulier", "role": "haulier" },
+    { "id": "terminal-t1", "name": "Port Terminal T1", "role": "terminal" },
+    { "id": "lender-one", "name": "Lender One Bank", "role": "lender" },
+    { "id": "lender-two", "name": "Lender Two Bank", "role": "lender" },
+    { "id": "buyer-smelter", "name": "Buyer Smelter Co", "role": "buyer" }
+  ],
+  "contexts": [
+    { "organisationId": "lender-one", "role": "lender" },
+    { "organisationId": "thaba", "role": "exporter" }
+  ],
+  "sites": [
+    { "id": "mine-stockpile", "name": "Mine stockpile", "kind": "stockpile" },
+    { "id": "rail-siding", "name": "Rail siding", "kind": "siding" },
+    { "id": "border-checkpoint", "name": "Border checkpoint", "kind": "observation" },
+    { "id": "port-stockyard", "name": "Port terminal stockyard, Richards Bay corridor", "kind": "stockyard" }
+  ],
+  "lots": [
+    {
+      "id": "CR-0001",
+      "mineral": "chrome",
+      "gradeClass": "Chrome ore, single grade class",
+      "quantityKg": "5000000",
+      "siteId": "port-stockyard",
+      "ownerId": "thaba",
+      "custodianId": "kopano",
+      "custody": "Stored",
+      "finance": "Pledged",
+      "restriction": "Normal",
+      "position": {
+        "positionQuantityKg": "5000000",
+        "activeLockedQuantityKg": "5000000",
+        "separatelyReservedQuantityKg": "0"
+      },
+      "locks": [{ "lenderId": "lender-one", "lockedQuantityKg": "5000000" }],
+      "discrepancyKg": "0",
+      "registry": { "status": "not_submitted" }
+    }
+  ],
+  "facility": {
+    "id": "facility-lender-one-thaba",
+    "lenderId": "lender-one",
+    "borrowerId": "thaba",
+    "currency": "USD",
+    "loan": {
+      "lotId": "CR-0001",
+      "principalMinor": "60000000",
+      "bookedInterestMinor": "0",
+      "bookedFeesMinor": "0",
+      "status": "Active",
+      "registry": { "status": "not_submitted" }
+    },
+    "valuation": {
+      "valuePerKgMinor": "20",
+      "haircutBps": "0",
+      "maxLtvBps": "6000",
+      "validUntil": "2026-11-30T16:00:00+02:00",
+      "registry": { "status": "not_submitted" }
+    }
+  },
+  "custodyTimeline": [
+    { "id": "ev-intake", "kind": "intake", "siteId": "mine-stockpile", "quantityKg": "5000000", "by": ["kopano"], "at": "2026-11-24T09:10:00+02:00", "registry": { "status": "not_submitted" } },
+    { "id": "ev-handover-haulier", "kind": "handover", "siteId": "mine-stockpile", "quantityKg": "5000000", "by": ["kopano", "mosela"], "at": "2026-11-25T07:40:00+02:00", "registry": { "status": "not_submitted" } },
+    { "id": "ev-border", "kind": "observation", "siteId": "border-checkpoint", "quantityKg": "5000000", "by": ["mosela"], "at": "2026-11-26T13:05:00+02:00", "registry": { "status": "not_submitted" } },
+    { "id": "ev-arrival", "kind": "handover", "siteId": "port-stockyard", "quantityKg": "5000000", "by": ["mosela", "terminal-t1"], "at": "2026-11-27T10:20:00+02:00", "registry": { "status": "not_submitted" } }
+  ],
+  "evidence": [
+    { "id": "doc-weighbridge", "lotId": "CR-0001", "kind": "weighbridge ticket", "issuerId": "kopano", "status": "Human-attested", "file": null },
+    { "id": "doc-assay", "lotId": "CR-0001", "kind": "assay certificate", "issuerId": "kopano", "status": "Human-attested", "file": null },
+    { "id": "doc-origin", "lotId": "CR-0001", "kind": "origin attestation", "issuerId": "kopano", "status": "Human-attested", "file": null },
+    { "id": "doc-bol", "lotId": "CR-0001", "kind": "bill of lading", "issuerId": "terminal-t1", "status": "Uploaded", "file": null }
+  ],
+  "releaseRequests": [
+    {
+      "id": "rel-0001",
+      "lotId": "CR-0001",
+      "sellerId": "thaba",
+      "buyerId": "buyer-smelter",
+      "lenderId": "lender-one",
+      "fixture": "sale-2000t-400k",
+      "soldLockedQuantityKg": "2000000",
+      "buyerAmountMinor": "40000000",
+      "sellerTopUpMinor": "0",
+      "payment": { "status": "reported_by_buyer" },
+      "registry": { "status": "not_submitted" },
+      "expiresAt": "2026-11-28T17:00:00+02:00"
+    }
+  ],
+  "workItems": [
+    { "id": "wi-payment", "contextOrganisationId": "lender-one", "lotId": "CR-0001", "action": "Review payment evidence", "nextActorId": "lender-one", "releaseId": "rel-0001", "blocker": "Buyer Smelter Co reports payment. Not yet attested by Lender One Bank.", "deadline": "2026-11-28T17:00:00+02:00" },
+    { "id": "wi-handoff", "contextOrganisationId": "lender-one", "lotId": "CR-0001", "action": "Approve external hand-off", "nextActorId": "terminal-t1", "blocker": "Bill of lading uploaded, not attested by Port Terminal T1.", "deadline": null },
+    { "id": "wi-valuation", "contextOrganisationId": "lender-one", "lotId": "CR-0001", "action": "Renew valuation", "nextActorId": "lender-one", "blocker": "An expired valuation blocks new exposure; repayment stays open.", "deadline": "2026-11-30T16:00:00+02:00" },
+    { "id": "wi-release-request", "contextOrganisationId": "thaba", "lotId": "CR-0001", "action": "Track release request", "nextActorId": "lender-one", "releaseId": "rel-0001", "blocker": "Waiting for Lender One Bank to attest the payment.", "deadline": "2026-11-28T17:00:00+02:00" }
+  ],
+  "exceptions": [
+    { "id": "ex-duplicate-intake", "kind": "duplicate intake", "ownerId": "kopano", "lotId": "CR-0001", "reason": "Intake ID already issued to CR-0001. The existing record is shown; no new receipt.", "nextAction": "View existing record", "registry": { "status": "not_submitted" } },
+    { "id": "ex-unaccredited-haulier", "kind": "rejected handover", "ownerId": "mosela", "lotId": "CR-0001", "reason": "Unaccredited haulier is not accredited for this batch. Handover refused.", "nextAction": "Assign an accredited haulier", "registry": { "status": "not_submitted" } },
+    { "id": "ex-payment-pending", "kind": "unmatched payment", "ownerId": "lender-one", "lotId": "CR-0001", "reason": "Buyer reports payment; the lender has not attested it and nothing is recorded on chain.", "nextAction": "Review payment evidence", "registry": { "status": "not_submitted" } }
+  ]
+}
