@@ -1,0 +1,20 @@
+{
+  "name": "@thetis/infra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check . && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "synth": "cdk synth -c account=111111111111 -c region=af-south-1 -c availabilityZones=af-south-1a,af-south-1b -c instance=fiat-attestation-test -c githubRepo=Katlego-tech/Thetis -c budgetMonthlyUsd=25 -c alertEmail=alerts@example.invalid"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.275.0",
+    "constructs": "10.8.1"
+  },
+  "devDependencies": {
+    "aws-cdk": "2.1147.0",
+    "esbuild": "0.28.2"
+  }
+}

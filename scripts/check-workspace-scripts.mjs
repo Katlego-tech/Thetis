@@ -8,7 +8,7 @@ function readPackageGlobs() {
   const lines = readFileSync(workspaceFile, "utf8").split(/\r?\n/);
   const start = lines.findIndex((line) => /^packages\s*:/.test(line));
   if (start === -1 || !/^packages\s*:\s*(?:#.*)?$/.test(lines[start])) {
-    throw new Error(`${workspaceFile}: expected a packages block list of dir/* globs`);
+    throw new Error(`${workspaceFile}: expected a packages block list of directories or dir/* globs`);
   }
 
   const globs = [];
@@ -16,13 +16,13 @@ function readPackageGlobs() {
     if (/^\s*(?:#.*)?$/.test(line)) continue;
     if (/^[^\s-]/.test(line)) break;
 
-    const entry = line.match(/^\s*-\s+(["']?)([\w.-]+)\/\*\1(?:\s+#.*)?\s*$/);
+    const entry = line.match(/^\s*-\s+(["']?)([\w.-]+)(\/\*)?\1(?:\s+#.*)?\s*$/);
     if (!entry || entry[2] === "." || entry[2] === "..") {
       throw new Error(
-        `${workspaceFile}:${start + index + 2}: expected a dir/* package glob, got ${line.trim()}`,
+        `${workspaceFile}:${start + index + 2}: expected a directory or dir/* package glob, got ${line.trim()}`,
       );
     }
-    globs.push(`${entry[2]}/*/package.json`);
+    globs.push(`${entry[2]}${entry[3] ?? ""}/package.json`);
   }
   return globs;
 }
