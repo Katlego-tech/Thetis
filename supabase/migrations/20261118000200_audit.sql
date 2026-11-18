@@ -31,3 +31,39 @@ create policy audit_events_admin_select on public.audit_events
 
 create trigger audit_events_immutable before update or delete on public.audit_events
   for each row execute function private.reject_mutation();
+
+create function public.revoke_membership(membership_id uuid)
+returns void
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  caller_id uuid := auth.uid();
+  target_org uuid;
+  target_user uuid;
+begin
+  -- Serialize revocations in the organisation before checking the caller's membership.
+  select o.id, m.user_id into target_org, target_user
+  from public.organisations o
+  join public.memberships m on m.organisation_id = o.id
+  where m.id = membership_id
+  for update of o;
+
+  if not found or not private.is_admin(target_org) or target_user = caller_id then
+    raise exception using errcode = 'P0001', message = 'NOT_AUTHORISED';
+  end if;
+
+  update public.memberships m
+  set revoked_at = pg_catalog.now()
+  where m.id = membership_id and m.revoked_at is null;
+
+  if not found then
+    raise exception using errcode = 'P0001', message = 'MEMBERSHIP_INVALID';
+  end if;
+
+  insert into public.audit_events (actor_user_id, organisation_id, action, subject)
+  values (caller_id, target_org, 'membership.revoked', membership_id::text);
+end;
+$$;
+
+revoke all on function public.revoke_membership(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.revoke_membership(uuid) to authenticated;

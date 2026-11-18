@@ -72,18 +72,12 @@ alter table public.memberships enable row level security;
 revoke all on table public.organisations, public.memberships from public, anon, authenticated, service_role;
 grant select on table public.organisations, public.memberships to authenticated, service_role;
 grant insert, update, delete on table public.organisations to service_role;
-grant update on table public.memberships to authenticated;
 
 create policy organisations_member_select on public.organisations
   for select to authenticated using (private.is_member(id));
 
 create policy memberships_member_select on public.memberships
   for select to authenticated using (private.is_member(organisation_id));
-
-create policy memberships_admin_revoke on public.memberships
-  for update to authenticated
-  using (private.is_admin(organisation_id) and user_id <> (select auth.uid()))
-  with check (private.is_admin(organisation_id) and user_id <> (select auth.uid()));
 
 create trigger memberships_enforce_revocation before update on public.memberships
   for each row execute function private.enforce_revocation();

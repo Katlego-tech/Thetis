@@ -16,19 +16,34 @@ create policy originals_uploader_insert on storage.objects
     )
   );
 
--- Signed uploads run with elevated privileges. Check the path regardless of RLS.
+-- Signed uploads run with elevated privileges. Check the path and uploader regardless of RLS.
 create function private.check_original_insert()
 returns trigger
 language plpgsql security definer set search_path = ''
 as $$
+declare
+  uploader uuid;
+  owner_org uuid;
 begin
   -- Keep this insert and evidence finalization ordered on the evidence version.
-  perform 1 from public.evidence_versions v
+  select v.uploaded_by, o.owner_organisation_id into uploader, owner_org
+  from public.evidence_versions v
+  join public.evidence_objects o on o.id = v.object_id
   where v.storage_path = new.name and v.finalized_at is null
-  for share;
+  for share of v;
 
   if not found then
     raise exception using errcode = 'P0001', message = 'ORIGINAL_IMMUTABLE';
+  end if;
+
+  -- Order the upload against revocation of this membership.
+  perform 1 from public.memberships m
+  where new.owner_id = uploader::text and m.user_id = uploader
+    and m.organisation_id = owner_org and m.revoked_at is null
+  for share;
+
+  if not found then
+    raise exception using errcode = 'P0001', message = 'NOT_AUTHORISED';
   end if;
   return new;
 end;

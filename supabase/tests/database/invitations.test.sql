@@ -97,7 +97,7 @@ select results_eq(
   $$select now()$$,
   '3. Acceptance records when the invitation was consumed'
 );
-update public.memberships set revoked_at = now() where id = current_setting('test.membership')::uuid;
+select public.revoke_membership(current_setting('test.membership')::uuid);
 set local "request.jwt.claims" = '{"sub":"11000000-0000-4000-8000-000000000003","role":"authenticated","email":"invitee@example.test"}';
 select throws_ok(
   $$select public.accept_invitation(current_setting('test.token'))$$,

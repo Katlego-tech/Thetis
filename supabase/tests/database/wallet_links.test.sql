@@ -5,12 +5,15 @@ select plan(21);
 
 insert into auth.users (id, email, email_confirmed_at, aud, role) values
   ('12000000-0000-4000-8000-000000000001', 'first@example.test', now(), 'authenticated', 'authenticated'),
-  ('12000000-0000-4000-8000-000000000002', 'second@example.test', now(), 'authenticated', 'authenticated');
+  ('12000000-0000-4000-8000-000000000002', 'second@example.test', now(), 'authenticated', 'authenticated'),
+  ('12000000-0000-4000-8000-000000000003', 'kopano-admin@example.test', now(), 'authenticated', 'authenticated');
 
 insert into public.memberships (organisation_id, user_id, member_role)
 select id, '12000000-0000-4000-8000-000000000001'::uuid, 'admin'::public.member_role from public.organisations where slug = 'khunou'
 union all
 select id, '12000000-0000-4000-8000-000000000002'::uuid, 'admin'::public.member_role from public.organisations where slug = 'kopano'
+union all
+select id, '12000000-0000-4000-8000-000000000003'::uuid, 'admin'::public.member_role from public.organisations where slug = 'kopano'
 union all
 select id, '12000000-0000-4000-8000-000000000002'::uuid, 'member'::public.member_role from public.organisations where slug = 'khunou';
 
@@ -189,11 +192,14 @@ begin
 end;
 $$;
 
-reset role;
-update public.memberships set revoked_at = now()
-where user_id = '12000000-0000-4000-8000-000000000002'
-  and organisation_id = current_setting('test.kopano')::uuid;
+set local "request.jwt.claims" = '{"sub":"12000000-0000-4000-8000-000000000003","role":"authenticated","email":"kopano-admin@example.test"}';
+select public.revoke_membership((
+  select id from public.memberships
+  where user_id = '12000000-0000-4000-8000-000000000002'
+    and organisation_id = current_setting('test.kopano')::uuid
+));
 
+reset role;
 set local role service_role;
 select throws_ok(
   $$select public.complete_wallet_link(current_setting('test.revoked_member_challenge')::uuid)$$,
@@ -209,6 +215,7 @@ select results_eq(
 
 reset role;
 set local role authenticated;
+set local "request.jwt.claims" = '{"sub":"12000000-0000-4000-8000-000000000002","role":"authenticated","email":"second@example.test"}';
 select results_eq(
   $$select id, revoked_at from public.signer_links where organisation_id = current_setting('test.kopano')::uuid$$,
   $$select current_setting('test.second_link')::uuid, null::timestamptz$$,

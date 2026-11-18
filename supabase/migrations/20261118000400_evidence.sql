@@ -111,6 +111,10 @@ begin
   update public.evidence_versions v
   set sha256 = $2, size_bytes = $3, finalized_at = pg_catalog.now()
   where v.id = version_id and v.finalized_at is null
+    and exists (
+      select 1 from storage.objects o
+      where o.bucket_id = 'originals' and o.name = v.storage_path
+    )
   returning v.* into version_row;
 
   if not found then
