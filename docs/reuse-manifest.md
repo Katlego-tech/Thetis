@@ -19,9 +19,10 @@ before the event (phase 0) unless its date says otherwise.
 | Programmatic Signer interface crates, **pending PR #10** | crates.io `spl-ed25519-signer-interface`, `spl-message-executor-interface`, `spl-nonce-interface` 1.0.0 | Apache-2.0 | 2026-11-18 | Unmodified; test-only dev-dependencies | yes |
 | Token-2022 program binary used in tests | Bundled in LiteSVM 0.15.0 (SPL Token-2022 11.0.0), not committed | Apache-2.0 | 2026-11-18 | Unmodified (ADR 0001) | yes |
 | Associated Token Account program binary used in tests | Bundled in LiteSVM 0.15.0 (SPL Associated Token Account 1.1.1), not committed | Apache-2.0 | 2026-11-18 | Unmodified (ADR 0001) | yes |
+| Address Lookup Table program binary used in tests, **pending PR #10** | Bundled in LiteSVM 0.15.0, not committed | Apache-2.0 | 2026-11-18 | Unmodified; creates and extends the relay lookup table (ADR 0002) | yes |
 | `.gitattributes`, `scripts/check_design.py`, and the initial versions of `.github/workflows/checks.yml`, `.gitignore`, `.env.example` and `mocks/.gitkeep` (all tracked here) | Copied from the author's private project-process template; the template itself is not in this repository | The author's own work | 2026-11-18 | `check_design.py` reads only tracked `docs/*.md`; `checks.yml` gained a design-document step at bootstrap and later every Node, Rust, database and log-keeping step (§2); `.gitignore` and `.env.example` were extended for this stack; `.gitattributes` unchanged | no |
 | Design baseline (`DESIGN.md`, `docs/*.md`, `references/*.md`) | The author's own pre-event research and design | The author's own work | before 2026-11-18 | Updated throughout phase 0 | partly |
-| Dev3Pack FAQ capture (`references/dev3pack_faq_capture/`) | Saved from the organiser's public FAQ page for reference | Third-party; `faq_page.html` and the minified script are **not ours to redistribute** | before 2026-11-18 | None. **Proposed for removal** of `faq_page.html` and `faq_script_*.js`, keeping `faq_answers.md` (awaiting the author's decision) | no |
+| Dev3Pack FAQ capture (`references/dev3pack_faq_capture/`) | Saved from the organiser's public FAQ page for reference | Third-party; `faq_page.html` and the minified script are **not ours to redistribute** | 2026-11-18 | None. **Proposed for removal** of `faq_page.html` and `faq_script_*.js`, keeping `faq_answers.md` (awaiting the author's decision) | no |
 
 ## 2. Original pre-event work (phase 0, written for Thetis)
 
@@ -29,11 +30,11 @@ before the event (phase 0) unless its date says otherwise.
 |---|---|---|---|---|
 | Decisions D34, D35 | #1 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | CI that keeps every run's step logs; local log archiver | #2 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| `packages/domain`: exact-integer position, capacity, release preview and accrual calculations | #3 | 2026-11-18 | not yet licensed (repository licence pending) | yes (on-chain quantities and amounts) |
-| `programs/receipt-spike`: Token-2022 receipt enforcement spike (ADR 0001) | #6 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
+| `packages/domain`: exact-integer position, capacity, release preview and accrual calculations; CI Node workspace checks (install, lint, typecheck, test), dependency scan and duplication scan | #3 | 2026-11-18 | not yet licensed (repository licence pending) | yes (on-chain quantities and amounts) |
+| `programs/receipt-spike`: Token-2022 receipt enforcement spike (ADR 0001); CI Rust and Anchor checks (verified Solana and Anchor install, fmt, clippy, build, tests) and Cargo dependency scan | #6 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 | `infra/`, `services/`: AWS CDK app for the API, fee sponsor and worker (not deployed) | #7 | 2026-11-18 | not yet licensed (repository licence pending) | partly (fee sponsor) |
 | Documentation updates for phase-0 progress | #8 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| Supabase migrations and RLS proof | #9 (pending) | 2026-11-18 | not yet licensed (repository licence pending) | no |
+| Supabase migrations and RLS proof; CI database tests | #9 (pending) | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 (pending) | 2026-11-18 | not yet licensed (repository licence pending) | yes |
 
 **Code from the author's non-Solana work:** the template files in §1 (`.gitattributes`,
