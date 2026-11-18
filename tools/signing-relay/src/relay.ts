@@ -38,6 +38,7 @@ type Refusal =
   | "UNKNOWN_ROLE"
   | "STALE_INTENT"
   | "BATCH_COMPLETE"
+  | "BODY_TOO_LARGE"
   | "INTENT_EXPIRED"
   | "CHAIN_UNAVAILABLE";
 type Route = "message" | "transaction";
@@ -98,11 +99,9 @@ export async function createRelay(
           "Move the existing signing relay state file aside and run signing-relay setup for a fresh batch.",
       };
     }
-    if (currentSlot > issued.expiry) {
-      if (submissionStarted) return refuse("INTENT_EXPIRED");
+    if (!submissionStarted && currentSlot > issued.expiry) {
       const currentNonce = await readNonce(transport, state.nonce, sponsor.address);
-      if (currentSlot > issued.expiry) {
-        if (submissionStarted) return refuse("INTENT_EXPIRED");
+      if (!submissionStarted && currentSlot > issued.expiry) {
         issued = issueAuthorization(currentSlot, currentBatch.sequence, currentNonce);
         signatures.clear();
         checks = { sender: {}, receiver: {} };
@@ -154,12 +153,13 @@ export async function createRelay(
           mayHaveBroadcast = false;
         }
         if (error instanceof ChainTransactionError) throw error;
-        const status = await reconcileSignature(transport, signature, lifetime);
+        const pending = outcome;
+        const unknown: Outcome = { ...pending, state: "unknown", error: errorMessage(error) };
+        const status = await reconcileSignature(transport, signature, lifetime, () => {
+          outcome = unknown;
+        });
         if (status === "failed") throw new Error(`Transaction ${signature} failed on chain`);
-        outcome =
-          status === "confirmed"
-            ? { ...outcome, state: "confirmed" }
-            : { ...outcome, state: "unknown", error: errorMessage(error) };
+        outcome = status === "confirmed" ? { ...pending, state: "confirmed" } : unknown;
       }
     } catch (error) {
       if (mayHaveBroadcast) {
@@ -212,10 +212,12 @@ export async function createRelay(
       typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
     if (!isRole(request.role)) return refuse("UNKNOWN_ROLE");
     if (request.authorizationSha256 !== issued.authorizationSha256) return refuse("STALE_INTENT");
-    // Keep the expiry check and signature collection in the same synchronous step.
-    const currentSlot = await transport.getSlot();
-    if (request.authorizationSha256 !== issued.authorizationSha256) return refuse("STALE_INTENT");
-    if (currentSlot > issued.expiry) return refuse("INTENT_EXPIRED");
+    if (!submissionStarted) {
+      const currentSlot = await transport.getSlot();
+      // The authorization may have changed or submission may have started during the slot read.
+      if (request.authorizationSha256 !== issued.authorizationSha256) return refuse("STALE_INTENT");
+      if (!submissionStarted && currentSlot > issued.expiry) return refuse("INTENT_EXPIRED");
+    }
     const expected = state[request.role].wallet;
     const addressMatches = request.address === expected;
     const signature = addressMatches ? verifiedSignature(request, expected) : null;
@@ -245,6 +247,7 @@ export async function createRelay(
     if (method === "GET" && url.pathname === "/outcome") {
       return {
         ...outcome,
+        activeAuthorizationSha256: issued.authorizationSha256,
         checks: { sender: { ...checks.sender }, receiver: { ...checks.receiver } },
       };
     }
@@ -254,13 +257,15 @@ export async function createRelay(
   return { intent, dispatch };
 }
 
+class BodyTooLargeError extends Error {}
+
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     const bytes = Buffer.from(chunk);
     size += bytes.length;
-    if (size > 8_192) throw new Error("Signature request is too large");
+    if (size > 8_192) throw new BodyTooLargeError();
     chunks.push(bytes);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -275,9 +280,14 @@ export function listen(relay: Awaited<ReturnType<typeof createRelay>>, port: num
       if (request.method === "POST" && url.pathname === "/signature") {
         body = await readJson(request);
       }
-    } catch {
-      response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify(refuse("BAD_SIGNATURE")));
+    } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        response.writeHead(413, { "content-type": "application/json", connection: "close" });
+        response.end(JSON.stringify(refuse("BODY_TOO_LARGE")));
+      } else {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify(refuse("BAD_SIGNATURE")));
+      }
       return;
     }
     let result;

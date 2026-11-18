@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AccountRole,
@@ -52,19 +52,41 @@ function processIsAlive(pid: number) {
   }
 }
 
+async function processStartTime(pid: number) {
+  try {
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+    // The command name can contain spaces and parentheses. Fields after it start at field 3.
+    const startTime = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+    if (!startTime || !/^\d+$/.test(startTime)) {
+      throw new Error(`Cannot read the start time for PID ${pid}`);
+    }
+    return startTime;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 export async function acquireSetupLock(directory: string) {
+  const startTime = await processStartTime(process.pid);
+  if (startTime === null) throw new Error("Cannot read the setup process start time");
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const prefix = `${process.pid}-`;
+  const prefix = `${process.pid}-${startTime}-`;
   const entry = await mkdtemp(join(directory, prefix));
   const release = () => rm(entry, { recursive: true, force: true });
   try {
     // Publish our marker before checking for peers so two live processes cannot both enter.
     for (const name of await readdir(directory)) {
       if (join(directory, name) === entry) continue;
-      const owner = /^([1-9][0-9]*)-/.exec(name);
+      const owner = /^([1-9][0-9]*)-(?:([0-9]+)-)?/.exec(name);
       if (!owner) continue;
       const pid = Number(owner[1]);
-      if (processIsAlive(pid)) throw new Error(`Signing relay setup already running (PID ${pid})`);
+      const ownerStartTime = owner[2];
+      // Legacy markers hold only a PID, so preserve the liveness check for those.
+      const active = ownerStartTime
+        ? (await processStartTime(pid)) === ownerStartTime
+        : processIsAlive(pid);
+      if (active) throw new Error(`Signing relay setup already running (PID ${pid})`);
       await rm(join(directory, name), { recursive: true, force: true });
     }
     return release;

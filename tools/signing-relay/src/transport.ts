@@ -27,6 +27,7 @@ const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 const CONFIRMATION_TIMEOUT_MS = 180_000;
 const STATUS_POLL_MS = 500;
 const MAX_CONSECUTIVE_RPC_FAILURES = 5;
+const MAX_RECONCILIATION_POLL_MS = 8_000;
 
 interface Lifetime {
   blockhash: Blockhash;
@@ -76,8 +77,10 @@ export async function reconcileSignature(
   transport: ChainTransport,
   signature: Signature,
   { lastValidBlockHeight }: Lifetime,
+  onRpcUnavailable: () => void,
 ) {
   let consecutiveFailures = 0;
+  let pollInterval = STATUS_POLL_MS;
   const getStatus = () => transport.getSignatureStatus(signature).catch(() => undefined);
   for (;;) {
     const status = await getStatus();
@@ -90,8 +93,13 @@ export async function reconcileSignature(
     }
     // A successful poll with no signature status is still a valid RPC response.
     consecutiveFailures = status === undefined || height === null ? consecutiveFailures + 1 : 0;
-    if (consecutiveFailures >= MAX_CONSECUTIVE_RPC_FAILURES) return null;
-    await delay(STATUS_POLL_MS);
+    if (consecutiveFailures === MAX_CONSECUTIVE_RPC_FAILURES) onRpcUnavailable();
+    if (consecutiveFailures >= MAX_CONSECUTIVE_RPC_FAILURES) {
+      pollInterval = Math.min(pollInterval * 2, MAX_RECONCILIATION_POLL_MS);
+    } else {
+      pollInterval = STATUS_POLL_MS;
+    }
+    await delay(pollInterval);
   }
 }
 
