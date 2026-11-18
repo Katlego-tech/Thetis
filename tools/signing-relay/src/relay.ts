@@ -36,7 +36,8 @@ type Refusal =
   | "BAD_SIGNATURE"
   | "UNKNOWN_ROLE"
   | "BATCH_COMPLETE"
-  | "INTENT_EXPIRED";
+  | "INTENT_EXPIRED"
+  | "CHAIN_UNAVAILABLE";
 type Route = "message" | "transaction";
 type Check = { verified: true } | { verified: false; reason: Refusal };
 type Checks = Record<Role, Partial<Record<Route, Check>>>;
@@ -46,6 +47,7 @@ interface Outcome {
   signature?: Signature;
   error?: string;
   sizeBytes?: number;
+  authorizationSha256?: string;
 }
 
 const refuse = (reason: Refusal) => ({ verified: false as const, reason });
@@ -102,6 +104,7 @@ export async function createRelay(
         issued = issueAuthorization(currentSlot, currentBatch.sequence, currentNonce);
         signatures.clear();
         checks = { sender: {}, receiver: {} };
+        outcome = { state: "waiting" };
       }
     }
     const { expiry, sequence, authorizationBase64, authorizationSha256 } = issued;
@@ -124,20 +127,24 @@ export async function createRelay(
   }
 
   async function submit() {
+    const { authorization, authorizationSha256 } = issued;
+    outcome = { state: "waiting", authorizationSha256 };
+    let sendStarted = false;
     try {
       const { transaction, lifetime, sizeBytes } = await prepareTransaction(
         transport,
         sponsor,
-        [submitInstruction(issued.authorization, signatures)],
+        [submitInstruction(authorization, signatures)],
         { tables: { [state.lookupTable]: table.addresses } },
       );
       const signature = getSignatureFromTransaction(transaction);
-      outcome = { state: "waiting", signature, sizeBytes };
+      outcome = { ...outcome, signature, sizeBytes };
       log(`Signed relay size: ${sizeBytes} bytes`);
       log(`Devnet signature: ${signature}`);
       try {
+        sendStarted = true;
         await transport.send(transaction);
-        outcome = { state: "submitted", signature, sizeBytes };
+        outcome = { ...outcome, state: "submitted" };
         await transport.confirm(signature, lifetime);
         outcome = { ...outcome, state: "confirmed" };
       } catch (error) {
@@ -150,7 +157,12 @@ export async function createRelay(
             : { ...outcome, state: "unknown", error: errorMessage(error) };
       }
     } catch (error) {
-      outcome = { ...outcome, state: "failed", error: errorMessage(error) };
+      if (sendStarted) {
+        outcome = { ...outcome, state: "failed", error: errorMessage(error) };
+      } else {
+        outcome = { state: "waiting", error: errorMessage(error) };
+        submissionStarted = false;
+      }
     }
   }
 
@@ -250,24 +262,27 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 export function listen(relay: Awaited<ReturnType<typeof createRelay>>, port: number) {
   const server = createServer(async (request, response) => {
     const target = request.url ?? "/";
+    let body: unknown;
     try {
       const url = new URL(target, "http://127.0.0.1");
-      const body =
-        request.method === "POST" && url.pathname === "/signature"
-          ? await readJson(request)
-          : undefined;
-      const result = await relay.dispatch(request.method, target, body);
-      response.writeHead(result === null ? 404 : 200, { "content-type": "application/json" });
-      response.end(JSON.stringify(result));
-    } catch {
-      if (request.method === "GET" && target.split("?")[0] === "/intent") {
-        response.writeHead(503, { "content-type": "application/json" });
-        response.end(JSON.stringify({ verified: false, reason: "CHAIN_UNAVAILABLE" }));
-        return;
+      if (request.method === "POST" && url.pathname === "/signature") {
+        body = await readJson(request);
       }
+    } catch {
       response.writeHead(400, { "content-type": "application/json" });
       response.end(JSON.stringify(refuse("BAD_SIGNATURE")));
+      return;
     }
+    let result;
+    try {
+      result = await relay.dispatch(request.method, target, body);
+    } catch {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify(refuse("CHAIN_UNAVAILABLE")));
+      return;
+    }
+    response.writeHead(result === null ? 404 : 200, { "content-type": "application/json" });
+    response.end(JSON.stringify(result));
   });
   return server.listen(port, "127.0.0.1");
 }

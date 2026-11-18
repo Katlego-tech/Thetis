@@ -264,12 +264,14 @@ describe("signing relay against LiteSVM", () => {
     if (!relayTx) throw new Error("No relay transaction");
     expect(Object.keys(relayTx.signatures)).toEqual([f.sponsor.address]);
     const sizeBytes = getTransactionEncoder().encode(relayTx).length;
+    const authorizationSha256 = createHash("sha256").update(f.authorization).digest("hex");
     console.log(`Signed relay size: ${sizeBytes} bytes`);
     expect(sizeBytes).toBeLessThanOrEqual(1232);
     expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
       state: "submitted",
       signature: getSignatureFromTransaction(relayTx),
       sizeBytes,
+      authorizationSha256,
       checks: {
         sender: { message: { verified: true } },
         receiver: { transaction: { verified: true } },
@@ -281,6 +283,7 @@ describe("signing relay against LiteSVM", () => {
         state: "confirmed",
         signature: getSignatureFromTransaction(relayTx),
         sizeBytes,
+        authorizationSha256,
         checks: {
           sender: { message: { verified: true } },
           receiver: { transaction: { verified: true } },
@@ -321,6 +324,88 @@ describe("signing relay against LiteSVM", () => {
     }
   });
 
+  it("returns HTTP 503 CHAIN_UNAVAILABLE when POST /signature cannot read the slot", async () => {
+    const slot = vi.spyOn(f.transport, "getSlot").mockRejectedValueOnce(new Error("Slot timed out"));
+    const signature = await f.messageRequest("sender");
+    const bind = vi.spyOn(Server.prototype, "listen").mockReturnThis();
+    try {
+      const server = listen(f.relay, 8787);
+      async function post(body: string) {
+        const request = Object.assign(Readable.from([body]), {
+          method: "POST",
+          url: "/signature",
+        });
+        const writeHead = vi.fn();
+        const json = await new Promise<string>((end) =>
+          server.emit("request", request, { writeHead, end }),
+        );
+        return { status: writeHead.mock.lastCall?.[0], body: JSON.parse(json) };
+      }
+
+      expect(await post("{")).toEqual({
+        status: 400,
+        body: { verified: false, reason: "BAD_SIGNATURE" },
+      });
+      expect(slot).not.toHaveBeenCalled();
+      expect(await post(JSON.stringify(signature))).toEqual({
+        status: 503,
+        body: { verified: false, reason: "CHAIN_UNAVAILABLE" },
+      });
+      expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
+        state: "waiting",
+        checks: { sender: {}, receiver: {} },
+      });
+      expect(await post(JSON.stringify(signature))).toEqual({
+        status: 200,
+        body: { verified: true },
+      });
+    } finally {
+      bind.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "reports the submitted authorization digest only after submission starts (refresh: %s)",
+    async (refresh) => {
+      const initial = await f.relay.intent("sender");
+      if (!("intent" in initial)) throw new Error("Initial intent was refused");
+      if (refresh) f.svm.warpToSlot(BigInt(initial.intent.expirySlot) + 1n);
+      const current = await f.relay.intent("sender");
+      if (!("authorizationBase64" in current) || current.authorizationBase64 === undefined) {
+        throw new Error("Current intent was refused");
+      }
+      const bytes = Buffer.from(current.authorizationBase64, "base64");
+      const authorizationSha256 = createHash("sha256").update(bytes).digest("hex");
+      if (refresh) expect(authorizationSha256).not.toBe(initial.authorizationSha256);
+
+      const bind = vi.spyOn(Server.prototype, "listen").mockReturnThis();
+      try {
+        const server = listen(f.relay, 8787);
+        async function getOutcome() {
+          const json = await new Promise<string>((end) =>
+            server.emit("request", { method: "GET", url: "/outcome" }, { writeHead: vi.fn(), end }),
+          );
+          return JSON.parse(json);
+        }
+
+        expect(await getOutcome()).not.toHaveProperty("authorizationSha256");
+        expect(
+          await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender", bytes)),
+        ).toEqual({ verified: true });
+        expect(await getOutcome()).not.toHaveProperty("authorizationSha256");
+        expect(
+          await f.relay.dispatch("POST", "/signature", await f.transactionRequest(undefined, bytes)),
+        ).toEqual({ verified: true });
+        expect(await getOutcome()).toHaveProperty("authorizationSha256", authorizationSha256);
+        await vi.waitFor(async () =>
+          expect(await getOutcome()).toMatchObject({ state: "confirmed", authorizationSha256 }),
+        );
+      } finally {
+        bind.mockRestore();
+      }
+    },
+  );
+
   it("verifies all four wallet routes during and after submission and sends once", async () => {
     let accept: (() => void) | undefined;
     f.holdAcceptance(
@@ -360,6 +445,43 @@ describe("signing relay against LiteSVM", () => {
         receiver: { message: { verified: true }, transaction: { verified: true } },
       },
     });
+    expect(f.submit).toHaveBeenCalledTimes(initialSends + 1);
+  });
+
+  it("retains both signatures after a blockhash timeout and retries on the next verified POST", async () => {
+    const blockhash = vi
+      .spyOn(f.transport, "getLatestBlockhash")
+      .mockRejectedValueOnce(new Error("Blockhash request timed out"));
+    const initialSends = f.submit.mock.calls.length;
+    const post = (body: unknown) => f.relay.dispatch("POST", "/signature", body);
+    const sender = await f.messageRequest("sender");
+    const receiver = await f.transactionRequest();
+    expect(await post(sender)).toEqual({ verified: true });
+    expect(await post(receiver)).toEqual({ verified: true });
+    await vi.waitFor(async () =>
+      expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
+        state: "waiting",
+        error: "Blockhash request timed out",
+        checks: {
+          sender: { message: { verified: true } },
+          receiver: { transaction: { verified: true } },
+        },
+      }),
+    );
+    expect(f.submit).toHaveBeenCalledTimes(initialSends);
+    expect(await post({ ...receiver, signedTransactionBase64: "!" })).toEqual({
+      verified: false,
+      reason: "BAD_SIGNATURE",
+    });
+    expect(blockhash).toHaveBeenCalledTimes(1);
+
+    expect(await post(receiver)).toEqual({ verified: true });
+    await vi.waitFor(async () => {
+      const outcome = await f.relay.dispatch("GET", "/outcome");
+      expect(outcome).toMatchObject({ state: "confirmed" });
+      expect(outcome).not.toHaveProperty("error");
+    });
+    expect(blockhash).toHaveBeenCalledTimes(2);
     expect(f.submit).toHaveBeenCalledTimes(initialSends + 1);
   });
 
@@ -449,6 +571,7 @@ describe("signing relay against LiteSVM", () => {
   });
 
   it("reports unknown after consecutive reconciliation RPC failures", async () => {
+    const initialSends = f.submit.mock.calls.length;
     const error = new Error("RPC unavailable");
     f.submit.mockRejectedValueOnce(error);
     f.signatureStatus.mockRejectedValue(error);
@@ -466,6 +589,12 @@ describe("signing relay against LiteSVM", () => {
     );
     expect(f.signatureStatus).toHaveBeenCalledTimes(5);
     expect(f.blockHeight).toHaveBeenCalledTimes(5);
+    const blockhash = vi.spyOn(f.transport, "getLatestBlockhash");
+    expect(
+      await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender")),
+    ).toEqual({ verified: true });
+    expect(blockhash).not.toHaveBeenCalled();
+    expect(f.submit).toHaveBeenCalledTimes(initialSends + 1);
   });
 
   it("refuses a late signature over HTTP and lets both wallets sign refreshed intent", async () => {
