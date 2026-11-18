@@ -4,3 +4,33 @@
 id = "GHSA-fc5q-39xc-vjpf"
 ignoreUntil = 2026-12-02T00:00:00Z
 reason = "#4: picomatch <=4.0.7 ReDoS, no fixed release (checked 2026-11-18). Dev-only, via vitest 5.1.0 globbing the repo's own test patterns; no user input reaches it. Upgrade when a fix ships."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0387"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: crypto-bigint 0.5.5 timing variability; LiteSVM test harness only, not on-chain; fix 0.7.6 unreachable from k256 0.13 (checked 2026-11-18)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0141"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: bincode 1.3.3 unmaintained; via solana-zk-sdk 4.0.0 in the Solana SDK, no alternative (checked 2026-11-18)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2021-0139"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: ansi_term 0.12.1 unmaintained; build/dev tooling only (checked 2026-11-18)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0388"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: derivative 2.2.0 unmaintained; build/dev tooling only (checked 2026-11-18)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0161"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: libsecp256k1 0.7.2 unmaintained; dev/test graph only (checked 2026-11-18)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: paste 1.0.15 unmaintained; proc-macro, build time only (checked 2026-11-18)."
