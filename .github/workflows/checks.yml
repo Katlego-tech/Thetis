@@ -91,6 +91,79 @@ jobs:
           set -o pipefail
           pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
 
+      - name: Cache Cargo
+        id: cargo-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Record Cargo cache result
+        if: always() && steps.cargo-cache.outcome != 'skipped'
+        shell: bash
+        env:
+          CACHE_OUTCOME: ${{ steps.cargo-cache.outcome }}
+          CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          (
+            set -eo pipefail
+            printf 'Cargo cache outcome: %s\nCache hit: %s\n' "$CACHE_OUTCOME" "${CACHE_HIT:-false}"
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/cache-cargo.log"
+
+      - name: Install Solana and Anchor
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          (
+            set -eo pipefail
+            cd "$RUNNER_TEMP"
+            solana_archive=solana-release-x86_64-unknown-linux-gnu.tar.bz2
+            curl --retry 3 --retry-all-errors -sSfLO "https://github.com/anza-xyz/agave/releases/download/v3.1.10/$solana_archive"
+            printf '%s  %s\n' a7205ff29bcf0f7199740225ecae2b85a28ea9668892d5ec21bd9749882984a1 "$solana_archive" | sha256sum --check --strict -
+            tar -xjf "$solana_archive"
+            printf '%s\n' "$RUNNER_TEMP/solana-release/bin" >> "$GITHUB_PATH"
+
+            anchor_binary=anchor-1.2.2-x86_64-unknown-linux-gnu
+            curl --retry 3 --retry-all-errors -sSfLO "https://github.com/solana-foundation/anchor/releases/download/v1.2.2/$anchor_binary"
+            printf '%s  %s\n' e2c35a973bcfe476f3a89b120e99820f917229faf33d3e71f6625bd94199e741 "$anchor_binary" | sha256sum --check --strict -
+            install -Dm755 "$anchor_binary" "$RUNNER_TEMP/anchor-bin/anchor"
+            printf '%s\n' "$RUNNER_TEMP/anchor-bin" >> "$GITHUB_PATH"
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/install-solana-and-anchor.log"
+
+      - name: Rust format and lint
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            cargo fmt --all -- --check
+            cargo clippy --workspace --all-targets -- -D warnings
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/rust-format-and-lint.log"
+
+      - name: Build program
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            anchor build
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/build-program.log"
+
+      - name: Program tests
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            cargo test --workspace
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/program-tests.log"
+
       - name: Scan dependencies for known vulnerabilities
         shell: bash
         env:
@@ -107,7 +180,7 @@ jobs:
             grep -E "[[:space:]][*]?${binary}$" osv-scanner_SHA256SUMS | sha256sum --check --strict -
             chmod +x "$binary"
             cd "$GITHUB_WORKSPACE"
-            "$RUNNER_TEMP/$binary" scan source --config osv-scanner.toml --no-resolve -L pnpm-lock.yaml
+            "$RUNNER_TEMP/$binary" scan source --config osv-scanner.toml --no-resolve -L pnpm-lock.yaml -L Cargo.lock
           ) 2>&1 | tee "$RUNNER_TEMP/logs/osv-scanner.log"
 
       - name: Check for duplicated code
