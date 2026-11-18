@@ -2,7 +2,7 @@
 
 The criteria below define the evidence required during implementation.
 
-> **Phase-0 progress, 18 November 2026.** Item 1 is done: Token-2022 restriction is proven and D25 confirmed ([ADR 0001](adr/0001-receipt-enforcement.md)). Item 3 is partly done: the toolchain is pinned, and generated program clients wait for the Thetis program. Item 6 is done (`packages/domain` and its fixtures). Item 7 is done: in checkouts with the hooks enabled, one gate runs locally before every push, and CI runs the same checks on every pull request whether or not the hooks were enabled. Items 2 (D27, needs the two phones), 4, 5 and 8 remain.
+> **Phase-0 progress, 18 November 2026.** Item 1 is done: Token-2022 restriction is proven and D25 confirmed ([ADR 0001](adr/0001-receipt-enforcement.md)). Item 2 is partly done: the on-chain half (two parties authorising one instruction through the Programmatic Signer, with the sponsor paying) passes offline in PR #10; what the Solflare and Phantom wallets display needs the two phones. Item 3 is partly done: the toolchain is pinned, and generated program clients wait for the Thetis program. Item 4 is partly done: the database access rules are proven (`supabase/`, 102 tests in CI); invitation login, the wallet-link API and the web-wallet provider choice remain. Item 6 is done (`packages/domain` and its fixtures). Item 7 is done: in checkouts with the hooks enabled, one gate runs locally before every push, and CI runs the same checks on every pull request whether or not the hooks were enabled. Item 8 is done: the demo uses synthetic parties, a generic east-coast port and USD. Item 5 remains.
 
 ## 1. Phase 0 choices and proof
 

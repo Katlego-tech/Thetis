@@ -27,7 +27,9 @@ A reviewable specification and the first phase-0 code. It is not a deployed app,
 | Domain calculations | `packages/domain` | Exact-integer available quantity, storage capacity, payment-confirmed release preview with the residual-limit top-up, and simple-interest accrual. Tested against the synthetic examples in [domain](docs/domain.md) §4 (`fixtures/domain/release-examples.json`). |
 | Receipt enforcement | `programs/receipt-spike`, [ADR 0001](docs/adr/0001-receipt-enforcement.md) | Phase-0 spike only, not the Thetis program. 34 direct Token-2022 bypass attempts and 4 unauthorised or invalid program-level moves are refused, so D25 is confirmed. |
 | AWS infrastructure | `infra`, `services/{api,sponsor,worker}` | CDK definitions for the API, the fee sponsor and the worker, plus secrets, alarms, budget and the release role (D33). Each service is a health endpoint for now. **Not deployed.** |
-| Thetis program, apps, Supabase, voice | — | Not started. |
+| Data layer | `supabase/` | Invitation-only membership, access rules scoped by membership and per-document grants, write-once private originals whose fingerprint only the server sets, one-time wallet-link challenges and an audit log. Proved by 102 database tests (pgTAP) in CI. The login and wallet-link API, and a hosted Supabase project, come next. |
+| Two-party signing | `programs/signing-spike` (PR #10, in review) | Phase-0 spike: two parties authorise one handover through the Ed25519 Programmatic Signer, the fee sponsor pays, and 11 attacks are refused. What phone wallets display is still to be tested on real devices. |
+| Thetis program, apps, voice | — | Not started. |
 
 Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.6.4; Rust 1.89.0 (pinned in `rust-toolchain.toml`), Solana 3.1.10 and Anchor 1.2.2; AWS CDK 2.275.0 (library) and 2.1147.0 (command-line tool).
 
@@ -35,6 +37,8 @@ Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.
 pnpm install --frozen-lockfile
 pnpm lint && pnpm test                     # TypeScript packages, infra and services
 anchor build && cargo test --workspace     # Anchor program tests (LiteSVM)
+supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta,supavisor
+supabase db reset && supabase test db      # database access rules (Supabase CLI 2.122.1)
 ```
 
 CI runs these checks on every pull request, plus a secret scan of the whole history, a dependency advisory scan and a duplication check. Each run keeps its step logs as an artifact for 90 days. CDK synthesis is a separate local check, not run in CI:
