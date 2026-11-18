@@ -5,7 +5,7 @@ const REQUEST_TIMEOUT_MS = 8_000;
 
 export class RelayUnreachable extends Error {}
 
-export type SignatureSubmission = { role: Role; address: string } & (
+export type SignatureSubmission = { role: Role; address: string; authorizationSha256: string } & (
   | { route: "message"; signatureBase58: string }
   | { route: "transaction"; signedTransactionBase64: string }
 );

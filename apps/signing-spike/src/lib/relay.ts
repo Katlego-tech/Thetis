@@ -31,6 +31,7 @@ const signatureRefusals = [
   "UNKNOWN_ROLE",
   "INTENT_EXPIRED",
   "ALREADY_SUBMITTED",
+  "STALE_INTENT",
 ] as const;
 type RouteRefusal = (typeof routeRefusals)[number];
 type IntentReason = (typeof intentRefusals)[number] | "CHAIN_UNAVAILABLE";

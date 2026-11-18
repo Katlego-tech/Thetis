@@ -27,7 +27,13 @@ import {
   routes,
 } from "./src/lib/relay";
 import { getIntent, getOutcome, postSignature, RelayUnreachable } from "./src/relay-client";
-import { connectWallet, signWithWallet, type WalletConnection } from "./src/wallet";
+import {
+  connectWallet,
+  signWithWallet,
+  WalletAccountError,
+  type WalletConnection,
+  WalletRefused,
+} from "./src/wallet";
 
 const POLL_INTERVAL_MS = 3_000;
 
@@ -94,34 +100,56 @@ function CheckText({ check }: { check?: Check }) {
   );
 }
 
-function OutcomePanel({ outcome, notice }: { outcome?: Outcome; notice?: Notice }) {
+function OutcomePanel({
+  outcome,
+  notice,
+  intentDigest,
+}: {
+  outcome?: Outcome;
+  notice?: Notice;
+  intentDigest?: string;
+}) {
+  const outcomeDigest = outcome?.authorizationSha256;
+  const differentBytes =
+    intentDigest !== undefined && outcomeDigest !== undefined && intentDigest !== outcomeDigest;
+  const currentOutcome =
+    intentDigest === undefined || outcomeDigest === intentDigest ? outcome : undefined;
   return (
     <View style={styles.section}>
       <Text accessibilityRole="header" style={styles.heading}>
         {copy.outcome}
       </Text>
-      {notice ? (
-        <NoticeText notice={notice} />
+      {outcomeDigest !== undefined && (
+        <Text selectable>{`${copy.fingerprint} ${outcomeDigest.slice(0, 8)}`}</Text>
+      )}
+      {notice || differentBytes ? (
+        <NoticeText notice={notice ?? { title: copy.outcomeMismatch }} />
       ) : (
         <Text accessibilityLiveRegion="polite">
-          {outcome ? outcomeCopy[outcome.state] : copy.awaitingOutcome}
+          {currentOutcome
+            ? outcomeCopy[currentOutcome.state]
+            : outcome
+              ? copy.awaitingIntentOutcome
+              : copy.awaitingOutcome}
         </Text>
       )}
-      {outcome?.signature && (
+      {currentOutcome?.signature && (
         <View>
           <Text>{copy.devnetSignature}</Text>
-          <Text selectable>{outcome.signature}</Text>
+          <Text selectable>{currentOutcome.signature}</Text>
         </View>
       )}
-      {outcome?.sizeBytes !== undefined && <Text>{copy.size(outcome.sizeBytes)}</Text>}
-      {outcome?.error !== undefined && <Text selectable>{outcome.error}</Text>}
+      {currentOutcome?.sizeBytes !== undefined && (
+        <Text>{copy.size(currentOutcome.sizeBytes)}</Text>
+      )}
+      {currentOutcome?.error !== undefined && <Text selectable>{currentOutcome.error}</Text>}
       {roles.map((role) => (
         <View key={role} style={styles.section}>
           <Text style={styles.heading}>{roleCopy[role]}</Text>
           {routes.map((route) => (
             <View key={route}>
               <Text>{routeCheckCopy[route]}</Text>
-              <CheckText check={outcome?.checks[role][route]} />
+              <CheckText check={currentOutcome?.checks[role][route]} />
             </View>
           ))}
         </View>
@@ -136,6 +164,7 @@ export default function App() {
   const [intent, setIntent] = useState<Intent>();
   const [progress, setProgress] = useState<string>();
   const [notice, setNotice] = useState<Notice>();
+  const [payloadMismatch, setPayloadMismatch] = useState<number | null>();
   const [lastCheck, setLastCheck] = useState<{ route: Route; result: Check }>();
   const pending = useRef(false);
   const { outcome, notice: outcomeNotice } = useOutcome();
@@ -151,6 +180,7 @@ export default function App() {
     setConnection(undefined);
     setIntent(undefined);
     setNotice(undefined);
+    setPayloadMismatch(undefined);
     setLastCheck(undefined);
   }
 
@@ -159,10 +189,17 @@ export default function App() {
     pending.current = true;
     setProgress(label);
     setNotice(undefined);
+    setPayloadMismatch(undefined);
     try {
       await action();
     } catch (error) {
-      setNotice(relayNotice(error));
+      if (error instanceof WalletRefused) {
+        setNotice({ title: copy.walletRefused, detail: error.message });
+      } else if (error instanceof WalletAccountError) {
+        setNotice({ title: error.message });
+      } else {
+        setNotice(relayNotice(error));
+      }
     } finally {
       pending.current = false;
       setProgress(undefined);
@@ -173,17 +210,14 @@ export default function App() {
     void run(copy.connecting, async () => {
       setConnection(undefined);
       setLastCheck(undefined);
-      try {
-        setConnection(await connectWallet(expectedAddress));
-      } catch (error) {
-        setNotice({ title: copy.walletRefused, detail: errorText(error) });
-      }
+      setConnection(await connectWallet(expectedAddress));
     });
   }
 
-  function showStaleIntent() {
+  function showStaleIntent(reason: "STALE_INTENT" | "INTENT_EXPIRED") {
     setIntent(undefined);
-    setNotice({ title: refusalCopy.INTENT_EXPIRED });
+    setLastCheck(undefined);
+    setNotice({ title: refusalCopy[reason] });
   }
 
   function loadIntent() {
@@ -207,16 +241,16 @@ export default function App() {
     });
   }
 
-  async function authorizationIsCurrent(loaded: Intent): Promise<boolean> {
+  async function authorizationIsCurrent(loaded: Intent, afterSigning = false): Promise<boolean> {
     const latest = await getIntent(loaded.role);
     const submittedDigest =
-      "reason" in latest && latest.reason === "BATCH_COMPLETE"
+      afterSigning && "reason" in latest && latest.reason === "BATCH_COMPLETE"
         ? (await getOutcome().catch(() => undefined))?.authorizationSha256
         : undefined;
     const status = authorizationStatus(loaded, latest, submittedDigest);
     if (status === "current") return true;
     if (status === "stale") {
-      showStaleIntent();
+      showStaleIntent("intent" in latest ? "STALE_INTENT" : "INTENT_EXPIRED");
     } else if (status === "batchComplete") {
       setIntent(undefined);
       setNotice({ title: refusalCopy.BATCH_COMPLETE });
@@ -232,18 +266,19 @@ export default function App() {
       setLastCheck(undefined);
       if (!(await authorizationIsCurrent(intent))) return;
       setProgress(copy.signing);
-      let signed: Awaited<ReturnType<typeof signWithWallet>>;
-      try {
-        signed = await signWithWallet(connection, intent, route, setConnection);
-      } catch (error) {
-        setNotice({ title: copy.walletRefused, detail: errorText(error) });
-        return;
-      }
+      const signed = await signWithWallet(connection, intent, route, setConnection, async () => {
+        setProgress(copy.checkingIntent);
+        if (!(await authorizationIsCurrent(intent))) return false;
+        setProgress(copy.signing);
+        return true;
+      });
+      if (!signed) return;
+      setPayloadMismatch(signed.payloadMismatch);
 
       setProgress(copy.checkingIntent);
-      if (!(await authorizationIsCurrent(intent))) return;
+      if (!(await authorizationIsCurrent(intent, true)) || !signed.submission) return;
       setProgress(copy.sending);
-      const result = await postSignature(signed);
+      const result = await postSignature(signed.submission);
       if (
         result.verified ||
         result.reason === "WRONG_ADDRESS" ||
@@ -251,10 +286,10 @@ export default function App() {
       ) {
         setLastCheck({ route, result });
         if (!result.verified && result.reason === "BAD_SIGNATURE") {
-          await authorizationIsCurrent(intent);
+          await authorizationIsCurrent(intent, true);
         }
-      } else if (result.reason === "INTENT_EXPIRED") {
-        showStaleIntent();
+      } else if (result.reason === "INTENT_EXPIRED" || result.reason === "STALE_INTENT") {
+        showStaleIntent(result.reason);
       } else {
         setNotice({ title: refusalCopy[result.reason] });
       }
@@ -307,13 +342,25 @@ export default function App() {
       ))}
       {progress && <Text accessibilityLiveRegion="polite">{progress}</Text>}
       {notice && <NoticeText notice={notice} />}
+      {payloadMismatch !== undefined && (
+        <NoticeText
+          notice={{
+            title: copy.payloadMismatch,
+            detail: copy.receivedPayloadLength(payloadMismatch),
+          }}
+        />
+      )}
       {lastCheck && (
         <View accessibilityLiveRegion="polite">
           <Text>{routeCheckCopy[lastCheck.route]}</Text>
           <CheckText check={lastCheck.result} />
         </View>
       )}
-      <OutcomePanel outcome={outcome} notice={outcomeNotice} />
+      <OutcomePanel
+        outcome={outcome}
+        notice={outcomeNotice}
+        intentDigest={intent?.authorizationSha256}
+      />
     </ScrollView>
   );
 }

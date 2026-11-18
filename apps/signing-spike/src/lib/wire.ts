@@ -1,6 +1,7 @@
 import {
   getCompiledTransactionMessageDecoder,
   getShortU16Encoder,
+  getTransactionDecoder,
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
@@ -48,12 +49,35 @@ export function wrapUnsignedTransaction(messageBytes: ReadonlyUint8Array): Uint8
   return wire;
 }
 
-export function getMessageSignature(
+export function getMessageSignature(payload: ReadonlyUint8Array): ReadonlyUint8Array | undefined {
+  return payload.length >= SIGNATURE_BYTES ? payload.slice(-SIGNATURE_BYTES) : undefined;
+}
+
+function equalBytes(left: ReadonlyUint8Array, right: ReadonlyUint8Array): boolean {
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+export function matchesSignedMessage(
   payload: ReadonlyUint8Array,
-  messageLength: number,
-): ReadonlyUint8Array {
-  if (payload.length !== SIGNATURE_BYTES && payload.length !== messageLength + SIGNATURE_BYTES) {
-    throw new Error("Wallet returned a signed message with an unexpected length");
+  message: ReadonlyUint8Array,
+): boolean {
+  return (
+    payload.length === SIGNATURE_BYTES ||
+    (payload.length === message.length + SIGNATURE_BYTES &&
+      equalBytes(payload.subarray(0, message.length), message))
+  );
+}
+
+export function matchesSignedTransaction(
+  payload: ReadonlyUint8Array,
+  expectedLength: number,
+  message: ReadonlyUint8Array,
+): boolean {
+  if (payload.length !== expectedLength) return false;
+  try {
+    const { messageBytes } = getTransactionDecoder().decode(payload);
+    return equalBytes(messageBytes, message);
+  } catch {
+    return false;
   }
-  return payload.slice(-SIGNATURE_BYTES);
 }

@@ -141,11 +141,9 @@ describe("wallet wire bytes", () => {
 
   it("extracts the last 64 bytes from an attached message signature or accepts a detached one", () => {
     const signature = new Uint8Array(64).fill(19);
-    expect(
-      getMessageSignature(Uint8Array.of(...v1Message, ...signature), v1Message.length),
-    ).toEqual(signature);
-    expect(getMessageSignature(signature, v1Message.length)).toEqual(signature);
-    expect(() => getMessageSignature(new Uint8Array(63), v1Message.length)).toThrow();
+    expect(getMessageSignature(Uint8Array.of(...v1Message, ...signature))).toEqual(signature);
+    expect(getMessageSignature(signature)).toEqual(signature);
+    expect(getMessageSignature(new Uint8Array(63))).toBeUndefined();
   });
 });
 
@@ -165,6 +163,7 @@ describe("relay responses", () => {
     "UNKNOWN_ROLE",
     "ALREADY_SUBMITTED",
     "INTENT_EXPIRED",
+    "STALE_INTENT",
   ])("parses %s from /signature at HTTP 200", (reason) => {
     const refusal = { verified: false, reason };
     expect(parseCheck(refusal, 200)).toEqual(refusal);
@@ -392,7 +391,13 @@ describe("relay HTTP client", () => {
     );
     await expect(getIntent("sender")).resolves.toEqual(refusal);
     await expect(
-      postSignature({ role: "sender", address: sender, route: "message", signatureBase58: "1" }),
+      postSignature({
+        role: "sender",
+        address: sender,
+        authorizationSha256: intent.authorizationSha256,
+        route: "message",
+        signatureBase58: "1",
+      }),
     ).resolves.toEqual(refusal);
   });
 });
