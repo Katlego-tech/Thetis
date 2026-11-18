@@ -41,9 +41,15 @@ supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres
 supabase test db                           # database access rules (Supabase CLI 2.122.1)
 ```
 
-`supabase db reset` rebuilds the local database from the migrations and seed and **deletes
-everything else in it**. Use it only on a disposable local database: the gate and CI run it
-before the tests so they always start from the committed schema.
+To reproduce CI exactly, rebuild the database from the committed migrations and seed first:
+
+```bash
+# Destructive: deletes everything in the local database. Disposable local instances only.
+supabase db reset --local && supabase test db
+```
+
+The gate and CI always reset before testing, so an older local schema or seed cannot change
+their result.
 
 CI runs these checks on every pull request, plus a secret scan of the whole history, a dependency advisory scan and a duplication check. Each run keeps its step logs as an artifact for 90 days. CDK synthesis is a separate local check, not run in CI:
 
