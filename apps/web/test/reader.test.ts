@@ -48,7 +48,7 @@ test("loads the reference fixture and resolves contexts and the lot dossier", ()
   });
   expect(reader.contexts().map(({ organisationId }) => organisationId)).toEqual([
     "lender-one",
-    "thaba",
+    "khunou",
   ]);
   expect(reader.context("lender-one")).toMatchObject({
     role: "lender",
@@ -56,7 +56,7 @@ test("loads the reference fixture and resolves contexts and the lot dossier", ()
   });
   expect(reader.lot("CR-0001")).toMatchObject({
     quantityKg: 5000000n,
-    owner: { id: "thaba" },
+    owner: { id: "khunou" },
     custodian: { id: "kopano" },
     position: { availableKg: 0n },
     locks: [{ lender: { id: "lender-one" }, lockedQuantityKg: 5000000n }],
@@ -167,8 +167,8 @@ test("resolves all three lender work items with quantities, amounts and destinat
       registry: { status: "not_submitted" },
     },
   ]);
-  expect(reader.workQueue("thaba")).toMatchObject([
-    { id: "wi-release-request", href: "/thaba/releases/rel-0001" },
+  expect(reader.workQueue("khunou")).toMatchObject([
+    { id: "wi-release-request", href: "/khunou/releases/rel-0001" },
   ]);
 });
 
@@ -180,7 +180,7 @@ test("returns owned exceptions and all exceptions on the lender's lot", () => {
   expect(reader.exceptions("kopano")).toMatchObject([
     { id: "ex-duplicate-intake", owner: { id: "kopano" }, lot: { id: "CR-0001" } },
   ]);
-  expect(reader.exceptions("thaba")).toEqual([]);
+  expect(reader.exceptions("khunou")).toEqual([]);
 });
 
 test.each([

@@ -72,7 +72,7 @@ and the interface must never imply it does.
 ## Evidence on Hand
 
 - Synthetic demo scenario: fixtures/web/demo-scenario.json (5,000 t chrome lot; USD 200/t; USD 600,000
-  advance; 2,000 t sold for USD 400,000; Richards Bay corridor; synthetic parties).
+  advance; 2,000 t sold for USD 400,000; generic east-coast port; synthetic parties).
 - Release fixtures: fixtures/domain/release-examples.json.
 - **Absent, never to be fabricated:** program addresses, transaction signatures, chain slots,
   real organisations, customers, market prices, savings claims.
