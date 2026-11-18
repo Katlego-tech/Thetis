@@ -59,9 +59,6 @@ importers:
       react-dom:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
-      shadcn:
-        specifier: ^4.23.0
-        version: 4.23.0
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -90,6 +87,9 @@ importers:
       jsdom:
         specifier: 31.0.1
         version: 31.0.1
+      shadcn:
+        specifier: ^4.23.0
+        version: 4.23.0
       tailwindcss:
         specifier: 4.3.5
         version: 4.3.5
@@ -2682,8 +2682,8 @@ packages:
       sass:
         optional: true
 
-  node-releases@2.0.64:
-    resolution: {integrity: sha512-zAPCKqMcnqs2nGy6nlkm7JduFseiBJy3EXHGLh+8pFR+TxGCBxxiEN21+UROU5CKwX/f4TlUcYjiM+vs/tsyxw==}
+  node-releases@2.0.65:
+    resolution: {integrity: sha512-PfvofsGQ+MiOQIPkX9fU8ELUWmy5zL74CdQaph/ismKszfFkfwXaw0cGiwbwym2hT9k5+mdyl8O5WQ1MD8EHmA==}
     engines: {node: '>=18'}
 
   npm-run-path@4.0.1:
@@ -4978,7 +4978,7 @@ snapshots:
       baseline-browser-mapping: 2.11.38
       caniuse-lite: 1.0.30001826
       electron-to-chromium: 1.5.487
-      node-releases: 2.0.64
+      node-releases: 2.0.65
       update-browserslist-db: 1.4.0(browserslist@4.29.6)
 
   bundle-name@4.1.1:
@@ -5509,7 +5509,7 @@ snapshots:
       - '@types/node'
       - babel-plugin-macros
 
-  node-releases@2.0.64: {}
+  node-releases@2.0.65: {}
 
   npm-run-path@4.0.1:
     dependencies:
