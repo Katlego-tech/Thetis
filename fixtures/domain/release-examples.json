@@ -1,0 +1,114 @@
+[
+  {
+    "name": "sale-2000t-400k",
+    "label": "synthetic",
+    "input": {
+      "principal": "60000000",
+      "bookedInterest": "0",
+      "bookedFees": "0",
+      "buyerAmount": "40000000",
+      "sellerTopUp": "0",
+      "lockedQuantity": "5000000",
+      "soldLockedQuantity": "2000000",
+      "valuePerUnit": "20",
+      "haircutBps": "0",
+      "maxLtvBps": "6000"
+    },
+    "expected": {
+      "debtBefore": "60000000",
+      "confirmedPayment": "40000000",
+      "applied": "40000000",
+      "debtAfter": "20000000",
+      "quantityAfter": "3000000",
+      "eligibleValueAfter": "60000000",
+      "limitAfter": "36000000",
+      "sellerSurplus": "0",
+      "allowed": true,
+      "requiredAdditionalTopUp": "0"
+    }
+  },
+  {
+    "name": "sale-2000t-210k-refused",
+    "label": "synthetic",
+    "input": {
+      "principal": "60000000",
+      "bookedInterest": "0",
+      "bookedFees": "0",
+      "buyerAmount": "21000000",
+      "sellerTopUp": "0",
+      "lockedQuantity": "5000000",
+      "soldLockedQuantity": "2000000",
+      "valuePerUnit": "20",
+      "haircutBps": "0",
+      "maxLtvBps": "6000"
+    },
+    "expected": {
+      "debtBefore": "60000000",
+      "confirmedPayment": "21000000",
+      "applied": "21000000",
+      "debtAfter": "39000000",
+      "quantityAfter": "3000000",
+      "eligibleValueAfter": "60000000",
+      "limitAfter": "36000000",
+      "sellerSurplus": "0",
+      "allowed": false,
+      "requiredAdditionalTopUp": "3000000"
+    }
+  },
+  {
+    "name": "sale-2000t-210k-topup-30k",
+    "label": "synthetic",
+    "input": {
+      "principal": "60000000",
+      "bookedInterest": "0",
+      "bookedFees": "0",
+      "buyerAmount": "21000000",
+      "sellerTopUp": "3000000",
+      "lockedQuantity": "5000000",
+      "soldLockedQuantity": "2000000",
+      "valuePerUnit": "20",
+      "haircutBps": "0",
+      "maxLtvBps": "6000"
+    },
+    "expected": {
+      "debtBefore": "60000000",
+      "confirmedPayment": "24000000",
+      "applied": "24000000",
+      "debtAfter": "36000000",
+      "quantityAfter": "3000000",
+      "eligibleValueAfter": "60000000",
+      "limitAfter": "36000000",
+      "sellerSurplus": "0",
+      "allowed": true,
+      "requiredAdditionalTopUp": "0"
+    }
+  },
+  {
+    "name": "overpay-surplus",
+    "label": "synthetic",
+    "input": {
+      "principal": "60000000",
+      "bookedInterest": "0",
+      "bookedFees": "0",
+      "buyerAmount": "70000000",
+      "sellerTopUp": "0",
+      "lockedQuantity": "5000000",
+      "soldLockedQuantity": "5000000",
+      "valuePerUnit": "20",
+      "haircutBps": "0",
+      "maxLtvBps": "6000"
+    },
+    "expected": {
+      "debtBefore": "60000000",
+      "confirmedPayment": "70000000",
+      "applied": "60000000",
+      "debtAfter": "0",
+      "quantityAfter": "0",
+      "eligibleValueAfter": "0",
+      "limitAfter": "0",
+      "sellerSurplus": "10000000",
+      "allowed": true,
+      "requiredAdditionalTopUp": "0"
+    }
+  }
+]
