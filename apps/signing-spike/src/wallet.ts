@@ -17,7 +17,11 @@ import type { SignatureSubmission } from "./relay-client";
 
 const authorizationRequest = {
   chain: "solana:devnet",
-  identity: { name: copy.title },
+  identity: {
+    name: copy.title,
+    uri: "https://github.com/Katlego-tech/Thetis",
+    icon: "favicon.ico",
+  },
 } as const;
 
 interface WalletAccount {
@@ -114,9 +118,7 @@ export async function signWithWallet(
   const unsignedPayload = route === "transaction" ? wrapUnsignedTransaction(message) : message;
   const payloadBase64 = encodeBase64(unsignedPayload);
   const signed = await walletSession(async (wallet) => {
-    const authorization = await walletCall(() =>
-      wallet.authorize({ ...authorizationRequest, auth_token: connection.authToken }),
-    );
+    const authorization = await walletCall(() => wallet.authorize(authorizationRequest));
     const refreshed = readConnection(authorization);
     const account = refreshed.accounts.find(({ address }) => address === intent.expectedAddress);
     if (!account) throw new WalletAccountError(copy.walletMismatch);

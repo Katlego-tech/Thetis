@@ -8,7 +8,7 @@ import { expect, it, vi } from "vitest";
 import { decodeBase64, encodeBase58, encodeBase64 } from "../src/lib/encoding";
 import type { Intent } from "../src/lib/relay";
 import { wrapUnsignedTransaction } from "../src/lib/wire";
-import { signWithWallet, type WalletConnection } from "../src/wallet";
+import { connectWallet, signWithWallet, type WalletConnection } from "../src/wallet";
 
 vi.mock("@solana-mobile/mobile-wallet-adapter-protocol", () => ({ transact: vi.fn() }));
 
@@ -24,6 +24,11 @@ const authorization = {
   accounts: [{ address: addressBase64 }],
   auth_token: "refreshed-token",
   wallet_uri_base: "https://wallet.example",
+};
+const expectedIdentity = {
+  name: "Thetis signing spike",
+  uri: "https://github.com/Katlego-tech/Thetis",
+  icon: "favicon.ico",
 };
 const message = getCompiledTransactionMessageEncoder().encode({
   version: "legacy",
@@ -57,15 +62,25 @@ function mockWallet(wallet: Partial<MobileWallet>) {
   vi.mocked(transact).mockImplementation(async (callback) => callback(wallet as MobileWallet));
 }
 
+it("sends the exact MWA identity when connecting", async () => {
+  const authorize = vi.fn<MobileWallet["authorize"]>().mockResolvedValue(authorization);
+  mockWallet({ authorize });
+
+  await connectWallet();
+
+  expect(authorize.mock.calls[0]?.[0].identity).toStrictEqual(expectedIdentity);
+});
+
 it("saves the refreshed token before signing even when the wallet cancels", async () => {
   const saveConnection = vi.fn();
   const authorize = vi.fn().mockResolvedValue(authorization);
+  const refreshedConnection = {
+    accounts: [{ address, addressBase64 }],
+    authToken: authorization.auth_token,
+    walletUri: authorization.wallet_uri_base,
+  };
   const signMessages = vi.fn(() => {
-    expect(saveConnection).toHaveBeenCalledWith({
-      accounts: [{ address, addressBase64 }],
-      authToken: authorization.auth_token,
-      walletUri: authorization.wallet_uri_base,
-    });
+    expect(saveConnection).toHaveBeenCalledWith(refreshedConnection);
     throw new Error("User cancelled signing");
   });
   mockWallet({ authorize, signMessages });
@@ -73,9 +88,11 @@ it("saves the refreshed token before signing even when the wallet cancels", asyn
   await expect(
     signWithWallet(connection, intent, "message", saveConnection, async () => true),
   ).rejects.toThrow("User cancelled signing");
-  expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ auth_token: "previous-token" }));
+  expect(authorize.mock.calls).toStrictEqual([
+    [{ chain: "solana:devnet", identity: expectedIdentity }],
+  ]);
   expect(signMessages).toHaveBeenCalledOnce();
-  expect(saveConnection).toHaveBeenCalledOnce();
+  expect(saveConnection.mock.calls).toStrictEqual([[refreshedConnection]]);
 });
 
 it("rejects a different wallet account before saving its token or asking it to sign", async () => {
