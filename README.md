@@ -1,6 +1,6 @@
 # Thetis
 
-Design baseline · 18 November 2026 · implementation not yet started
+Design baseline 18 November 2026 · Phase 0 under way: the domain package, the receipt spike and the AWS infrastructure definition are built and tested, and nothing is deployed
 
 Thetis coordinates evidence, collateral locks, payment-confirmed releases and custody of mineral lots on the inland journey from stockpile to port. The initial transaction network is one exporter, an independent custodian, a terminal and a professional lender. Chrome leads; manganese demonstrates configurable policies.
 
@@ -18,7 +18,32 @@ This package develops the revised project and the combined research **including 
 
 ## What this delivers
 
-A reviewable specification, not a deployed app, security audit, legal opinion or evidence of customer demand. Architecture, account names and API contracts are proposed implementation contracts. Version pinning, token enforcement and device integration require phase-0 proof before implementation is treated as verified.
+A reviewable specification and the first phase-0 code. It is not a deployed app, a security audit, a legal opinion or evidence of customer demand. Architecture, account names and API contracts are proposed implementation contracts. Device integration (D27) and the Thetis program's account layout (D29) still need phase-0 proof before they are treated as verified.
+
+## Built so far
+
+| Area | Where | State |
+|---|---|---|
+| Domain calculations | `packages/domain` | Exact-integer available quantity, storage capacity, payment-confirmed release preview with the residual-limit top-up, and simple-interest accrual. Tested against the synthetic examples in [domain](docs/domain.md) §4 (`fixtures/domain/release-examples.json`). |
+| Receipt enforcement | `programs/receipt-spike`, [ADR 0001](docs/adr/0001-receipt-enforcement.md) | Phase-0 spike only, not the Thetis program. 34 direct Token-2022 bypass attempts and 4 unauthorised or invalid program-level moves are refused, so D25 is confirmed. |
+| AWS infrastructure | `infra`, `services/{api,sponsor,worker}` | CDK definitions for the API, the fee sponsor and the worker, plus secrets, alarms, budget and the release role (D33). Each service is a health endpoint for now. **Not deployed.** |
+| Thetis program, apps, Supabase, voice | — | Not started. |
+
+Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.6.4; Rust 1.89.0 (pinned in `rust-toolchain.toml`), Solana 3.1.10 and Anchor 1.2.2; AWS CDK 2.275.0 (library) and 2.1147.0 (command-line tool).
+
+```bash
+pnpm install --frozen-lockfile
+pnpm lint && pnpm test                     # TypeScript packages, infra and services
+anchor build && cargo test --workspace     # Anchor program tests (LiteSVM)
+```
+
+CI runs these checks on every pull request, plus a secret scan of the whole history, a dependency advisory scan and a duplication check. Each run keeps its step logs as an artifact for 90 days. CDK synthesis is a separate local check, not run in CI:
+
+```bash
+pnpm --filter @thetis/infra synth          # CloudFormation templates, no AWS credentials needed
+```
+
+The infra tests that CI runs do synthesize each stack in memory. Accepted advisories with no available fix are listed in `osv-scanner.toml` and tracked in issues #4 and #5.
 
 Production-path behavior means lender-attested bank records; it does **not** mean permission to deploy with live assets. Both settlement adapters will first run in isolated test environments. The devnet token pool is labelled simulation. The open production lending pool remains a longer-term business hypothesis.
 
@@ -26,7 +51,7 @@ Production-path behavior means lender-attested bank records; it does **not** mea
 
 Master copy: `/home/kirito/Documents/projects/personal/Thetis` (this folder; git initialised 18 November 2026). The staged copy in the feasibility workspace (`Thetis/` and `Thetis-design-package.tar.gz`) is retired and must not be edited; see D28 in the [decision register](docs/decisions.md). All package-authored links are relative.
 
-Device coverage: mobile signing is tested with the Mock MWA Wallet on an Android emulator, and with Solflare and Phantom on Android phones. It has **not** been tested on a Solana Seeker, so Seed Vault Wallet prompts and Seeker Connect are unverified (D27).
+Device coverage: mobile signing **is planned to be tested** with the Mock MWA Wallet on an Android emulator, and with Solflare and Phantom on Android phones; that phase-0 spike (D27) has not run yet. It will not be tested on a Solana Seeker, so Seed Vault Wallet prompts and Seeker Connect stay unverified.
 
 Design-review decisions of 18 November 2026 (settlement mode, tagline, durable nonces, fee sponsor, Token-2022 configuration, demo running order) are D20–D30 in the [decision register](docs/decisions.md).
 
@@ -42,4 +67,4 @@ The [retained FAQ evidence](references/dev3pack_faq_capture/faq_answers.md) reso
 python3 scripts/check_design.py
 ```
 
-This checks package-authored links and snapshot integrity. It does not test an application. Future implementation must add the single program/app verification gate described in the build plan; no mock gate or fake passing test count is included here.
+This checks package-authored links and snapshot integrity. It does not test an application. The program and app checks are under [Built so far](#built-so-far).
