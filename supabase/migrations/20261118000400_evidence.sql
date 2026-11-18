@@ -114,6 +114,8 @@ begin
     and exists (
       select 1 from storage.objects o
       where o.bucket_id = 'originals' and o.name = v.storage_path
+        and o.metadata->>'mimetype' = v.mime
+        and o.metadata->>'size' = $3::text
     )
   returning v.* into version_row;
 

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(65);
+select plan(67);
 
 -- 1. Every application table has RLS enabled and no anonymous read privilege.
 select is_empty(
@@ -162,19 +162,19 @@ select throws_ok(
   '6. Authenticated cannot complete a wallet link'
 );
 select lives_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.path'), auth.uid()::text)$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.path'), auth.uid()::text, '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   '8. The uploader can insert at their own unfinalized evidence path'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.other_upload'), '10000000-0000-4000-8000-000000000001')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.other_upload'), '10000000-0000-4000-8000-000000000001', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   '42501', 'new row violates row-level security policy for table "objects"',
   '8. A member cannot upload at another member’s path'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', 'unregistered-original', '10000000-0000-4000-8000-000000000002')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', 'unregistered-original', '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'ORIGINAL_IMMUTABLE',
   '8. An unregistered storage path is refused'
 );
@@ -229,8 +229,8 @@ select is_empty(
   '8. An authenticated grantee cannot read originals even with an active object grant'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.lender_upload'), auth.uid()::text)$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.lender_upload'), auth.uid()::text, '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'NOT_AUTHORISED',
   '8. A grantee cannot upload to a Khunou path even when designated as uploader'
 );
@@ -265,7 +265,12 @@ select throws_ok(
     where version = 1$$,
   'P0001', 'IMMUTABLE_ROW', '6. Service role must use the finalization RPC to set the digest'
 );
-select public.finalize_evidence_version('30000000-0000-4000-8000-000000000001', repeat('a', 64), 10);
+select throws_ok(
+  $$select public.finalize_evidence_version('30000000-0000-4000-8000-000000000001', repeat('a', 64), 10)$$,
+  'P0001', 'EVIDENCE_VERSION_INVALID',
+  '6. Finalization refuses a size that differs from the stored original'
+);
+select public.finalize_evidence_version('30000000-0000-4000-8000-000000000001', repeat('a', 64), 12);
 select throws_ok(
   $$select public.finalize_evidence_version('30000000-0000-4000-8000-000000000003', repeat('b', 64), 12)$$,
   'P0001', 'EVIDENCE_VERSION_INVALID', '8. Finalization requires a stored original'
@@ -276,8 +281,8 @@ select results_eq(
   $$values (null::text, null::bigint, null::timestamptz)$$,
   '8. Finalization without an original leaves the version pending'
 );
-insert into storage.objects (bucket_id, name, owner_id)
-values ('originals', current_setting('test.finalized_path'), '10000000-0000-4000-8000-000000000002');
+insert into storage.objects (bucket_id, name, owner_id, metadata)
+values ('originals', current_setting('test.finalized_path'), '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb);
 select public.finalize_evidence_version('30000000-0000-4000-8000-000000000003', repeat('b', 64), 12);
 select throws_ok(
   $$update public.evidence_versions set sha256 = repeat('c', 64) where version = 1$$,
@@ -292,8 +297,8 @@ reset role;
 set local role authenticated;
 set local "request.jwt.claims" = '{"sub":"10000000-0000-4000-8000-000000000002","role":"authenticated","email":"member@example.test"}';
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.finalized_path'), '10000000-0000-4000-8000-000000000002')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.finalized_path'), '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'ORIGINAL_IMMUTABLE',
   '8. The uploader cannot insert at an already finalized path'
 );
@@ -377,34 +382,39 @@ set local "request.jwt.claims" = '{}';
 select is(row_security_active('storage.objects'), false,
   '8. The current role reaches the Storage triggers without RLS');
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.other_upload'), '10000000-0000-4000-8000-000000000002')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.other_upload'), '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'NOT_AUTHORISED', '8. Privileged original insertion rejects an owner ID different from the uploader'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.revoked_upload'), '10000000-0000-4000-8000-000000000002')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.revoked_upload'), '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'NOT_AUTHORISED', '8. Privileged original insertion rejects an uploader whose membership was revoked'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.other_upload'), null)$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.other_upload'), null, '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'NOT_AUTHORISED', '8. Privileged original insertion rejects a missing owner ID'
 );
 select lives_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.other_upload'), '10000000-0000-4000-8000-000000000001')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.other_upload'), '10000000-0000-4000-8000-000000000001', '{"mimetype":"image/png","size":12}'::jsonb)$$,
   '8. With RLS bypassed, a registered unfinalized path accepts an original'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', 'unregistered-original', '10000000-0000-4000-8000-000000000002')$$,
+  $$select public.finalize_evidence_version('30000000-0000-4000-8000-000000000002', repeat('d', 64), 12)$$,
+  'P0001', 'EVIDENCE_VERSION_INVALID',
+  '8. Finalization refuses an original whose stored type differs from the version (copies skip bucket limits)'
+);
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', 'unregistered-original', '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'ORIGINAL_IMMUTABLE',
   '8. With RLS bypassed, an unregistered path refuses an original'
 );
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name, owner_id)
-    values ('originals', current_setting('test.finalized_path'), '10000000-0000-4000-8000-000000000002')$$,
+  $$insert into storage.objects (bucket_id, name, owner_id, metadata)
+    values ('originals', current_setting('test.finalized_path'), '10000000-0000-4000-8000-000000000002', '{"mimetype":"application/pdf","size":12}'::jsonb)$$,
   'P0001', 'ORIGINAL_IMMUTABLE',
   '8. With RLS bypassed, a finalized path refuses an original'
 );
