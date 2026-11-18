@@ -10,7 +10,7 @@
 # incomplete attempts can be retried.
 set -euo pipefail
 
-root="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 unset GH_REPO
 out="$root/.ci-logs"
