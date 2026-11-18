@@ -91,22 +91,7 @@ impl Fixture {
             assert_eq!(svm.get_account(&party).unwrap().data, expected);
         }
 
-        let open = spike_instruction(
-            "open_batch",
-            &[
-                &BATCH_ID,
-                alice.pubkey().as_ref(),
-                bob.pubkey().as_ref(),
-                &QUANTITY_KG.to_le_bytes(),
-            ],
-            vec![
-                AccountMeta::new(sponsor.pubkey(), true),
-                AccountMeta::new(batch, false),
-                readonly(sender),
-                readonly(receiver),
-                readonly(system_program::ID),
-            ],
-        );
+        let open = open_batch(&BATCH_ID, sponsor.pubkey(), alice.pubkey(), bob.pubkey());
         send_ok(&mut svm, &[open], &[&sponsor], "open batch");
         let nonce = create_nonce(&mut svm, &sponsor);
         let relay_table = create_relay_table(
@@ -236,6 +221,94 @@ impl Fixture {
 
     pub fn approve_handover(&self) -> Authorization {
         self.endorse(self.handover(QUANTITY_KG, 0), &[&self.alice, &self.bob])
+    }
+
+    pub fn assert_same_party_refused(&mut self, error_code: u32) {
+        let id = *b"thetis-spike-002";
+        let (batch, _) = Pubkey::find_program_address(&[b"batch", &id], &PROGRAM);
+        assert!(self.svm.get_account(&batch).is_none());
+        let wallet = self.alice.pubkey();
+        let open = open_batch(&id, self.sponsor.pubkey(), wallet, wallet);
+        let result = send(&mut self.svm, &[open], &[&self.sponsor], &[]);
+        assert!(
+            self.svm.get_account(&batch).is_none(),
+            "same-party Batch was created"
+        );
+        let failure = result.expect_err("same party both roles");
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(0, InstructionError::Custom(error_code)),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+        assert!(
+            failure
+                .meta
+                .logs
+                .iter()
+                .any(|line| line.contains("Error Code: SameParty.")),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+    }
+
+    pub fn assert_relay_sizes(&self) {
+        let fixed_table = AddressLookupTableAccount {
+            key: self.relay_table.key,
+            addresses: vec![
+                spl_ed25519_signer_interface::ID,
+                spl_message_executor_interface::ID,
+                spl_nonce_interface::ID,
+                PROGRAM,
+                system_program::ID,
+                Clock::id(),
+                SlotHashes::id(),
+                TransitionSigner::ADDRESS,
+            ],
+        };
+        let submit = [self.approve_handover().submit()];
+        let blockhash = self.svm.latest_blockhash();
+        let size = |tables: &[AddressLookupTableAccount]| {
+            let transaction = signed_transaction(&submit, &[&self.sponsor], tables, blockhash);
+            transaction_size(&transaction)
+        };
+        let no_table = size(&[]);
+        let fixed_only = size(std::slice::from_ref(&fixed_table));
+        let full_table = size(std::slice::from_ref(&self.relay_table));
+        println!("D32 size no table: {no_table} bytes");
+        println!("D32 size fixed-only table: {fixed_only} bytes");
+        println!("D32 size full table: {full_table} bytes");
+
+        let named_addresses = [
+            (self.nonce, "nonce account"),
+            (self.batch, "batch"),
+            (self.sender, "sender party record"),
+            (self.receiver, "receiver party record"),
+            (self.alice.pubkey(), "Alice wallet"),
+            (self.bob.pubkey(), "Bob wallet"),
+            (self.mallory.pubkey(), "Mallory wallet"),
+            (ps_address(&self.alice.pubkey()), "Alice signer PDA"),
+            (ps_address(&self.bob.pubkey()), "Bob signer PDA"),
+            (ps_address(&self.mallory.pubkey()), "Mallory signer PDA"),
+        ];
+        let names: Vec<_> = self
+            .relay_table
+            .addresses
+            .iter()
+            .filter(|address| !fixed_table.addresses.contains(address))
+            .map(|address| {
+                named_addresses
+                    .iter()
+                    .find(|(key, _)| key == address)
+                    .unwrap_or_else(|| panic!("unnamed per-handover table address {address}"))
+                    .1
+            })
+            .collect();
+        println!("D32 per-handover table entries: {}", names.join(", "));
+        assert!(
+            full_table <= PACKET_DATA_SIZE,
+            "relay packet is {full_table} bytes"
+        );
     }
 
     pub fn relay(&mut self, submit: Instruction) -> TransactionMetadata {
@@ -405,6 +478,26 @@ fn spike_instruction(name: &str, args: &[&[u8]], accounts: Vec<AccountMeta>) -> 
     }
 }
 
+fn open_batch(id: &[u8; 16], payer: Pubkey, sender: Pubkey, receiver: Pubkey) -> Instruction {
+    let (batch, _) = Pubkey::find_program_address(&[b"batch", id], &PROGRAM);
+    spike_instruction(
+        "open_batch",
+        &[
+            id,
+            sender.as_ref(),
+            receiver.as_ref(),
+            &QUANTITY_KG.to_le_bytes(),
+        ],
+        vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new(batch, false),
+            readonly(party_address(sender).0),
+            readonly(party_address(receiver).0),
+            readonly(system_program::ID),
+        ],
+    )
+}
+
 type SendResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
 fn send(
@@ -415,8 +508,23 @@ fn send(
 ) -> SendResult {
     // A reused authorization must reach the Executor in a new transaction to test nonce replay.
     svm.expire_blockhash();
+    let transaction =
+        signed_transaction(instructions, signers, lookup_tables, svm.latest_blockhash());
+    let packet_size = transaction_size(&transaction);
+    assert!(
+        packet_size <= PACKET_DATA_SIZE,
+        "relay packet is {packet_size} bytes"
+    );
+    svm.send_transaction(transaction).map_err(Box::new)
+}
+
+fn signed_transaction(
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    lookup_tables: &[AddressLookupTableAccount],
+    blockhash: Hash,
+) -> VersionedTransaction {
     let payer = signers[0].pubkey();
-    let blockhash = svm.latest_blockhash();
     let message = if lookup_tables.is_empty() {
         VersionedMessage::Legacy(Message::new_with_blockhash(
             instructions,
@@ -428,14 +536,14 @@ fn send(
             v0::Message::try_compile(&payer, instructions, lookup_tables, blockhash).unwrap(),
         )
     };
-    let transaction = VersionedTransaction::try_new(message, signers).unwrap();
-    // These transactions use a one-byte compact signature count followed by 64 bytes per signature.
-    let packet_size = 1 + 64 * transaction.signatures.len() + transaction.message.serialize().len();
-    assert!(
-        packet_size <= PACKET_DATA_SIZE,
-        "relay packet is {packet_size} bytes"
-    );
-    svm.send_transaction(transaction).map_err(Box::new)
+    VersionedTransaction::try_new(message, signers).unwrap()
+}
+
+fn transaction_size(transaction: &VersionedTransaction) -> usize {
+    // Use Solana's wincode serializer to produce the complete signed transaction bytes.
+    Instruction::new_with_wincode(PROGRAM, transaction, vec![])
+        .data
+        .len()
 }
 
 fn send_ok(

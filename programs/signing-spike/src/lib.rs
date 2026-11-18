@@ -28,10 +28,6 @@ pub mod signing_spike {
         Ok(())
     }
 
-    #[allow(
-        unused_variables,
-        reason = "wallet arguments are used by the account constraints"
-    )]
     pub fn open_batch(
         ctx: Context<OpenBatch>,
         id: [u8; 16],
@@ -39,6 +35,7 @@ pub mod signing_spike {
         receiver_wallet: Pubkey,
         quantity_kg: u64,
     ) -> Result<()> {
+        require_keys_neq!(sender_wallet, receiver_wallet, SigningError::SameParty);
         require_gt!(quantity_kg, 0, SigningError::ZeroQuantity);
         ctx.accounts.batch.set_inner(Batch {
             id,

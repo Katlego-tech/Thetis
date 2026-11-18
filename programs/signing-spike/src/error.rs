@@ -14,4 +14,6 @@ pub enum SigningError {
     AlreadyHandedOver,
     #[msg("The batch quantity must be greater than zero")]
     ZeroQuantity,
+    #[msg("The sender and receiver must be different parties")]
+    SameParty,
 }

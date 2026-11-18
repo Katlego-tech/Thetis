@@ -60,6 +60,7 @@ D32 expired: refused (Expired)
 D32 stale sequence: refused (StaleSequence)
 D32 quantity mismatch: refused (QuantityMismatch)
 D32 direct wallets: refused (WrongSigner)
+D32 same party both roles: refused (SameParty)
 ```
 
 Every refusal also checks that the `Batch` account is byte-identical afterwards.
@@ -74,14 +75,28 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
   - The Programmatic Signer nonce stops replay of the same authorization.
   - A stale-but-fresh authorization is refused only by Thetis's own `expected_sequence` check.
   - A late one is refused only by its `expiry_slot`, as D32 (2) and (3) require.
-- **New constraint: transaction size.** The two-party relay exceeds the 1,232-byte packet limit
-  unless it uses an **address lookup table**. The test's sponsor creates one. The Thetis sponsor
-  must therefore keep a lookup table of the fixed accounts (the three programs, the Thetis program,
-  common accounts), and the account layout must keep per-handover accounts few. Record each
-  handover's serialized size when the real instruction exists.
-- **Still open, (a):** whether Solflare and Phantom display these bytes readably, show them as
-  unreadable bytes, or refuse them. That is T004b on the user's phones
-  (docs/design/signing-spike.md §3).
+- **New constraint: transaction size.** Measured on the signed relay transaction
+  (`relay_sizes` test):
+
+  | Address lookup table holds | Signed relay size |
+  |---|---|
+  | nothing | 1,464 bytes |
+  | only fixed addresses (the three Programmatic Signer programs, the program, system program, sysvars) | **1,376 bytes: over the 1,232-byte limit** |
+  | fixed addresses plus the handover's own accounts (nonce account, batch, both party records, both wallets, both derived signers) | 1,128 bytes |
+
+  A fixed table is not enough. The sponsor must add each party's accounts (wallet, derived
+  signer, party record, nonce account) to a lookup table when that party is accredited. It must
+  add each batch account when the batch is opened. A table extension is usable only from the
+  next slot, so this never happens at handover time. The Thetis account layout should also cut
+  per-handover accounts where it can, for example by storing the derived signer on the batch
+  instead of reading two party records. Re-measure once the real instruction exists.
+- **Still open, (a):** what the wallets show when asked to sign these bytes. A wallet's
+  message-signing prompt may show them as unreadable bytes or refuse them as transaction-like; its
+  transaction-signing prompt would sign the same bytes but display an Executor `Execute`
+  instruction. Both routes will be tried on Solflare and on Phantom, on real Android phones
+  through Mobile Wallet Adapter, and on the Mock MWA Wallet. If both wallets show only unreadable
+  bytes, the app shows the decoded intent beside the wallet prompt and blind signing is
+  disclosed. If both wallets refuse both routes, D32 is reopened.
 
 ## Consequences
 
@@ -89,4 +104,5 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
 - The Thetis `Authority` record stores the wallet key and its derived Programmatic Signer address
   (D32 (1)), as `Party` does here.
 - Before the main demo depends on these programs, re-dump them, compare their hashes and re-run
-  this suite. They are devnet-only and unaudited, which must be disclosed (D32).
+  this suite. They are devnet-only and unaudited, which must be disclosed (D32). The committed
+  binaries are listed in the reuse manifest, `docs/reuse-manifest.md` (PR #11).

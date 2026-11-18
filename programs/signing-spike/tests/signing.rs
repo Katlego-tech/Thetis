@@ -9,6 +9,18 @@ const WRONG_SIGNER: u32 = 6000;
 const EXPIRED: u32 = 6001;
 const STALE_SEQUENCE: u32 = 6002;
 const QUANTITY_MISMATCH: u32 = 6003;
+const SAME_PARTY: u32 = 6006;
+
+#[test]
+fn same_party_both_roles() {
+    Fixture::new().assert_same_party_refused(SAME_PARTY);
+    println!("D32 same party both roles: refused (SameParty)");
+}
+
+#[test]
+fn relay_sizes() {
+    Fixture::new().assert_relay_sizes();
+}
 
 #[test]
 fn two_authorities_handover_in_one_instruction() {
