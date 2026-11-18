@@ -28,7 +28,7 @@ before the event (phase 0) unless its date says otherwise.
 
 | Deliverable | Pull request | Date | Licence | Solana-related |
 |---|---|---|---|---|
-| Decisions D34, D35 | #1 | 2026-11-18 | not yet licensed (repository licence pending) | no |
+| Decisions D34, D35 (the patterns are adapted, see §3) | #1 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | CI that keeps every run's step logs; local log archiver | #2 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | `packages/domain`: exact-integer position, capacity, release preview and accrual calculations; CI Node workspace checks (install, lint, typecheck, test), dependency scan and duplication scan | #3 | 2026-11-18 | not yet licensed (repository licence pending) | yes (on-chain quantities and amounts) |
 | `programs/receipt-spike`: Token-2022 receipt enforcement spike (ADR 0001); CI Rust and Anchor checks (verified Solana and Anchor install, fmt, clippy, build, tests) and Cargo dependency scan | #6 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
@@ -36,6 +36,15 @@ before the event (phase 0) unless its date says otherwise.
 | Documentation updates for phase-0 progress | #8 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | Supabase migrations and RLS proof; CI database tests | #9 | 2026-11-18 | not yet licensed (repository licence pending) | no |
 | `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 (pending) | 2026-11-18 | not yet licensed (repository licence pending) | yes |
+
+## 3. Patterns adapted from the author's other projects
+
+No code was copied; these are ideas carried over and rewritten for Thetis.
+
+| Pattern | Source project | Where in Thetis | What is Thetis-specific | Solana-related |
+|---|---|---|---|---|
+| Keep a reuse manifest from the first commit for event eligibility | Panelwise (cross-project review) | D34, this file | The event rules it answers (Dev3Pack FAQ) and the row format | no |
+| An indexer fails loudly on anything it does not recognise | UbuntuRemit (audit-verifier lesson) | D35 | Scoped to the Thetis program's own instructions, events and accounts, after replay deduplication | yes |
 
 **Code from the author's non-Solana work:** the template files in §1 (`.gitattributes`,
 `scripts/check_design.py` and the initial CI workflow, `.gitignore`, `.env.example`) come from the author's private, non-Solana project-process template. The Dev3Pack FAQ permits the

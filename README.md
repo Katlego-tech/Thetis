@@ -38,8 +38,12 @@ pnpm install --frozen-lockfile
 pnpm lint && pnpm test                     # TypeScript packages, infra and services
 anchor build && cargo test --workspace     # Anchor program tests (LiteSVM)
 supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta,supavisor
-supabase db reset && supabase test db      # database access rules (Supabase CLI 2.122.1)
+supabase test db                           # database access rules (Supabase CLI 2.122.1)
 ```
+
+`supabase db reset` rebuilds the local database from the migrations and seed and **deletes
+everything else in it**. Use it only on a disposable local database: the gate and CI run it
+before the tests so they always start from the committed schema.
 
 CI runs these checks on every pull request, plus a secret scan of the whole history, a dependency advisory scan and a duplication check. Each run keeps its step logs as an artifact for 90 days. CDK synthesis is a separate local check, not run in CI:
 
