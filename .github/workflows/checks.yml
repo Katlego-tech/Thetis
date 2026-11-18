@@ -67,8 +67,76 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs"
           python3 scripts/check_design.py 2>&1 | tee "$RUNNER_TEMP/logs/design-check.log"
 
-      # This project's own steps go here: install its pinned dependencies, then lint, type-check
-      # and test it with the same commands used locally before a push.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install (frozen lockfile)
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          corepack enable
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/logs/install.log"
+
+      - name: Lint and type-check
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm lint 2>&1 | tee "$RUNNER_TEMP/logs/lint.log"
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
+
+      - name: Scan dependencies for known vulnerabilities
+        shell: bash
+        env:
+          OSV_SCANNER_VERSION: 2.5.1
+        run: |
+          set -eo pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          (
+            cd "$RUNNER_TEMP"
+            base="https://github.com/google/osv-scanner/releases/download/v$OSV_SCANNER_VERSION"
+            binary="osv-scanner_linux_amd64"
+            curl --retry 3 --retry-all-errors -sSfLO "$base/$binary"
+            curl --retry 3 --retry-all-errors -sSfLO "$base/osv-scanner_SHA256SUMS"
+            grep -E "[[:space:]][*]?${binary}$" osv-scanner_SHA256SUMS | sha256sum --check --strict -
+            chmod +x "$binary"
+            cd "$GITHUB_WORKSPACE"
+            "$RUNNER_TEMP/$binary" scan source --config osv-scanner.toml --no-resolve -L pnpm-lock.yaml
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/osv-scanner.log"
+
+      - name: Check for duplicated code
+        shell: bash
+        run: |
+          set -eo pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          (
+            shopt -s lastpipe
+            git ls-files -z | mapfile -d '' -t tracked_files
+            files=()
+            for file in "${tracked_files[@]}"; do
+              case "/$file" in
+                */docs/*|*/legacy/*|*/fixtures/*|*/mocks/*|*/__mocks__/*|*/testdata/*|*/node_modules/*|*/vendor/*|*/dist/*|*/build/*|*/test/*|*/tests/*|*/__tests__/*|*/components/ui/*)
+                  continue ;;
+              esac
+              case "${file##*/}" in
+                *.d.ts|*.test.*|*.spec.*|test_*.py|*_test.py|*_test.go)
+                  continue ;;
+                *.py|*.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.go|*.rs|*.java|*.rb|*.php|*.c|*.cc|*.cpp|*.h|*.hpp|*.cs|*.kt|*.swift)
+                  files+=("./$file") ;;
+              esac
+            done
+            if (( ${#files[@]} == 0 )); then
+              echo "No source files to compare"
+            else
+              npx --yes jscpd@5.2.0 --threshold 5 --reporters console --no-colors "${files[@]}"
+            fi
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/jscpd.log"
 
       # Every run keeps its step logs as an artifact, pass or fail, for the longest retention
       # GitHub allows (90 days), so a failure can be read without re-running it. A new step

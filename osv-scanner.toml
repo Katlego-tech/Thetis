@@ -1,0 +1,6 @@
+# Temporary vulnerability exceptions tracked in GitHub issues.
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#4: picomatch <=4.0.7 ReDoS, no fixed release (checked 2026-11-18). Dev-only, via vitest 5.1.0 globbing the repo's own test patterns; no user input reaches it. Upgrade when a fix ships."
