@@ -41,6 +41,7 @@ vi.mock("react", async (importOriginal) => ({
 }));
 
 const key = new Uint8Array(32).fill(7);
+const otherKey = new Uint8Array(32).fill(8);
 const expectedAddress = address(encodeBase58(key));
 const authorizationBase64 = encodeBase64(
   getCompiledTransactionMessageEncoder().encode({
@@ -71,11 +72,12 @@ const intent = {
     expectedSequence: 0,
   },
 };
-const authorize = vi.fn().mockResolvedValue({
+const authorization = {
   accounts: [{ address: encodeBase64(key) }],
   auth_token: "token",
   wallet_uri_base: "",
-});
+};
+const authorize = vi.fn();
 const signMessages = vi.fn();
 const fetchRelay = vi.fn();
 
@@ -119,6 +121,7 @@ async function press(title: string) {
 beforeEach(() => {
   screen.state = [];
   vi.clearAllMocks();
+  authorize.mockResolvedValue(authorization);
   const wallet: Partial<MobileWallet> = { authorize, signMessages };
   vi.mocked(transact).mockImplementation(async (callback) => callback(wallet as MobileWallet));
   signMessages.mockResolvedValue({ signed_payloads: [encodeBase64(new Uint8Array(64))] });
@@ -238,6 +241,7 @@ it.each(["bbbbbbbb", "aaaaaaaa"])(
     // A matching eight-character fingerprint still requires comparing the full digest.
     const otherOutcome = {
       state: "confirmed",
+      activeAuthorizationSha256: intent.authorizationSha256,
       authorizationSha256: `${fingerprint}${"b".repeat(56)}`,
       signature: "otherDevnetSignature",
       checks: { sender: { message: { verified: true } }, receiver: {} },
@@ -274,6 +278,7 @@ it.each([
     fetchRelay.mockImplementation(async () =>
       Response.json({
         state: "confirmed",
+        activeAuthorizationSha256: intent.authorizationSha256,
         authorizationSha256: digest,
         checks: { sender: { message: { verified: true } }, receiver: {} },
       }),
@@ -282,11 +287,141 @@ it.each([
     const stopPolling = startPolling();
     try {
       await vi.waitFor(() => expect(inspectScreen().text).toContain(expected));
-      expect(inspectScreen().text.includes("Verified over exact bytes: yes")).toBe(
-        digest !== undefined,
-      );
+      const { text } = inspectScreen();
+      expect(text).toContain("Verified over exact bytes: yes");
+      expect(text.includes("confirmed")).toBe(digest !== undefined);
     } finally {
       stopPolling();
     }
   },
 );
+
+it("signs and submits the remaining diagnostic route when BATCH_COMPLETE refers to the loaded bytes", async () => {
+  await press("Connect wallet");
+  await press("Load intent");
+  fetchRelay.mockImplementation(async (url: string) => {
+    if (url.endsWith("/outcome")) {
+      return Response.json({
+        state: "confirmed",
+        activeAuthorizationSha256: intent.authorizationSha256,
+        authorizationSha256: intent.authorizationSha256,
+        checks: { sender: { transaction: { verified: true } }, receiver: {} },
+      });
+    }
+    if (url.endsWith("/signature")) return Response.json({ verified: true });
+    return Response.json({ verified: false, reason: "BATCH_COMPLETE" });
+  });
+  await press("Sign as message");
+
+  expect(signMessages).toHaveBeenCalledOnce();
+  expect(JSON.parse(fetchRelay.mock.lastCall?.[1].body)).toMatchObject({
+    route: "message",
+    authorizationSha256: intent.authorizationSha256,
+  });
+  expect(inspectScreen().text).toContain(intent.intent.text);
+});
+
+it.each([
+  { binding: "different", digest: "b".repeat(64) },
+  { binding: "missing", digest: undefined },
+])(
+  "clears a completed intent with a $binding submitted digest before signing",
+  async ({ digest }) => {
+    await press("Connect wallet");
+    await press("Load intent");
+    fetchRelay.mockImplementation(async (url: string) =>
+      Response.json(
+        url.endsWith("/outcome")
+          ? {
+              state: "confirmed",
+              activeAuthorizationSha256: intent.authorizationSha256,
+              authorizationSha256: digest,
+              checks: { sender: {}, receiver: {} },
+            }
+          : { verified: false, reason: "BATCH_COMPLETE" },
+      ),
+    );
+    await press("Sign as message");
+
+    expect(fetchRelay.mock.lastCall?.[0]).toMatch(/\/outcome$/);
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(signMessages).not.toHaveBeenCalled();
+    const { text } = inspectScreen();
+    expect(text).toContain("Ask the operator to run setup");
+    expect(text).not.toContain(intent.intent.text);
+  },
+);
+
+it.each([
+  { binding: "matching", digest: intent.authorizationSha256, visible: true },
+  { binding: "different", digest: "b".repeat(64), visible: false },
+])(
+  "shows both phones' waiting route checks only for a matching active digest ($binding)",
+  async ({ digest, visible }) => {
+    await press("Load intent");
+    fetchRelay.mockImplementation(async () =>
+      Response.json({
+        state: "waiting",
+        activeAuthorizationSha256: digest,
+        checks: {
+          sender: { message: { verified: true } },
+          receiver: { transaction: { verified: false, reason: "BAD_SIGNATURE" } },
+        },
+      }),
+    );
+    const startPolling = screen.effect as () => () => void;
+    const stopPolling = startPolling();
+    try {
+      await vi.waitFor(() => {
+        const { text } = inspectScreen();
+        expect(text).toContain("Waiting for an outcome for the loaded intent");
+        expect(text.includes("Verified over exact bytes: yes")).toBe(visible);
+        expect(text.includes("Verified over exact bytes: no")).toBe(visible);
+      });
+    } finally {
+      stopPolling();
+    }
+  },
+);
+
+it("selects a matching secondary authorized account when the intent loads without reconnecting", async () => {
+  const otherAddress = encodeBase58(otherKey);
+  authorize.mockResolvedValue({
+    ...authorization,
+    accounts: [{ address: encodeBase64(otherKey) }, ...authorization.accounts],
+  });
+  await press("Connect wallet");
+  expect(inspectScreen().text).toContain(otherAddress);
+  await press("Load intent");
+
+  const { text } = inspectScreen();
+  expect(text).toContain(`Authorized address ${expectedAddress}`);
+  expect(text).not.toContain(otherAddress);
+  expect(text).not.toContain("The authorized address does not match this role.");
+  expect(authorize).toHaveBeenCalledOnce();
+
+  fetchRelay.mockImplementation(async (url: string) =>
+    Response.json(url.endsWith("/signature") ? { verified: true } : intent),
+  );
+  await press("Sign as message");
+  expect(signMessages).toHaveBeenCalledWith({
+    addresses: [encodeBase64(key)],
+    payloads: [authorizationBase64],
+  });
+});
+
+it("warns and disables signing when none of the authorized accounts match the loaded intent", async () => {
+  authorize.mockResolvedValue({
+    ...authorization,
+    accounts: [
+      { address: encodeBase64(otherKey) },
+      { address: encodeBase64(new Uint8Array(32).fill(9)) },
+    ],
+  });
+  await press("Connect wallet");
+  await press("Load intent");
+  const { buttons, text } = inspectScreen();
+  expect(text).toContain("The authorized address does not match this role.");
+  expect(buttons.get("Sign as message")?.disabled).toBe(true);
+  expect(buttons.get("Sign as transaction")?.disabled).toBe(true);
+});

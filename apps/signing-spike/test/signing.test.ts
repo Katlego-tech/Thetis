@@ -66,6 +66,7 @@ const intent: Intent = {
   network: "devnet",
 };
 const outcome = {
+  activeAuthorizationSha256: intent.authorizationSha256,
   state: "unknown",
   signature: "aDevnetSignature",
   sizeBytes: 1232,
@@ -326,10 +327,14 @@ describe("relay responses", () => {
       const response = { ...outcome, state };
       expect(parseOutcome(response)).toEqual(response);
     }
-    expect(parseOutcome({ state: "waiting", checks: { sender: {}, receiver: {} } })).toEqual({
-      state: "waiting",
-      checks: { sender: {}, receiver: {} },
-    });
+  });
+
+  it("requires and validates the active digest even while the relay is waiting", () => {
+    const waiting = { state: "waiting", checks: { sender: {}, receiver: {} } };
+    const response = { ...waiting, activeAuthorizationSha256: intent.authorizationSha256 };
+    expect(parseOutcome(response)).toEqual(response);
+    expect(() => parseOutcome(waiting)).toThrow("Invalid /outcome response");
+    expect(() => parseOutcome({ ...response, activeAuthorizationSha256: "00" })).toThrow();
   });
 
   it("preserves the optional authorization digest and rejects an invalid digest", () => {

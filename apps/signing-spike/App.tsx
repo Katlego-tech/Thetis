@@ -114,6 +114,9 @@ function OutcomePanel({
     intentDigest !== undefined && outcomeDigest !== undefined && intentDigest !== outcomeDigest;
   const currentOutcome =
     intentDigest === undefined || outcomeDigest === intentDigest ? outcome : undefined;
+  const checksDigest = outcomeDigest ?? outcome?.activeAuthorizationSha256;
+  const checks =
+    intentDigest === undefined || checksDigest === intentDigest ? outcome?.checks : undefined;
   return (
     <View style={styles.section}>
       <Text accessibilityRole="header" style={styles.heading}>
@@ -149,7 +152,7 @@ function OutcomePanel({
           {routes.map((route) => (
             <View key={route}>
               <Text>{routeCheckCopy[route]}</Text>
-              <CheckText check={currentOutcome?.checks[role][route]} />
+              <CheckText check={checks?.[role][route]} />
             </View>
           ))}
         </View>
@@ -169,10 +172,10 @@ export default function App() {
   const pending = useRef(false);
   const { outcome, notice: outcomeNotice } = useOutcome();
   const expectedAddress = intent?.expectedAddress;
+  const matchingAccount = connection?.accounts.find(({ address }) => address === expectedAddress);
+  const displayedAccount = matchingAccount ?? connection?.accounts[0];
   const mismatch =
-    connection !== undefined &&
-    expectedAddress !== undefined &&
-    connection.address !== expectedAddress;
+    connection !== undefined && expectedAddress !== undefined && matchingAccount === undefined;
 
   function selectRole(next: Role) {
     if (pending.current || next === role) return;
@@ -210,7 +213,7 @@ export default function App() {
     void run(copy.connecting, async () => {
       setConnection(undefined);
       setLastCheck(undefined);
-      setConnection(await connectWallet(expectedAddress));
+      setConnection(await connectWallet());
     });
   }
 
@@ -241,10 +244,10 @@ export default function App() {
     });
   }
 
-  async function authorizationIsCurrent(loaded: Intent, afterSigning = false): Promise<boolean> {
+  async function authorizationIsCurrent(loaded: Intent): Promise<boolean> {
     const latest = await getIntent(loaded.role);
     const submittedDigest =
-      afterSigning && "reason" in latest && latest.reason === "BATCH_COMPLETE"
+      "reason" in latest && latest.reason === "BATCH_COMPLETE"
         ? (await getOutcome().catch(() => undefined))?.authorizationSha256
         : undefined;
     const status = authorizationStatus(loaded, latest, submittedDigest);
@@ -253,6 +256,7 @@ export default function App() {
       showStaleIntent("intent" in latest ? "STALE_INTENT" : "INTENT_EXPIRED");
     } else if (status === "batchComplete") {
       setIntent(undefined);
+      setLastCheck(undefined);
       setNotice({ title: refusalCopy.BATCH_COMPLETE });
     } else {
       setNotice({ title: refusalCopy[status] });
@@ -276,7 +280,7 @@ export default function App() {
       setPayloadMismatch(signed.payloadMismatch);
 
       setProgress(copy.checkingIntent);
-      if (!(await authorizationIsCurrent(intent, true)) || !signed.submission) return;
+      if (!(await authorizationIsCurrent(intent)) || !signed.submission) return;
       setProgress(copy.sending);
       const result = await postSignature(signed.submission);
       if (
@@ -286,7 +290,7 @@ export default function App() {
       ) {
         setLastCheck({ route, result });
         if (!result.verified && result.reason === "BAD_SIGNATURE") {
-          await authorizationIsCurrent(intent, true);
+          await authorizationIsCurrent(intent);
         }
       } else if (result.reason === "INTENT_EXPIRED" || result.reason === "STALE_INTENT") {
         showStaleIntent(result.reason);
@@ -314,10 +318,10 @@ export default function App() {
         ))}
       </View>
       <Button title={copy.connect} onPress={connect} disabled={busy} />
-      {connection && (
+      {displayedAccount && (
         <View>
           <Text>{copy.authorizedAddress}</Text>
-          <Text selectable>{connection.address}</Text>
+          <Text selectable>{displayedAccount.address}</Text>
           {mismatch && <Text accessibilityLiveRegion="polite">{copy.walletMismatch}</Text>}
         </View>
       )}

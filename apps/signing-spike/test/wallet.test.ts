@@ -8,14 +8,18 @@ import { expect, it, vi } from "vitest";
 import { decodeBase64, encodeBase58, encodeBase64 } from "../src/lib/encoding";
 import type { Intent } from "../src/lib/relay";
 import { wrapUnsignedTransaction } from "../src/lib/wire";
-import { signWithWallet } from "../src/wallet";
+import { signWithWallet, type WalletConnection } from "../src/wallet";
 
 vi.mock("@solana-mobile/mobile-wallet-adapter-protocol", () => ({ transact: vi.fn() }));
 
 const publicKey = new Uint8Array(32).fill(7);
 const address = encodeBase58(publicKey);
 const addressBase64 = encodeBase64(publicKey);
-const connection = { address, addressBase64, authToken: "previous-token", walletUri: "" };
+const connection: WalletConnection = {
+  accounts: [{ address, addressBase64 }],
+  authToken: "previous-token",
+  walletUri: "",
+};
 const authorization = {
   accounts: [{ address: addressBase64 }],
   auth_token: "refreshed-token",
@@ -58,8 +62,7 @@ it("saves the refreshed token before signing even when the wallet cancels", asyn
   const authorize = vi.fn().mockResolvedValue(authorization);
   const signMessages = vi.fn(() => {
     expect(saveConnection).toHaveBeenCalledWith({
-      address,
-      addressBase64,
+      accounts: [{ address, addressBase64 }],
       authToken: authorization.auth_token,
       walletUri: authorization.wallet_uri_base,
     });

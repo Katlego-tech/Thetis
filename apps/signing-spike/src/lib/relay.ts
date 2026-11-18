@@ -51,6 +51,7 @@ export interface Outcome {
   signature?: string;
   error?: string;
   sizeBytes?: number;
+  activeAuthorizationSha256: string;
   authorizationSha256?: string;
   checks: Record<Role, Partial<Record<Route, Check>>>;
 }
@@ -160,6 +161,7 @@ export function parseOutcome(value: unknown): Outcome {
       value,
       {
         state: (state) => outcomeStates.some((known) => known === state),
+        activeAuthorizationSha256: isSha256,
         checks: (checks) => matches(checks, { sender: isRoleChecks, receiver: isRoleChecks }),
       },
       {

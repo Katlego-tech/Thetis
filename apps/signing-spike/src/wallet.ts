@@ -20,9 +20,13 @@ const authorizationRequest = {
   identity: { name: copy.title },
 } as const;
 
-export interface WalletConnection {
+interface WalletAccount {
   address: string;
   addressBase64: string;
+}
+
+export interface WalletConnection {
+  accounts: readonly [WalletAccount, ...WalletAccount[]];
   authToken: string;
   walletUri: string;
 }
@@ -64,13 +68,13 @@ async function walletSession<T>(
   return result.value;
 }
 
-function walletAddress(account: Account): WalletConnection["addressBase64"] {
+function walletAddress(account: Account): string {
   if ("publicKey" in account) return encodeBase64(account.publicKey);
   return account.address;
 }
 
-function selectAccount(authorization: AuthorizationResult, expected?: string): WalletConnection {
-  let accounts: Pick<WalletConnection, "addressBase64" | "address">[];
+function readConnection(authorization: AuthorizationResult): WalletConnection {
+  let accounts: WalletAccount[];
   try {
     accounts = authorization.accounts.map((account) => {
       const addressBase64 = walletAddress(account);
@@ -81,19 +85,19 @@ function selectAccount(authorization: AuthorizationResult, expected?: string): W
   } catch (cause) {
     throw new WalletAccountError(copy.walletInvalidAddress, { cause });
   }
-  const account = accounts.find(({ address }) => address === expected) ?? accounts[0];
-  if (!account) throw new WalletAccountError(copy.walletNoAccount);
+  const [first, ...others] = accounts;
+  if (!first) throw new WalletAccountError(copy.walletNoAccount);
 
   return {
-    ...account,
+    accounts: [first, ...others],
     authToken: authorization.auth_token,
     walletUri: authorization.wallet_uri_base,
   };
 }
 
-export async function connectWallet(expected?: string): Promise<WalletConnection> {
+export async function connectWallet(): Promise<WalletConnection> {
   return walletSession(async (wallet) =>
-    selectAccount(await walletCall(() => wallet.authorize(authorizationRequest)), expected),
+    readConnection(await walletCall(() => wallet.authorize(authorizationRequest))),
   );
 }
 
@@ -103,7 +107,7 @@ export async function signWithWallet(
   connection: WalletConnection,
   intent: Intent,
   route: Route,
-  onAuthorized: (account: WalletConnection) => void,
+  onAuthorized: (connection: WalletConnection) => void,
   beforeSigning: () => Promise<boolean>,
 ): Promise<WalletPayload | undefined> {
   const message = decodeBase64(intent.authorizationBase64);
@@ -113,10 +117,10 @@ export async function signWithWallet(
     const authorization = await walletCall(() =>
       wallet.authorize({ ...authorizationRequest, auth_token: connection.authToken }),
     );
-    const account = selectAccount(authorization, intent.expectedAddress);
-    if (account.address !== intent.expectedAddress)
-      throw new WalletAccountError(copy.walletMismatch);
-    onAuthorized(account);
+    const refreshed = readConnection(authorization);
+    const account = refreshed.accounts.find(({ address }) => address === intent.expectedAddress);
+    if (!account) throw new WalletAccountError(copy.walletMismatch);
+    onAuthorized(refreshed);
 
     if (!(await beforeSigning())) return undefined;
     const response = await walletCall(() =>
