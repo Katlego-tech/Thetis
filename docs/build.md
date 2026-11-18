@@ -2,7 +2,7 @@
 
 The criteria below define the evidence required during implementation.
 
-> **Phase-0 progress, 18 November 2026.** Item 1 is done: Token-2022 restriction is proven and D25 confirmed ([ADR 0001](adr/0001-receipt-enforcement.md)). Item 3 is partly done: the toolchain is pinned, and generated program clients wait for the Thetis program. Item 6 is done (`packages/domain` and its fixtures). Item 7 is done: one gate runs locally before every push, and CI runs the same checks. Items 2 (D27, needs the two phones), 4, 5 and 8 remain.
+> **Phase-0 progress, 18 November 2026.** Item 1 is done: Token-2022 restriction is proven and D25 confirmed ([ADR 0001](adr/0001-receipt-enforcement.md)). Item 3 is partly done: the toolchain is pinned, and generated program clients wait for the Thetis program. Item 6 is done (`packages/domain` and its fixtures). Item 7 is done: in checkouts with the hooks enabled, one gate runs locally before every push, and CI runs the same checks on every pull request whether or not the hooks were enabled. Items 2 (D27, needs the two phones), 4, 5 and 8 remain.
 
 ## 1. Phase 0 choices and proof
 

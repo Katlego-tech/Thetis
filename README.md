@@ -25,7 +25,7 @@ A reviewable specification and the first phase-0 code. It is not a deployed app,
 | Area | Where | State |
 |---|---|---|
 | Domain calculations | `packages/domain` | Exact-integer available quantity, storage capacity, payment-confirmed release preview with the residual-limit top-up, and simple-interest accrual. Tested against the synthetic examples in [domain](docs/domain.md) §4 (`fixtures/domain/release-examples.json`). |
-| Receipt enforcement | `programs/receipt-spike`, [ADR 0001](docs/adr/0001-receipt-enforcement.md) | Phase-0 spike only, not the Thetis program. 38 direct Token-2022 bypass attempts are refused, so D25 is confirmed. |
+| Receipt enforcement | `programs/receipt-spike`, [ADR 0001](docs/adr/0001-receipt-enforcement.md) | Phase-0 spike only, not the Thetis program. 34 direct Token-2022 bypass attempts and 4 unauthorised or invalid program-level moves are refused, so D25 is confirmed. |
 | AWS infrastructure | `infra`, `services/{api,sponsor,worker}` | CDK definitions for the API, the fee sponsor and the worker, plus secrets, alarms, budget and the release role (D33). Each service is a health endpoint for now. **Not deployed.** |
 | Thetis program, apps, Supabase, voice | — | Not started. |
 
@@ -35,10 +35,15 @@ Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.
 pnpm install --frozen-lockfile
 pnpm lint && pnpm test                     # TypeScript packages, infra and services
 anchor build && cargo test --workspace     # Anchor program tests (LiteSVM)
+```
+
+CI runs these checks on every pull request, plus a secret scan of the whole history, a dependency advisory scan and a duplication check. Each run keeps its step logs as an artifact for 90 days. CDK synthesis is a separate local check, not run in CI:
+
+```bash
 pnpm --filter @thetis/infra synth          # CloudFormation templates, no AWS credentials needed
 ```
 
-CI runs the same checks on every pull request, plus a secret scan of the whole history, a dependency advisory scan and a duplication check. Each run keeps its step logs as an artifact for 90 days. Accepted advisories with no available fix are listed in `osv-scanner.toml` and tracked in issues #4 and #5.
+The infra tests that CI runs do synthesize each stack in memory. Accepted advisories with no available fix are listed in `osv-scanner.toml` and tracked in issues #4 and #5.
 
 Production-path behavior means lender-attested bank records; it does **not** mean permission to deploy with live assets. Both settlement adapters will first run in isolated test environments. The devnet token pool is labelled simulation. The open production lending pool remains a longer-term business hypothesis.
 
