@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
   AccountRole,
   type Address,
@@ -6,7 +8,7 @@ import {
   getAddressDecoder,
   type KeyPairSigner,
 } from "@solana/kit";
-import { type ChainTransport, sendConfirmed } from "./transport.ts";
+import { type ChainTransport, requireDevnet, sendConfirmed } from "./transport.ts";
 import {
   account,
   batchAddresses,
@@ -31,6 +33,40 @@ import {
   u64,
 } from "./wire.ts";
 
+function processIsAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+    // A process owned by another user may still hold a live lock.
+    if (error instanceof Error && "code" in error && error.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+export async function acquireSetupLock(directory: string) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const prefix = `${process.pid}-`;
+  const entry = await mkdtemp(join(directory, prefix));
+  const release = () => rm(entry, { recursive: true, force: true });
+  try {
+    // Publish our marker before checking for peers so two live processes cannot both enter.
+    for (const name of await readdir(directory)) {
+      if (join(directory, name) === entry) continue;
+      const owner = /^([1-9][0-9]*)-/.exec(name);
+      if (!owner) continue;
+      const pid = Number(owner[1]);
+      if (processIsAlive(pid)) throw new Error(`Signing relay setup already running (PID ${pid})`);
+      await rm(join(directory, name), { recursive: true, force: true });
+    }
+    return release;
+  } catch (error) {
+    await release();
+    throw error;
+  }
+}
+
 export async function setup(
   transport: ChainTransport,
   sponsor: KeyPairSigner,
@@ -39,6 +75,7 @@ export async function setup(
   receiverWallet: Address,
   additionalTableAddresses: Address[] = [],
 ): Promise<RelayState> {
+  await requireDevnet(transport);
   if (new Set([senderWallet, receiverWallet, sponsor.address]).size !== 3) {
     throw new Error("The sender, receiver and sponsor must have distinct addresses");
   }
@@ -198,11 +235,16 @@ export async function readBatch(transport: ChainTransport, state: RelayState) {
   if (
     batch?.owner !== state.program ||
     batch.data.length !== 106 ||
+    batch.data.readUInt8(104) > 1 ||
     !batch.data.subarray(0, 96).equals(expected)
   ) {
     throw new Error(`Invalid batch ${state.batch}`);
   }
-  return { sequence: batch.data.readBigUInt64LE(96), bytes: batch.data };
+  return {
+    sequence: batch.data.readBigUInt64LE(96),
+    handedOver: batch.data.readUInt8(104) === 1,
+    bytes: batch.data,
+  };
 }
 
 export async function readNonce(transport: ChainTransport, nonce: Address, sponsor: Address) {

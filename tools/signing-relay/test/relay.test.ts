@@ -26,11 +26,6 @@ const root = new URL("../../../", import.meta.url);
 const program = address("EH7cQ4xmoJ92v2y1JW1xHwVQgtCNvkkVka3jiK1ByQnb");
 const fixtures = [
   [
-    program,
-    "target/deploy/signing_spike.so",
-    "4166280d4a2075562a51b30a2bffbd21be7100b2602d19ef7585e73b2c884934",
-  ],
-  [
     address("EdSigVfK1DkeMrjFNDMjwfQaJPhPTtX7jW8uPv3oKEgN"),
     "ed25519_signer.so",
     "4824c901ee53e6658024a6cc89aec92e8d29608f315f835a640e11039637c80b",
@@ -47,11 +42,16 @@ const fixtures = [
   ],
 ] as const;
 
-async function fixture() {
+async function fixture(rebuiltProgram = false) {
   const svm = new LiteSVM();
+  const workspaceProgram = await readFile(new URL("target/deploy/signing_spike.so", root));
+  // An ELF with trailing padding still runs, but has a different digest.
+  svm.addProgram(
+    program,
+    rebuiltProgram ? Buffer.concat([workspaceProgram, Buffer.of(0)]) : workspaceProgram,
+  );
   for (const [id, path, digest] of fixtures) {
-    const file = path.includes("/") ? path : `programs/signing-spike/tests/fixtures/${path}`;
-    const bytes = await readFile(new URL(file, root));
+    const bytes = await readFile(new URL(`programs/signing-spike/tests/fixtures/${path}`, root));
     expect(createHash("sha256").update(bytes).digest("hex"), path).toBe(digest);
     svm.addProgram(id, bytes);
   }
@@ -76,11 +76,20 @@ async function fixture() {
     sent.add(signature);
     return signature;
   });
-  const transport: ChainTransport = {
+  const signatureStatus = vi.fn(
+    async (signature: Signature): Promise<"confirmed" | "failed" | null> =>
+      sent.has(signature) ? "confirmed" : null,
+  );
+  const blockHeight = vi.fn(async () => 1001n);
+  const getGenesisHash = vi.fn(async () => "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG");
+  const transport = {
+    getGenesisHash,
+    getSignatureStatus: signatureStatus,
+    getBlockHeight: blockHeight,
     async getSlot() {
       return svm.getClock().slot;
     },
-    async waitForSlot(slot) {
+    async waitForSlot(slot: bigint) {
       svm.warpToSlot(slot + 1n);
       // LiteSVM warps Clock only. Keep SlotHashes in step for later lookup-table creation.
       const [latest] = svm.getSlotHashes();
@@ -95,7 +104,7 @@ async function fixture() {
         ? { owner: account.programAddress, data: Buffer.from(account.data) }
         : null;
     },
-    async getRent(space) {
+    async getRent(space: number) {
       return svm.minimumBalanceForRentExemption(BigInt(space));
     },
     async getLatestBlockhash() {
@@ -103,14 +112,16 @@ async function fixture() {
       return { blockhash: svm.latestBlockhash(), lastValidBlockHeight: 1000n };
     },
     send: submit,
-    async confirm(signature) {
+    async confirm(signature: Signature) {
       if (!sent.has(signature)) throw new Error("Unknown transaction");
       await releaseConfirmation;
     },
   };
   const state = await setup(transport, sponsor, program, sender.address, receiver.address);
   const relay = await createRelay(transport, sponsor, state, vi.fn());
-  const authorization = Buffer.from(relay.intent("sender").authorizationBase64, "base64");
+  const intent = await relay.intent("sender");
+  if (!("authorizationBase64" in intent)) throw new Error("Initial intent was refused");
+  const authorization = Buffer.from(intent.authorizationBase64, "base64");
 
   async function messageRequest(role: "sender" | "receiver", bytes = authorization) {
     const signer = role === "sender" ? sender : receiver;
@@ -122,12 +133,17 @@ async function fixture() {
     };
   }
 
-  async function transactionRequest(indexAddress = receiver.address, bytes = authorization) {
+  async function transactionRequest(
+    indexAddress?: Address,
+    bytes = authorization,
+    role: "sender" | "receiver" = "receiver",
+  ) {
+    const signer = role === "sender" ? sender : receiver;
     const message = getCompiledTransactionMessageDecoder().decode(bytes);
     const signerKeys = message.staticAccounts.slice(0, message.header.numSignerAccounts);
-    const receiverSignature = await signBytes(receiver.keyPair.privateKey, bytes);
+    const signature = await signBytes(signer.keyPair.privateKey, bytes);
     const signatures = Object.fromEntries(
-      signerKeys.map((key) => [key, key === indexAddress ? receiverSignature : null]),
+      signerKeys.map((key) => [key, key === (indexAddress ?? signer.address) ? signature : null]),
     );
     const signedTransactionBase64 = Buffer.from(
       getTransactionEncoder().encode({
@@ -136,9 +152,9 @@ async function fixture() {
       }),
     ).toString("base64");
     return {
-      role: "receiver",
+      role,
       route: "transaction",
-      address: receiver.address,
+      address: signer.address,
       signedTransactionBase64,
     };
   }
@@ -150,6 +166,9 @@ async function fixture() {
     receiver,
     transport,
     submit,
+    signatureStatus,
+    blockHeight,
+    getGenesisHash,
     state,
     relay,
     authorization,
@@ -163,6 +182,11 @@ async function fixture() {
     },
   };
 }
+
+it("loads a rebuilt workspace program while verifying the vendored fixtures", async () => {
+  const f = await fixture(true);
+  expect(f.svm.getAccount(f.state.batch).exists).toBe(true);
+});
 
 describe("signing relay against LiteSVM", () => {
   let f: Awaited<ReturnType<typeof fixture>>;
@@ -221,7 +245,10 @@ describe("signing relay against LiteSVM", () => {
       confirm = resolve;
     });
     f.holdConfirmation(confirmation);
-    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({ state: "waiting" });
+    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
+      state: "waiting",
+      checks: { sender: {}, receiver: {} },
+    });
     const senderRequest = await f.messageRequest("sender");
     expect(await f.relay.dispatch("POST", "/signature", senderRequest)).toEqual({ verified: true });
     expect(await f.relay.dispatch("POST", "/signature", await f.transactionRequest())).toEqual({
@@ -243,6 +270,10 @@ describe("signing relay against LiteSVM", () => {
       state: "submitted",
       signature: getSignatureFromTransaction(relayTx),
       sizeBytes,
+      checks: {
+        sender: { message: { verified: true } },
+        receiver: { transaction: { verified: true } },
+      },
     });
     confirm?.();
     await vi.waitFor(async () => {
@@ -250,6 +281,10 @@ describe("signing relay against LiteSVM", () => {
         state: "confirmed",
         signature: getSignatureFromTransaction(relayTx),
         sizeBytes,
+        checks: {
+          sender: { message: { verified: true } },
+          receiver: { transaction: { verified: true } },
+        },
       });
     });
     const batch = f.svm.getAccount(f.state.batch);
@@ -259,8 +294,7 @@ describe("signing relay against LiteSVM", () => {
     expect(f.svm.getBalance(f.sponsor.address)).toBe((before[0] ?? 0n) - 5_000n);
     expect(keys.slice(1).map((key) => f.svm.getBalance(key))).toEqual(before.slice(1));
     expect(await f.relay.dispatch("POST", "/signature", senderRequest)).toEqual({
-      verified: false,
-      reason: "ALREADY_SUBMITTED",
+      verified: true,
     });
   });
 
@@ -287,42 +321,179 @@ describe("signing relay against LiteSVM", () => {
     }
   });
 
-  it("waits for RPC acceptance, rejects duplicate submissions, and reports confirmation failures", async () => {
-    const sentBeforeHandover = f.submit.mock.calls.length;
+  it("verifies all four wallet routes during and after submission and sends once", async () => {
     let accept: (() => void) | undefined;
-    let fail: ((error: Error) => void) | undefined;
     f.holdAcceptance(
       new Promise<void>((resolve) => {
         accept = resolve;
       }),
     );
-    f.holdConfirmation(
-      new Promise<void>((_resolve, reject) => {
-        fail = reject;
-      }),
-    );
-    const sender = await f.messageRequest("sender");
-    expect(await f.relay.dispatch("POST", "/signature", sender)).toEqual({ verified: true });
-    expect(await f.relay.dispatch("POST", "/signature", sender)).toEqual({ verified: true });
-    expect(f.submit).toHaveBeenCalledTimes(sentBeforeHandover);
-    await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
-    await vi.waitFor(() => expect(f.submit).toHaveBeenCalledTimes(sentBeforeHandover + 1));
-    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({ state: "waiting" });
-    expect(await f.relay.dispatch("POST", "/signature", sender)).toEqual({
-      verified: false,
-      reason: "ALREADY_SUBMITTED",
+    const initialSends = f.submit.mock.calls.length;
+    const post = (body: unknown) => f.relay.dispatch("POST", "/signature", body);
+    expect(await post(await f.messageRequest("sender"))).toEqual({ verified: true });
+    expect(await post(await f.transactionRequest(undefined, f.authorization, "sender"))).toEqual({
+      verified: true,
+    });
+    expect(f.submit).toHaveBeenCalledTimes(initialSends);
+    expect(await post(await f.messageRequest("receiver"))).toEqual({ verified: true });
+    await vi.waitFor(() => expect(f.submit).toHaveBeenCalledTimes(initialSends + 1));
+    const wrongIndex = await f.transactionRequest(f.sender.address);
+    expect(await post(wrongIndex)).toEqual({ verified: false, reason: "BAD_SIGNATURE" });
+    expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
+      state: "waiting",
+      checks: {
+        sender: { message: { verified: true }, transaction: { verified: true } },
+        receiver: {
+          message: { verified: true },
+          transaction: { verified: false, reason: "BAD_SIGNATURE" },
+        },
+      },
     });
     accept?.();
-    await vi.waitFor(() =>
-      expect(f.relay.dispatch("GET", "/outcome")).toMatchObject({ state: "submitted" }),
+    await vi.waitFor(async () =>
+      expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({ state: "confirmed" }),
     );
-    fail?.(new Error("Confirmation unavailable"));
-    await vi.waitFor(() =>
-      expect(f.relay.dispatch("GET", "/outcome")).toMatchObject({
+    expect(await post(await f.transactionRequest())).toEqual({ verified: true });
+    expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
+      checks: {
+        sender: { message: { verified: true }, transaction: { verified: true } },
+        receiver: { message: { verified: true }, transaction: { verified: true } },
+      },
+    });
+    expect(f.submit).toHaveBeenCalledTimes(initialSends + 1);
+  });
+
+  it("publishes the signed transaction ID before send and reconciles a lost send response", async () => {
+    const send = f.submit.getMockImplementation();
+    if (!send) throw new Error("Missing test transport send");
+    let observedBeforeSend: unknown;
+    f.submit.mockImplementationOnce(async (transaction) => {
+      observedBeforeSend = await f.relay.dispatch("GET", "/outcome");
+      await send(transaction);
+      throw new Error("Send response lost");
+    });
+    f.signatureStatus.mockRejectedValueOnce(new Error("Status request timed out"));
+    f.blockHeight.mockResolvedValueOnce(1000n);
+    await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender"));
+    await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
+    await vi.waitFor(async () => {
+      const tx = f.submit.mock.lastCall?.[0];
+      if (!tx) throw new Error("Missing transaction");
+      const signature = getSignatureFromTransaction(tx);
+      expect(observedBeforeSend).toMatchObject({ state: "waiting", signature });
+      expect(f.signatureStatus.mock.calls).toEqual([[signature], [signature]]);
+      expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
+        state: "confirmed",
+        signature,
+      });
+    });
+  });
+
+  it("reports unknown over HTTP when confirmation and post-expiry status are inconclusive", async () => {
+    vi.spyOn(f.transport, "confirm").mockRejectedValueOnce(new Error("Confirmation unavailable"));
+    f.signatureStatus.mockResolvedValue(null);
+    await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender"));
+    await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
+    const bind = vi.spyOn(Server.prototype, "listen").mockReturnThis();
+    try {
+      const server = listen(f.relay, 8787);
+      await vi.waitFor(async () => {
+        const json = await new Promise<string>((end) =>
+          server.emit("request", { method: "GET", url: "/outcome" }, { writeHead: vi.fn(), end }),
+        );
+        expect(JSON.parse(json)).toMatchObject({
+          state: "unknown",
+          signature: expect.any(String),
+          error: "Confirmation unavailable",
+        });
+      });
+      expect(f.blockHeight).toHaveBeenCalled();
+      expect(f.signatureStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      bind.mockRestore();
+    }
+  });
+
+  it("reports failed when reconciliation observes a confirmed on-chain error", async () => {
+    f.submit.mockRejectedValueOnce(new Error("Send timed out"));
+    f.signatureStatus.mockResolvedValue("failed");
+    await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender"));
+    await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
+    await vi.waitFor(async () =>
+      expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
         state: "failed",
-        error: "Confirmation unavailable",
+        signature: expect.any(String),
       }),
     );
+  });
+
+  it("refreshes expired intent with the current sequence and discards old checks and signatures", async () => {
+    const initial = await f.relay.intent("sender");
+    if (!("intent" in initial)) throw new Error("Initial intent was refused");
+    const oldSignature = await f.messageRequest("sender");
+    await f.relay.dispatch("POST", "/signature", oldSignature);
+    const batch = f.svm.getAccount(f.state.batch);
+    if (!batch.exists) throw new Error("Batch is missing");
+    const data = Buffer.from(batch.data);
+    data.writeBigUInt64LE(4n, 96);
+    f.svm.setAccount({ ...batch, data });
+    f.svm.warpToSlot(BigInt(initial.intent.expirySlot));
+    expect(await f.relay.intent("sender")).toEqual(initial);
+    f.svm.warpToSlot(BigInt(initial.intent.expirySlot) + 1n);
+    const [fresh, other] = await Promise.all([
+      f.relay.intent("sender"),
+      f.relay.intent("receiver"),
+    ]);
+    if (!("authorizationBase64" in fresh) || !("authorizationBase64" in other))
+      throw new Error("Refreshed intent was refused");
+    expect(fresh.authorizationBase64).not.toBe(initial.authorizationBase64);
+    expect(fresh.authorizationBase64).toBe(other.authorizationBase64);
+    expect(fresh.intent).toMatchObject({
+      expectedSequence: 4,
+      expirySlot: initial.intent.expirySlot + 9001,
+    });
+    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
+      state: "waiting",
+      checks: { sender: {}, receiver: {} },
+    });
+    const sends = f.submit.mock.calls.length;
+    expect(await f.relay.dispatch("POST", "/signature", oldSignature)).toEqual({
+      verified: false,
+      reason: "BAD_SIGNATURE",
+    });
+    const receiver = await f.messageRequest(
+      "receiver",
+      Buffer.from(fresh.authorizationBase64, "base64"),
+    );
+    expect(await f.relay.dispatch("POST", "/signature", receiver)).toEqual({ verified: true });
+    expect(f.submit).toHaveBeenCalledTimes(sends);
+  });
+
+  it("refuses to serve intents for an on-chain completed batch", async () => {
+    await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender"));
+    await f.relay.dispatch("POST", "/signature", await f.transactionRequest());
+    await vi.waitFor(async () =>
+      expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({ state: "confirmed" }),
+    );
+    const restarted = await createRelay(f.transport, f.sponsor, f.state, vi.fn());
+    for (const relay of [f.relay, restarted]) {
+      expect(await relay.dispatch("GET", "/intent?role=sender")).toMatchObject({
+        verified: false,
+        reason: "BATCH_COMPLETE",
+        message: expect.stringMatching(/run .*setup.*fresh batch/i),
+      });
+    }
+  });
+
+  it("refuses setup and serve on a transport outside devnet before account access", async () => {
+    f.getGenesisHash.mockResolvedValue("other-cluster");
+    const account = vi.spyOn(f.transport, "getAccount");
+    const error = /devnet.*genesis hash/i;
+    await expect(
+      setup(f.transport, f.sponsor, program, f.sender.address, f.receiver.address),
+    ).rejects.toThrow(error);
+    await expect(createRelay(f.transport, f.sponsor, f.state)).rejects.toThrow(error);
+    expect(account).not.toHaveBeenCalled();
   });
 
   it("refuses WRONG_ADDRESS", async () => {
@@ -362,7 +533,10 @@ describe("signing relay against LiteSVM", () => {
       verified: false,
       reason: "UNKNOWN_ROLE",
     });
-    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({ state: "waiting" });
+    expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
+      state: "waiting",
+      checks: { sender: {}, receiver: {} },
+    });
   });
 
   it("checks all seven devnet refusal cases against the real programs without changing the stored batch", async () => {

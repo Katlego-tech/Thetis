@@ -22,13 +22,20 @@ import {
   type Transaction,
 } from "@solana/kit";
 
+const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+const CONFIRMATION_TIMEOUT_MS = 180_000;
+const STATUS_POLL_MS = 500;
+
 interface Lifetime {
   blockhash: Blockhash;
   lastValidBlockHeight: bigint;
 }
 
 export interface ChainTransport {
+  getGenesisHash(): Promise<string>;
   getSlot(): Promise<bigint>;
+  getBlockHeight(): Promise<bigint>;
+  getSignatureStatus(signature: Signature): Promise<"confirmed" | "failed" | null>;
   waitForSlot(after: bigint): Promise<void>;
   getAccount(key: Address): Promise<{ owner: Address; data: Buffer } | null>;
   getRent(space: number): Promise<bigint>;
@@ -49,6 +56,37 @@ export class ChainTransactionError extends Error {
 
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+export async function requireDevnet(transport: ChainTransport) {
+  const hash = await transport.getGenesisHash();
+  if (hash !== DEVNET_GENESIS_HASH) {
+    throw new Error(
+      `Signing relay requires devnet genesis hash ${DEVNET_GENESIS_HASH}; RPC returned ${hash}`,
+    );
+  }
+}
+
+export async function reconcileSignature(
+  transport: ChainTransport,
+  signature: Signature,
+  { lastValidBlockHeight }: Lifetime,
+) {
+  const deadline = performance.now() + CONFIRMATION_TIMEOUT_MS;
+  // A missing or unreachable status cannot prove that the transaction did not land.
+  const getStatus = () => transport.getSignatureStatus(signature).catch(() => null);
+  for (;;) {
+    const status = await getStatus();
+    if (status) return status;
+
+    const height = await transport.getBlockHeight().catch(() => null);
+    if (height !== null && height > lastValidBlockHeight) {
+      // Include any confirmation that arrived between the status and height reads.
+      return await getStatus();
+    }
+    if (performance.now() >= deadline) return null;
+    await delay(STATUS_POLL_MS);
+  }
+}
 
 export async function prepareTransaction(
   transport: ChainTransport,
@@ -99,8 +137,23 @@ export function rpcTransport(url: string): ChainTransport {
   const commitment = "confirmed";
   const requestTimeout = () => ({ abortSignal: AbortSignal.timeout(15_000) });
   const getSlot = () => rpc.getSlot({ commitment }).send(requestTimeout());
+  const getBlockHeight = () => rpc.getBlockHeight({ commitment }).send(requestTimeout());
+  const getSignatureStatus: ChainTransport["getSignatureStatus"] = async (signature) => {
+    const {
+      value: [status],
+    } = await rpc
+      .getSignatureStatuses([signature], { searchTransactionHistory: true })
+      .send(requestTimeout());
+    if (status?.confirmationStatus !== "confirmed" && status?.confirmationStatus !== "finalized") {
+      return null;
+    }
+    return status.err ? "failed" : "confirmed";
+  };
   return {
+    getGenesisHash: () => rpc.getGenesisHash().send(requestTimeout()),
     getSlot,
+    getBlockHeight,
+    getSignatureStatus,
     async waitForSlot(after) {
       const deadline = Date.now() + 60_000;
       while ((await getSlot()) <= after) {
@@ -144,34 +197,32 @@ export function rpcTransport(url: string): ChainTransport {
       }
     },
     async confirm(signature, { lastValidBlockHeight }) {
+      const deadline = performance.now() + CONFIRMATION_TIMEOUT_MS;
       for (;;) {
-        const {
-          value: [status],
-        } = await rpc.getSignatureStatuses([signature]).send(requestTimeout());
-        if (
-          status?.confirmationStatus === "confirmed" ||
-          status?.confirmationStatus === "finalized"
-        ) {
-          if (!status.err) return;
-          const { meta } =
-            (await rpc
-              .getTransaction(signature, {
-                commitment,
-                encoding: "json",
-                maxSupportedTransactionVersion: 0,
-              })
-              .send(requestTimeout())) ?? {};
+        const status = await getSignatureStatus(signature);
+        if (status === "confirmed") return;
+        if (status === "failed") {
+          // Logs are diagnostic. Preserve the known failure even if the log lookup fails.
+          const details = await rpc
+            .getTransaction(signature, {
+              commitment,
+              encoding: "json",
+              maxSupportedTransactionVersion: 0,
+            })
+            .send(requestTimeout())
+            .catch(() => null);
           throw new ChainTransactionError(
             `Transaction ${signature} failed`,
-            meta?.logMessages ?? [],
+            details?.meta?.logMessages ?? [],
           );
         }
-        if (
-          (await rpc.getBlockHeight({ commitment }).send(requestTimeout())) > lastValidBlockHeight
-        ) {
+        if ((await getBlockHeight()) > lastValidBlockHeight) {
           throw new Error(`Blockhash expired before ${signature} was confirmed`);
         }
-        await delay(500);
+        if (performance.now() >= deadline) {
+          throw new Error(`Confirmation timed out for ${signature}`);
+        }
+        await delay(STATUS_POLL_MS);
       }
     },
   };

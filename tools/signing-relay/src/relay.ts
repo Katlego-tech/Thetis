@@ -3,12 +3,20 @@ import { createServer, type IncomingMessage } from "node:http";
 import {
   type Address,
   getBase58Encoder,
+  getSignatureFromTransaction,
   getTransactionDecoder,
   type KeyPairSigner,
   type Signature,
 } from "@solana/kit";
 import { readBatch, readLookupTable, readNonce } from "./setup.ts";
-import { type ChainTransport, errorMessage, prepareTransaction } from "./transport.ts";
+import {
+  ChainTransactionError,
+  type ChainTransport,
+  errorMessage,
+  prepareTransaction,
+  reconcileSignature,
+  requireDevnet,
+} from "./transport.ts";
 import {
   authorize,
   keyBytes,
@@ -23,15 +31,24 @@ const TO = "Mosela Haulage";
 const EXPIRY_SLOTS = 9_000n;
 const ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 
-type Refusal = "WRONG_ADDRESS" | "BAD_SIGNATURE" | "UNKNOWN_ROLE" | "ALREADY_SUBMITTED";
+type Refusal =
+  | "WRONG_ADDRESS"
+  | "BAD_SIGNATURE"
+  | "UNKNOWN_ROLE"
+  | "BATCH_COMPLETE"
+  | "INTENT_EXPIRED";
+type Route = "message" | "transaction";
+type Check = { verified: true } | { verified: false; reason: Refusal };
+type Checks = Record<Role, Partial<Record<Route, Check>>>;
+
 interface Outcome {
-  state: "waiting" | "submitted" | "confirmed" | "failed";
+  state: "waiting" | "submitted" | "confirmed" | "failed" | "unknown";
   signature?: Signature;
   error?: string;
   sizeBytes?: number;
 }
 
-const refuse = (reason: Refusal) => ({ verified: false, reason });
+const refuse = (reason: Refusal) => ({ verified: false as const, reason });
 const isRole = (role: unknown): role is Role => role === "sender" || role === "receiver";
 
 export async function createRelay(
@@ -40,37 +57,68 @@ export async function createRelay(
   state: RelayState,
   log: (line: string) => void = console.log,
 ) {
+  await requireDevnet(transport);
   const [slot, batch, nonce, table] = await Promise.all([
     transport.getSlot(),
     readBatch(transport, state),
     readNonce(transport, state.nonce, sponsor.address),
     readLookupTable(transport, state.lookupTable),
   ]);
-  const expiry = slot + EXPIRY_SLOTS;
-  const authorization = authorize(sponsor.address, state, nonce, expiry, batch.sequence);
-  const authorizationBase64 = authorization.bytes.toString("base64");
-  const authorizationSha256 = sha256(authorization.bytes).toString("hex");
-  const decodedIntent = {
-    text: `Hand over 2,000.000 t of CR-0001 from ${FROM} to ${TO}. Expires at slot ${expiry}. Synthetic test data.`,
-    batchId: state.batchId,
-    quantityKg: "2000000",
-    from: FROM,
-    to: TO,
-    expirySlot: Number(expiry),
-    expectedSequence: Number(batch.sequence),
-  };
+  function issueAuthorization(slot: bigint, sequence: bigint, nonce: Buffer) {
+    const expiry = slot + EXPIRY_SLOTS;
+    const authorization = authorize(sponsor.address, state, nonce, expiry, sequence);
+    return {
+      authorization,
+      expiry,
+      sequence,
+      authorizationBase64: authorization.bytes.toString("base64"),
+      authorizationSha256: sha256(authorization.bytes).toString("hex"),
+    };
+  }
 
+  let issued = issueAuthorization(slot, batch.sequence, nonce);
   const signatures = new Map<Address, Buffer>();
+  let checks: Checks = { sender: {}, receiver: {} };
   let submissionStarted = false;
   let outcome: Outcome = { state: "waiting" };
 
-  function intent(role: Role) {
+  async function intent(role: Role) {
+    const [currentBatch, currentSlot] = await Promise.all([
+      readBatch(transport, state),
+      transport.getSlot(),
+    ]);
+    if (currentBatch.handedOver) {
+      return {
+        ...refuse("BATCH_COMPLETE"),
+        message:
+          "Move the existing signing relay state file aside and run signing-relay setup for a fresh batch.",
+      };
+    }
+    if (currentSlot > issued.expiry) {
+      if (submissionStarted) return refuse("INTENT_EXPIRED");
+      const currentNonce = await readNonce(transport, state.nonce, sponsor.address);
+      if (currentSlot > issued.expiry) {
+        if (submissionStarted) return refuse("INTENT_EXPIRED");
+        issued = issueAuthorization(currentSlot, currentBatch.sequence, currentNonce);
+        signatures.clear();
+        checks = { sender: {}, receiver: {} };
+      }
+    }
+    const { expiry, sequence, authorizationBase64, authorizationSha256 } = issued;
     return {
       role,
       expectedAddress: state[role].wallet,
       authorizationBase64,
       authorizationSha256,
-      intent: decodedIntent,
+      intent: {
+        text: `Hand over 2,000.000 t of CR-0001 from ${FROM} to ${TO}. Expires at slot ${expiry}. Synthetic test data.`,
+        batchId: state.batchId,
+        quantityKg: "2000000",
+        from: FROM,
+        to: TO,
+        expirySlot: Number(expiry),
+        expectedSequence: Number(sequence),
+      },
       network: "devnet",
     };
   }
@@ -80,27 +128,34 @@ export async function createRelay(
       const { transaction, lifetime, sizeBytes } = await prepareTransaction(
         transport,
         sponsor,
-        [submitInstruction(authorization, signatures)],
+        [submitInstruction(issued.authorization, signatures)],
         { tables: { [state.lookupTable]: table.addresses } },
       );
+      const signature = getSignatureFromTransaction(transaction);
+      outcome = { state: "waiting", signature, sizeBytes };
       log(`Signed relay size: ${sizeBytes} bytes`);
-      const signature = await transport.send(transaction);
-      outcome = { state: "submitted", signature, sizeBytes };
       log(`Devnet signature: ${signature}`);
-      await transport.confirm(signature, lifetime);
-      outcome = { ...outcome, state: "confirmed" };
+      try {
+        await transport.send(transaction);
+        outcome = { state: "submitted", signature, sizeBytes };
+        await transport.confirm(signature, lifetime);
+        outcome = { ...outcome, state: "confirmed" };
+      } catch (error) {
+        if (error instanceof ChainTransactionError) throw error;
+        const status = await reconcileSignature(transport, signature, lifetime);
+        if (status === "failed") throw new Error(`Transaction ${signature} failed on chain`);
+        outcome =
+          status === "confirmed"
+            ? { ...outcome, state: "confirmed" }
+            : { ...outcome, state: "unknown", error: errorMessage(error) };
+      }
     } catch (error) {
       outcome = { ...outcome, state: "failed", error: errorMessage(error) };
     }
   }
 
-  function verifyRequest(body: unknown) {
-    const request =
-      typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-    if (!isRole(request.role)) return refuse("UNKNOWN_ROLE");
-    if (submissionStarted) return refuse("ALREADY_SUBMITTED");
-    const expected = state[request.role].wallet;
-    if (request.address !== expected) return refuse("WRONG_ADDRESS");
+  function verifiedSignature(request: Record<string, unknown>, expected: Address): Buffer | null {
+    const { bytes } = issued.authorization;
     let signature: Buffer;
     try {
       if (request.route === "message" && typeof request.signatureBase58 === "string") {
@@ -110,36 +165,52 @@ export async function createRelay(
         typeof request.signedTransactionBase64 === "string"
       ) {
         const wire = Buffer.from(request.signedTransactionBase64, "base64");
-        if (wire.toString("base64") !== request.signedTransactionBase64)
-          return refuse("BAD_SIGNATURE");
+        if (wire.toString("base64") !== request.signedTransactionBase64) return null;
         const transaction = getTransactionDecoder().decode(wire);
-        if (!authorization.bytes.equals(Buffer.from(transaction.messageBytes)))
-          return refuse("BAD_SIGNATURE");
+        if (!bytes.equals(Buffer.from(transaction.messageBytes))) return null;
         // Kit maps signature slots to the signers in the decoded message's account-key order.
         const indexedSignature = transaction.signatures[expected];
-        if (!indexedSignature) return refuse("BAD_SIGNATURE");
+        if (!indexedSignature) return null;
         signature = Buffer.from(indexedSignature);
       } else {
-        return refuse("BAD_SIGNATURE");
+        return null;
       }
       const publicKey = createPublicKey({
         key: Buffer.concat([ED25519_SPKI, keyBytes(expected)]),
         format: "der",
         type: "spki",
       });
-      if (signature.length !== 64 || !verify(null, authorization.bytes, publicKey, signature)) {
-        return refuse("BAD_SIGNATURE");
+      if (signature.length !== 64 || !verify(null, bytes, publicKey, signature)) {
+        return null;
       }
     } catch {
-      return refuse("BAD_SIGNATURE");
+      return null;
     }
 
-    if (!signatures.has(expected)) signatures.set(expected, signature);
-    if (signatures.size === 2) {
-      submissionStarted = true;
-      void submit();
+    return signature;
+  }
+
+  function verifyRequest(body: unknown): Check {
+    const request =
+      typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    if (!isRole(request.role)) return refuse("UNKNOWN_ROLE");
+    const expected = state[request.role].wallet;
+    const addressMatches = request.address === expected;
+    const signature = addressMatches ? verifiedSignature(request, expected) : null;
+    const result: Check = signature
+      ? { verified: true }
+      : refuse(addressMatches ? "BAD_SIGNATURE" : "WRONG_ADDRESS");
+    if (request.route === "message" || request.route === "transaction") {
+      checks[request.role][request.route] = result;
     }
-    return { verified: true };
+    if (signature && !submissionStarted) {
+      if (!signatures.has(expected)) signatures.set(expected, signature);
+      if (signatures.size === 2) {
+        submissionStarted = true;
+        void submit();
+      }
+    }
+    return result;
   }
 
   function dispatch(method: string | undefined, target: string, body?: unknown) {
@@ -149,7 +220,12 @@ export async function createRelay(
       return isRole(role) ? intent(role) : refuse("UNKNOWN_ROLE");
     }
     if (method === "POST" && url.pathname === "/signature") return verifyRequest(body);
-    if (method === "GET" && url.pathname === "/outcome") return outcome;
+    if (method === "GET" && url.pathname === "/outcome") {
+      return {
+        ...outcome,
+        checks: { sender: { ...checks.sender }, receiver: { ...checks.receiver } },
+      };
+    }
     return null;
   }
 
@@ -170,17 +246,22 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 
 export function listen(relay: Awaited<ReturnType<typeof createRelay>>, port: number) {
   const server = createServer(async (request, response) => {
+    const target = request.url ?? "/";
     try {
-      const target = request.url ?? "/";
       const url = new URL(target, "http://127.0.0.1");
       const body =
         request.method === "POST" && url.pathname === "/signature"
           ? await readJson(request)
           : undefined;
-      const result = relay.dispatch(request.method, target, body);
+      const result = await relay.dispatch(request.method, target, body);
       response.writeHead(result === null ? 404 : 200, { "content-type": "application/json" });
       response.end(JSON.stringify(result));
     } catch {
+      if (request.method === "GET" && target.split("?")[0] === "/intent") {
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(JSON.stringify({ verified: false, reason: "CHAIN_UNAVAILABLE" }));
+        return;
+      }
       response.writeHead(400, { "content-type": "application/json" });
       response.end(JSON.stringify(refuse("BAD_SIGNATURE")));
     }

@@ -5,8 +5,8 @@ import { dirname, join } from "node:path";
 import { type Address, address, createKeyPairSignerFromBytes } from "@solana/kit";
 import { runRefusalChecks } from "./attacks.ts";
 import { createRelay, listen } from "./relay.ts";
-import { setup } from "./setup.ts";
-import { errorMessage, rpcTransport } from "./transport.ts";
+import { acquireSetupLock, setup } from "./setup.ts";
+import { errorMessage, requireDevnet, rpcTransport } from "./transport.ts";
 import type { Party, RelayState } from "./wire.ts";
 
 const configDir = join(homedir(), ".config", "thetis");
@@ -116,6 +116,8 @@ async function main() {
   if (command !== "setup" && command !== "serve" && command !== "attacks") {
     throw new Error("Usage: signing-relay <setup|serve|attacks>");
   }
+  const transport = rpcTransport(process.env.THETIS_RPC_URL ?? "https://api.devnet.solana.com");
+  await requireDevnet(transport);
   const existing = await readState();
   if (command === "setup" && existing) {
     console.log(`Reusing existing signing relay state at ${statePath}`);
@@ -126,13 +128,11 @@ async function main() {
   }
 
   const sponsor = await readSponsor();
-  const transport = rpcTransport(process.env.THETIS_RPC_URL ?? "https://api.devnet.solana.com");
   if (command === "setup") {
     const sender = configuredWallet("THETIS_SENDER");
     const receiver = configuredWallet("THETIS_RECEIVER");
     await mkdir(configDir, { recursive: true, mode: 0o700 });
-    const lock = `${statePath}.lock`;
-    await mkdir(lock, { mode: 0o700 });
+    const releaseLock = await acquireSetupLock(`${statePath}.lock`);
     try {
       if (await readState()) {
         console.log(`Reusing existing signing relay state at ${statePath}`);
@@ -142,7 +142,7 @@ async function main() {
       await writeState(state);
       console.log(`Signing relay state saved to ${statePath}`);
     } finally {
-      await rm(lock, { recursive: true, force: true });
+      await releaseLock();
     }
     return;
   }
