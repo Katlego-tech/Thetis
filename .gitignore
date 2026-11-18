@@ -42,3 +42,6 @@ infra/cdk.context.json
 # Claude Code: agent worktrees and per-person settings
 .claude/worktrees/
 .claude/settings.local.json
+
+# GitHub Actions run logs archived locally by scripts/ci-logs.sh
+.ci-logs/
