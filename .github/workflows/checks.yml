@@ -85,12 +85,6 @@ jobs:
           set -o pipefail
           pnpm lint 2>&1 | tee "$RUNNER_TEMP/logs/lint.log"
 
-      - name: Test
-        shell: bash
-        run: |
-          set -o pipefail
-          pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
-
       - name: Cache Cargo
         id: cargo-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -163,6 +157,12 @@ jobs:
             set -eo pipefail
             cargo test --workspace
           ) 2>&1 | tee "$RUNNER_TEMP/logs/program-tests.log"
+
+      - name: Test  # after the program build: the relay tests load it
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
 
       - name: Scan dependencies for known vulnerabilities
         shell: bash
