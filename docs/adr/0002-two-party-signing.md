@@ -152,9 +152,9 @@ The two-party handover was therefore **not submitted**: the relay never had both
 - **Memory:** the A32 ran out of memory with the debug build, and Android killed the test app and
   the wallet mid-request. A restart cleared it.
 
-**Next:** decide D32's alternative (see the decision register): in-house signature verification,
-or Blueshift Vector. Either way, the signing prompt must show the readable intent, or the app
-must show it beside a disclosed blind-signing prompt.
+**Next:** the user chose **in-house verification** (D32, 18 November 2026). Parties sign a
+human-readable intent that the program rebuilds byte for byte and checks against a native
+Ed25519 verification instruction. It is proved offline, then on the same phones, in its own ADR.
 
 ## Consequences
 
