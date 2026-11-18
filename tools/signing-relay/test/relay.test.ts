@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import {
   type Address,
@@ -20,7 +22,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRefusalChecks } from "../src/attacks.ts";
 import { createRelay, listen } from "../src/relay.ts";
 import { setup } from "../src/setup.ts";
-import { ChainTransactionError, type ChainTransport } from "../src/transport.ts";
+import { requireCompleteState } from "../src/state.ts";
+import { ChainTransactionError, type ChainTransport, rpcTransport } from "../src/transport.ts";
+import { SLOT_HASHES } from "../src/wire.ts";
 
 const root = new URL("../../../", import.meta.url);
 const program = address("EH7cQ4xmoJ92v2y1JW1xHwVQgtCNvkkVka3jiK1ByQnb");
@@ -123,11 +127,16 @@ async function fixture(rebuiltProgram = false) {
   if (!("authorizationBase64" in intent)) throw new Error("Initial intent was refused");
   const authorization = Buffer.from(intent.authorizationBase64, "base64");
 
-  async function messageRequest(role: "sender" | "receiver", bytes = authorization) {
+  async function messageRequest(
+    role: "sender" | "receiver",
+    bytes = authorization,
+    digest = bytes,
+  ) {
     const signer = role === "sender" ? sender : receiver;
     return {
       role,
       route: "message",
+      authorizationSha256: createHash("sha256").update(digest).digest("hex"),
       address: signer.address,
       signatureBase58: getBase58Decoder().decode(await signBytes(signer.keyPair.privateKey, bytes)),
     };
@@ -154,6 +163,7 @@ async function fixture(rebuiltProgram = false) {
     return {
       role,
       route: "transaction",
+      authorizationSha256: createHash("sha256").update(bytes).digest("hex"),
       address: signer.address,
       signedTransactionBase64,
     };
@@ -212,6 +222,102 @@ describe("signing relay against LiteSVM", () => {
       expect(f.svm.getAccount(key).exists).toBe(true);
     }
     expect(f.submit).toHaveBeenCalled();
+  });
+
+  it("checkpoints batch, nonce and table confirmations and resumes setup from disk after interruption", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "thetis-signing-setup-"));
+    const path = join(directory, "state.json");
+    const readCheckpoint = async () => JSON.parse(await readFile(path, "utf8"));
+    const run = () =>
+      setup(f.transport, f.sponsor, program, f.sender.address, f.receiver.address, [], path);
+    const sends = f.submit.mock.calls.length;
+    const rent = vi.spyOn(f.transport, "getRent");
+    const getAccount = f.transport.getAccount;
+    const account = vi.spyOn(f.transport, "getAccount");
+    try {
+      rent.mockRejectedValueOnce(new Error("Rent unavailable"));
+      await expect(run()).rejects.toThrow("Rent unavailable");
+      const batchCheckpoint = await readCheckpoint();
+      expect(batchCheckpoint).toMatchObject({
+        complete: false,
+        batch: expect.any(String),
+        sender: f.state.sender,
+        receiver: f.state.receiver,
+      });
+      expect(batchCheckpoint).not.toHaveProperty("nonce");
+      expect(batchCheckpoint).not.toHaveProperty("pending");
+      expect(f.submit).toHaveBeenCalledTimes(sends + 1);
+
+      account.mockImplementation(async (key) => {
+        if (key === SLOT_HASHES) throw new Error("Slot hashes unavailable");
+        return getAccount(key);
+      });
+      await expect(run()).rejects.toThrow("Slot hashes unavailable");
+      const nonceCheckpoint = await readCheckpoint();
+      expect(nonceCheckpoint).toMatchObject({ ...batchCheckpoint, nonce: expect.any(String) });
+      expect(nonceCheckpoint).not.toHaveProperty("lookupTable");
+      expect(nonceCheckpoint).not.toHaveProperty("pending");
+      expect(f.submit).toHaveBeenCalledTimes(sends + 2);
+      expect(account).toHaveBeenCalledWith(batchCheckpoint.batch);
+      account.mockImplementation(getAccount);
+
+      const wait = vi
+        .spyOn(f.transport, "waitForSlot")
+        .mockRejectedValueOnce(new Error("Slot unavailable"));
+      await expect(run()).rejects.toThrow("Slot unavailable");
+      const tableCheckpoint = await readCheckpoint();
+      expect(tableCheckpoint).toMatchObject({
+        ...nonceCheckpoint,
+        lookupTable: expect.any(String),
+      });
+      expect(tableCheckpoint).not.toHaveProperty("pending");
+      expect(f.submit).toHaveBeenCalledTimes(sends + 3);
+      expect(account).toHaveBeenCalledWith(batchCheckpoint.batch);
+      await expect(requireCompleteState(path)).rejects.toThrow(/setup to complete/);
+
+      account.mockClear();
+      const state = await run();
+      expect(account).toHaveBeenCalledWith(tableCheckpoint.nonce);
+      expect(account).toHaveBeenCalledWith(tableCheckpoint.lookupTable);
+      expect(wait).toHaveBeenCalledTimes(2);
+      expect(f.submit).toHaveBeenCalledTimes(sends + 3);
+      expect(state).toMatchObject({
+        batch: batchCheckpoint.batch,
+        nonce: tableCheckpoint.nonce,
+        lookupTable: tableCheckpoint.lookupTable,
+      });
+      expect(await readCheckpoint()).toMatchObject({ ...state, complete: true });
+      await expect(requireCompleteState(path)).resolves.toMatchObject(state);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reconciles an on-chain nonce when its setup confirmation response is lost", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "thetis-signing-nonce-"));
+    const path = join(directory, "state.json");
+    const run = () =>
+      setup(f.transport, f.sponsor, program, f.sender.address, f.receiver.address, [], path);
+    const sends = f.submit.mock.calls.length;
+    const originalConfirm = f.transport.confirm;
+    vi.spyOn(f.transport, "confirm")
+      .mockImplementationOnce(originalConfirm)
+      .mockRejectedValueOnce(new Error("Confirmation lost"));
+    try {
+      await expect(run()).rejects.toThrow("Confirmation lost");
+      const checkpoint = JSON.parse(await readFile(path, "utf8"));
+      expect(checkpoint).toMatchObject({
+        complete: false,
+        nonce: expect.any(String),
+        pending: { signature: expect.any(String) },
+      });
+      expect(f.svm.getAccount(checkpoint.nonce).exists).toBe(true);
+      const state = await run();
+      expect(state.nonce).toBe(checkpoint.nonce);
+      expect(f.submit).toHaveBeenCalledTimes(sends + 3);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("serves identical authorization bytes and the exact decoded intent text for both roles", async () => {
@@ -485,6 +591,67 @@ describe("signing relay against LiteSVM", () => {
     expect(f.submit).toHaveBeenCalledTimes(initialSends + 1);
   });
 
+  it.each([false, true])(
+    "releases the latch on an RPC preflight rejection (expires before retry: %s)",
+    async (expires) => {
+      const getIntent = () => f.relay.intent("sender");
+      const initial = await getIntent();
+      if (!("intent" in initial)) throw new Error("Initial intent was refused");
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        const { id, method } = JSON.parse(String(init?.body));
+        expect(method).toBe("sendTransaction");
+        return Response.json({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32002,
+            message: "Transaction simulation failed: Blockhash not found",
+            data: { err: "BlockhashNotFound", logs: [] },
+          },
+        });
+      });
+      const sends = f.submit.mock.calls.length;
+      f.submit.mockImplementationOnce(rpcTransport("http://127.0.0.1:8899").send);
+      const post = (body: unknown) => f.relay.dispatch("POST", "/signature", body);
+      const receiver = await f.transactionRequest();
+      try {
+        await post(await f.messageRequest("sender"));
+        await post(receiver);
+        await vi.waitFor(async () =>
+          expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({
+            state: "waiting",
+            error: expect.stringMatching(/blockhash not found/i),
+            checks: {
+              sender: { message: { verified: true } },
+              receiver: { transaction: { verified: true } },
+            },
+          }),
+        );
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(f.signatureStatus).not.toHaveBeenCalled();
+      } finally {
+        fetch.mockRestore();
+      }
+      if (expires) {
+        f.svm.warpToSlot(BigInt(initial.intent.expirySlot) + 1n);
+        const fresh = await getIntent();
+        expect(fresh).toHaveProperty("authorizationSha256", expect.any(String));
+        expect(fresh).not.toHaveProperty("authorizationSha256", initial.authorizationSha256);
+        expect(await f.relay.dispatch("GET", "/outcome")).toEqual({
+          state: "waiting",
+          checks: { sender: {}, receiver: {} },
+        });
+        expect(f.submit).toHaveBeenCalledTimes(sends + 1);
+      } else {
+        expect(await post(receiver)).toEqual({ verified: true });
+        await vi.waitFor(async () =>
+          expect(await f.relay.dispatch("GET", "/outcome")).toMatchObject({ state: "confirmed" }),
+        );
+        expect(f.submit).toHaveBeenCalledTimes(sends + 2);
+      }
+    },
+  );
+
   it("publishes the signed transaction ID before send and reconciles a lost send response", async () => {
     const send = f.submit.getMockImplementation();
     if (!send) throw new Error("Missing test transport send");
@@ -651,6 +818,42 @@ describe("signing relay against LiteSVM", () => {
     expect(f.submit).toHaveBeenCalledTimes(sends + 1);
   });
 
+  it("returns STALE_INTENT over HTTP without overwriting a check for the current authorization", async () => {
+    const initial = await f.relay.intent("sender");
+    if (!("intent" in initial)) throw new Error("Initial intent was refused");
+    const stale = await f.messageRequest("sender");
+    f.svm.warpToSlot(BigInt(initial.intent.expirySlot) + 1n);
+    const fresh = await f.relay.intent("sender");
+    if (!("authorizationBase64" in fresh)) throw new Error("Refreshed intent was refused");
+    const current = await f.messageRequest(
+      "sender",
+      Buffer.from(fresh.authorizationBase64, "base64"),
+    );
+    await f.relay.dispatch("POST", "/signature", current);
+    const before = await f.relay.dispatch("GET", "/outcome");
+    const bind = vi.spyOn(Server.prototype, "listen").mockReturnThis();
+    const slot = vi.spyOn(f.transport, "getSlot");
+    try {
+      const server = listen(f.relay, 8787);
+      for (const body of [stale, { ...current, authorizationSha256: undefined }]) {
+        const request = Object.assign(Readable.from([JSON.stringify(body)]), {
+          method: "POST",
+          url: "/signature",
+        });
+        const writeHead = vi.fn();
+        const json = await new Promise<string>((end) =>
+          server.emit("request", request, { writeHead, end }),
+        );
+        expect(writeHead).toHaveBeenCalledWith(200, { "content-type": "application/json" });
+        expect(JSON.parse(json)).toEqual({ verified: false, reason: "STALE_INTENT" });
+        expect(await f.relay.dispatch("GET", "/outcome")).toEqual(before);
+      }
+      expect(slot).not.toHaveBeenCalled();
+    } finally {
+      bind.mockRestore();
+    }
+  });
+
   it("refreshes expired intent with the current sequence and discards old checks and signatures", async () => {
     const initial = await f.relay.intent("sender");
     if (!("intent" in initial)) throw new Error("Initial intent was refused");
@@ -683,7 +886,7 @@ describe("signing relay against LiteSVM", () => {
     const sends = f.submit.mock.calls.length;
     expect(await f.relay.dispatch("POST", "/signature", oldSignature)).toEqual({
       verified: false,
-      reason: "BAD_SIGNATURE",
+      reason: "STALE_INTENT",
     });
     const receiver = await f.messageRequest(
       "receiver",
@@ -732,7 +935,11 @@ describe("signing relay against LiteSVM", () => {
     const altered = Buffer.from(f.authorization);
     altered.writeUInt8(altered.readUInt8(altered.length - 1) ^ 1, altered.length - 1);
     expect(
-      await f.relay.dispatch("POST", "/signature", await f.messageRequest("sender", altered)),
+      await f.relay.dispatch(
+        "POST",
+        "/signature",
+        await f.messageRequest("sender", altered, f.authorization),
+      ),
     ).toEqual({
       verified: false,
       reason: "BAD_SIGNATURE",

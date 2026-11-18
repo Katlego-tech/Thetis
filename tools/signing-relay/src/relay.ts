@@ -16,6 +16,7 @@ import {
   prepareTransaction,
   reconcileSignature,
   requireDevnet,
+  SendPreflightError,
 } from "./transport.ts";
 import {
   authorize,
@@ -35,6 +36,7 @@ type Refusal =
   | "WRONG_ADDRESS"
   | "BAD_SIGNATURE"
   | "UNKNOWN_ROLE"
+  | "STALE_INTENT"
   | "BATCH_COMPLETE"
   | "INTENT_EXPIRED"
   | "CHAIN_UNAVAILABLE";
@@ -129,7 +131,7 @@ export async function createRelay(
   async function submit() {
     const { authorization, authorizationSha256 } = issued;
     outcome = { state: "waiting", authorizationSha256 };
-    let sendStarted = false;
+    let mayHaveBroadcast = false;
     try {
       const { transaction, lifetime, sizeBytes } = await prepareTransaction(
         transport,
@@ -142,12 +144,15 @@ export async function createRelay(
       log(`Signed relay size: ${sizeBytes} bytes`);
       log(`Devnet signature: ${signature}`);
       try {
-        sendStarted = true;
+        mayHaveBroadcast = true;
         await transport.send(transaction);
         outcome = { ...outcome, state: "submitted" };
         await transport.confirm(signature, lifetime);
         outcome = { ...outcome, state: "confirmed" };
       } catch (error) {
+        if (outcome.state === "waiting" && error instanceof SendPreflightError) {
+          mayHaveBroadcast = false;
+        }
         if (error instanceof ChainTransactionError) throw error;
         const status = await reconcileSignature(transport, signature, lifetime);
         if (status === "failed") throw new Error(`Transaction ${signature} failed on chain`);
@@ -157,7 +162,7 @@ export async function createRelay(
             : { ...outcome, state: "unknown", error: errorMessage(error) };
       }
     } catch (error) {
-      if (sendStarted) {
+      if (mayHaveBroadcast) {
         outcome = { ...outcome, state: "failed", error: errorMessage(error) };
       } else {
         outcome = { state: "waiting", error: errorMessage(error) };
@@ -206,8 +211,10 @@ export async function createRelay(
     const request =
       typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
     if (!isRole(request.role)) return refuse("UNKNOWN_ROLE");
+    if (request.authorizationSha256 !== issued.authorizationSha256) return refuse("STALE_INTENT");
     // Keep the expiry check and signature collection in the same synchronous step.
     const currentSlot = await transport.getSlot();
+    if (request.authorizationSha256 !== issued.authorizationSha256) return refuse("STALE_INTENT");
     if (currentSlot > issued.expiry) return refuse("INTENT_EXPIRED");
     const expected = state[request.role].wallet;
     const addressMatches = request.address === expected;

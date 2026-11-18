@@ -6,9 +6,16 @@ import {
   type Address,
   generateKeyPairSigner,
   getAddressDecoder,
+  type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
-import { type ChainTransport, requireDevnet, sendConfirmed } from "./transport.ts";
+import { readState, type SetupProgress, writeState } from "./state.ts";
+import {
+  type ChainTransport,
+  requireDevnet,
+  SendPreflightError,
+  sendConfirmed,
+} from "./transport.ts";
 import {
   account,
   batchAddresses,
@@ -67,6 +74,39 @@ export async function acquireSetupLock(directory: string) {
   }
 }
 
+function discardPendingStep(progress: SetupProgress) {
+  if (progress.lookupTable) {
+    delete progress.lookupTable;
+  } else if (progress.nonce) {
+    delete progress.nonce;
+  } else {
+    delete progress.batch;
+    delete progress.batchId;
+  }
+  delete progress.pending;
+}
+
+async function reconcileSetup(transport: ChainTransport, progress: SetupProgress) {
+  const pending = progress.pending;
+  const key = progress.lookupTable ?? progress.nonce ?? progress.batch;
+  if (!pending || !key || (await transport.getAccount(key))) return;
+
+  const expired = (await transport.getBlockHeight()) > BigInt(pending.lastValidBlockHeight);
+  const status = await transport.getSignatureStatus(pending.signature);
+  if (status === "failed") {
+    discardPendingStep(progress);
+    return;
+  }
+  // Check again after the status and expiry reads in case the account just appeared.
+  if (await transport.getAccount(key)) return;
+  if (status === "confirmed" || !expired) {
+    throw new Error(
+      `Setup transaction ${pending.signature} is awaiting account visibility or expiry; rerun setup`,
+    );
+  }
+  discardPendingStep(progress);
+}
+
 export async function setup(
   transport: ChainTransport,
   sponsor: KeyPairSigner,
@@ -74,6 +114,7 @@ export async function setup(
   senderWallet: Address,
   receiverWallet: Address,
   additionalTableAddresses: Address[] = [],
+  statePath?: string,
 ): Promise<RelayState> {
   await requireDevnet(transport);
   if (new Set([senderWallet, receiverWallet, sponsor.address]).size !== 3) {
@@ -83,12 +124,69 @@ export async function setup(
     deriveParty(program, senderWallet),
     deriveParty(program, receiverWallet),
   ]);
+  const saved = statePath ? await readState(statePath) : null;
+  if (saved?.complete) return saved;
+  const progress: SetupProgress = saved ?? {
+    complete: false,
+    program,
+    sponsor: sponsor.address,
+    sender,
+    receiver,
+  };
+  if (
+    progress.program !== program ||
+    progress.sponsor !== sponsor.address ||
+    progress.sender.wallet !== senderWallet ||
+    progress.sender.party !== sender.party ||
+    progress.sender.signer !== sender.signer ||
+    progress.receiver.wallet !== receiverWallet ||
+    progress.receiver.party !== receiver.party ||
+    progress.receiver.signer !== receiver.signer
+  ) {
+    throw new Error("Setup checkpoint does not match the configured program, wallets and sponsor");
+  }
+  await reconcileSetup(transport, progress);
+
+  async function checkpoint() {
+    if (statePath) await writeState(statePath, progress);
+  }
+
+  async function sendStep(instructions: Instruction[], signers?: KeyPairSigner[]) {
+    try {
+      await sendConfirmed(
+        transport,
+        sponsor,
+        instructions,
+        signers ? { signers } : undefined,
+        statePath
+          ? async (signature, { lastValidBlockHeight }) => {
+              // Keep the candidate address recoverable if the send or confirmation response is lost.
+              progress.pending = {
+                signature,
+                lastValidBlockHeight: lastValidBlockHeight.toString(),
+              };
+              await checkpoint();
+            }
+          : undefined,
+      );
+    } catch (error) {
+      if (error instanceof SendPreflightError && progress.pending) {
+        discardPendingStep(progress);
+        await checkpoint();
+      }
+      throw error;
+    }
+    delete progress.pending;
+    await checkpoint();
+  }
+
   const payer = account(sponsor.address, AccountRole.WRITABLE_SIGNER);
   const system = account(SYSTEM);
   const register = [];
   for (const party of [sender, receiver]) {
     const existing = await transport.getAccount(party.party);
     if (!existing) {
+      if (progress.batch) throw new Error(`Missing party record ${party.party}`);
       register.push(
         spikeInstruction(
           program,
@@ -101,49 +199,71 @@ export async function setup(
     }
     validateParty(existing, program, party);
   }
-  const id = randomBytes(16);
+  const id = progress.batchId ? Buffer.from(progress.batchId, "hex") : randomBytes(16);
   const [batch] = await derive(program, "batch", id);
-  const open = spikeInstruction(
-    program,
-    "open_batch",
-    [
-      payer,
-      account(batch, AccountRole.WRITABLE),
-      account(sender.party),
-      account(receiver.party),
-      system,
-    ],
-    id,
-    keyBytes(senderWallet),
-    keyBytes(receiverWallet),
-    u64(QUANTITY),
-  );
-  await sendConfirmed(transport, sponsor, [...register, open]);
-
-  const nonceSigner = await generateKeyPairSigner();
-  const nonce = nonceSigner.address;
-  const rent = await transport.getRent(NONCE_SPACE);
-  await sendConfirmed(
-    transport,
-    sponsor,
-    [
-      {
-        programAddress: SYSTEM,
-        accounts: [payer, account(nonce, AccountRole.WRITABLE_SIGNER)],
-        data: Buffer.concat([u32(0), u64(rent), u64(BigInt(NONCE_SPACE)), keyBytes(NONCE)]),
-      },
-      {
-        programAddress: NONCE,
-        accounts: [
-          account(nonce, AccountRole.WRITABLE),
-          account(sponsor.address),
-          account(SLOT_HASHES),
+  const batchDetails = { program, batchId: id.toString("hex"), batch, sender, receiver };
+  if (progress.batch) {
+    if (progress.batch !== batch) throw new Error("Setup checkpoint has an invalid batch address");
+    await readBatch(transport, batchDetails);
+    if (!progress.nonce && progress.pending) {
+      delete progress.pending;
+      await checkpoint();
+    }
+  } else {
+    progress.batch = batch;
+    progress.batchId = batchDetails.batchId;
+    await sendStep([
+      ...register,
+      spikeInstruction(
+        program,
+        "open_batch",
+        [
+          payer,
+          account(batch, AccountRole.WRITABLE),
+          account(sender.party),
+          account(receiver.party),
+          system,
         ],
-        data: Buffer.of(0),
-      },
-    ],
-    { signers: [nonceSigner] },
-  );
+        id,
+        keyBytes(senderWallet),
+        keyBytes(receiverWallet),
+        u64(QUANTITY),
+      ),
+    ]);
+  }
+
+  let nonce = progress.nonce;
+  if (nonce) {
+    await readNonce(transport, nonce, sponsor.address);
+    if (!progress.lookupTable && progress.pending) {
+      delete progress.pending;
+      await checkpoint();
+    }
+  } else {
+    const nonceSigner = await generateKeyPairSigner();
+    nonce = nonceSigner.address;
+    const rent = await transport.getRent(NONCE_SPACE);
+    progress.nonce = nonce;
+    await sendStep(
+      [
+        {
+          programAddress: SYSTEM,
+          accounts: [payer, account(nonce, AccountRole.WRITABLE_SIGNER)],
+          data: Buffer.concat([u32(0), u64(rent), u64(BigInt(NONCE_SPACE)), keyBytes(NONCE)]),
+        },
+        {
+          programAddress: NONCE,
+          accounts: [
+            account(nonce, AccountRole.WRITABLE),
+            account(sponsor.address),
+            account(SLOT_HASHES),
+          ],
+          data: Buffer.of(0),
+        },
+      ],
+      [nonceSigner],
+    );
+  }
 
   const tableAddresses = [
     ...new Set([
@@ -160,35 +280,46 @@ export async function setup(
       ...additionalTableAddresses,
     ]),
   ];
-  const { lookupTable, bump, slot } = await findTableAddress(transport, sponsor.address);
-  const tableAccounts = [
-    account(lookupTable, AccountRole.WRITABLE),
-    account(sponsor.address, AccountRole.READONLY_SIGNER),
-    payer,
-    system,
-  ];
-  await sendConfirmed(transport, sponsor, [
-    {
-      programAddress: LOOKUP,
-      accounts: tableAccounts,
-      data: Buffer.concat([u32(0), u64(slot), Buffer.of(bump)]),
-    },
-    {
-      programAddress: LOOKUP,
-      accounts: tableAccounts,
-      data: Buffer.concat([
-        u32(2),
-        u64(BigInt(tableAddresses.length)),
-        ...tableAddresses.map(keyBytes),
-      ]),
-    },
-  ]);
+  let lookupTable = progress.lookupTable;
+  if (!lookupTable) {
+    const table = await findTableAddress(transport, sponsor.address);
+    lookupTable = table.lookupTable;
+    progress.lookupTable = lookupTable;
+    const tableAccounts = [
+      account(lookupTable, AccountRole.WRITABLE),
+      account(sponsor.address, AccountRole.READONLY_SIGNER),
+      payer,
+      system,
+    ];
+    await sendStep([
+      {
+        programAddress: LOOKUP,
+        accounts: tableAccounts,
+        data: Buffer.concat([u32(0), u64(table.slot), Buffer.of(table.bump)]),
+      },
+      {
+        programAddress: LOOKUP,
+        accounts: tableAccounts,
+        data: Buffer.concat([
+          u32(2),
+          u64(BigInt(tableAddresses.length)),
+          ...tableAddresses.map(keyBytes),
+        ]),
+      },
+    ]);
+  }
   const table = await readLookupTable(transport, lookupTable);
   if (!tableAddresses.every((key, index) => table.addresses[index] === key)) {
     throw new Error("Lookup table does not contain the expected addresses");
   }
+  if (progress.pending) {
+    delete progress.pending;
+    await checkpoint();
+  }
   await transport.waitForSlot(table.lastExtendedSlot);
-  return { program, batchId: id.toString("hex"), batch, sender, receiver, nonce, lookupTable };
+  const state = { ...batchDetails, nonce, lookupTable };
+  if (statePath) await writeState(statePath, { ...state, complete: true });
+  return state;
 }
 
 async function findTableAddress(transport: ChainTransport, sponsor: Address) {
@@ -223,7 +354,10 @@ function validateParty(existing: { owner: Address; data: Buffer }, program: Addr
   }
 }
 
-export async function readBatch(transport: ChainTransport, state: RelayState) {
+export async function readBatch(
+  transport: ChainTransport,
+  state: Pick<RelayState, "program" | "batchId" | "batch" | "sender" | "receiver">,
+) {
   const batch = await transport.getAccount(state.batch);
   const expected = Buffer.concat([
     discriminator("account:Batch"),

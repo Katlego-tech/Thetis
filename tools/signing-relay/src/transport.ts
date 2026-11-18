@@ -10,6 +10,7 @@ import {
   createSolanaRpc,
   createTransactionMessage,
   getBase64EncodedWireTransaction,
+  getSignatureFromTransaction,
   getTransactionEncoder,
   type Instruction,
   isSolanaError,
@@ -53,6 +54,10 @@ export class ChainTransactionError extends Error {
     this.name = "ChainTransactionError";
     this.logs = logs;
   }
+}
+
+export class SendPreflightError extends ChainTransactionError {
+  override name = "SendPreflightError";
 }
 
 export const errorMessage = (error: unknown) =>
@@ -122,6 +127,7 @@ export async function sendConfirmed(
   sponsor: KeyPairSigner,
   instructions: Instruction[],
   options?: Parameters<typeof prepareTransaction>[3],
+  beforeSend?: (signature: Signature, lifetime: Lifetime) => Promise<void>,
 ) {
   const { transaction, lifetime } = await prepareTransaction(
     transport,
@@ -129,6 +135,7 @@ export async function sendConfirmed(
     instructions,
     options,
   );
+  if (beforeSend) await beforeSend(getSignatureFromTransaction(transaction), lifetime);
   const signature = await transport.send(transaction);
   await transport.confirm(signature, lifetime);
   return signature;
@@ -189,7 +196,7 @@ export function rpcTransport(url: string): ChainTransport {
             SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
           )
         ) {
-          throw new ChainTransactionError(
+          throw new SendPreflightError(
             errorMessage(error.cause ?? error),
             error.context.logs ?? [],
             { cause: error },

@@ -1,76 +1,16 @@
 #!/usr/bin/env node
-import { link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { type Address, address, createKeyPairSignerFromBytes } from "@solana/kit";
+import { join } from "node:path";
+import { address, createKeyPairSignerFromBytes } from "@solana/kit";
 import { runRefusalChecks } from "./attacks.ts";
 import { createRelay, listen } from "./relay.ts";
 import { acquireSetupLock, setup } from "./setup.ts";
 import { errorMessage, requireDevnet, rpcTransport } from "./transport.ts";
-import type { Party, RelayState } from "./wire.ts";
+import { readState, requireCompleteState } from "./state.ts";
 
 const configDir = join(homedir(), ".config", "thetis");
 const statePath = join(configDir, "signing-spike-state.json");
-
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Invalid signing relay state");
-  }
-  return value as Record<string, unknown>;
-}
-
-function readAddress(value: unknown): Address {
-  if (typeof value !== "string") throw new Error("Missing signing relay address");
-  return address(value);
-}
-
-function readParty(value: unknown): Party {
-  const party = object(value);
-  return {
-    wallet: readAddress(party.wallet),
-    party: readAddress(party.party),
-    signer: readAddress(party.signer),
-  };
-}
-
-function missingFile(error: unknown) {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-async function readState(): Promise<RelayState | null> {
-  let contents: string;
-  try {
-    contents = await readFile(statePath, "utf8");
-  } catch (error) {
-    if (missingFile(error)) return null;
-    throw error;
-  }
-  const state = object(JSON.parse(contents));
-  if (typeof state.batchId !== "string" || !/^[0-9a-f]{32}$/.test(state.batchId)) {
-    throw new Error("Invalid batch ID in signing relay state");
-  }
-  return {
-    program: readAddress(state.program),
-    batchId: state.batchId,
-    batch: readAddress(state.batch),
-    sender: readParty(state.sender),
-    receiver: readParty(state.receiver),
-    nonce: readAddress(state.nonce),
-    lookupTable: readAddress(state.lookupTable),
-  };
-}
-
-async function writeState(state: RelayState) {
-  const temporaryDirectory = await mkdtemp(join(dirname(statePath), ".signing-spike-"));
-  try {
-    const temporaryFile = join(temporaryDirectory, "state.json");
-    await writeFile(temporaryFile, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    // Publish a complete file in one operation. link refuses an existing destination.
-    await link(temporaryFile, statePath);
-  } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true });
-  }
-}
 
 async function programAddress() {
   const anchor = await readFile(new URL("../../../Anchor.toml", import.meta.url), "utf8");
@@ -118,35 +58,31 @@ async function main() {
   }
   const transport = rpcTransport(process.env.THETIS_RPC_URL ?? "https://api.devnet.solana.com");
   await requireDevnet(transport);
-  const existing = await readState();
-  if (command === "setup" && existing) {
-    console.log(`Reusing existing signing relay state at ${statePath}`);
-    return;
-  }
-  if (command !== "setup" && !existing) {
-    throw new Error(`Run signing-relay setup to create ${statePath}`);
-  }
-
-  const sponsor = await readSponsor();
   if (command === "setup") {
-    const sender = configuredWallet("THETIS_SENDER");
-    const receiver = configuredWallet("THETIS_RECEIVER");
     await mkdir(configDir, { recursive: true, mode: 0o700 });
     const releaseLock = await acquireSetupLock(`${statePath}.lock`);
     try {
-      if (await readState()) {
+      if ((await readState(statePath))?.complete) {
         console.log(`Reusing existing signing relay state at ${statePath}`);
         return;
       }
-      const state = await setup(transport, sponsor, await programAddress(), sender, receiver);
-      await writeState(state);
+      await setup(
+        transport,
+        await readSponsor(),
+        await programAddress(),
+        configuredWallet("THETIS_SENDER"),
+        configuredWallet("THETIS_RECEIVER"),
+        [],
+        statePath,
+      );
       console.log(`Signing relay state saved to ${statePath}`);
     } finally {
       await releaseLock();
     }
     return;
   }
-  if (!existing) throw new Error("Signing relay state is missing");
+  const existing = await requireCompleteState(statePath);
+  const sponsor = await readSponsor();
   if (command === "attacks") {
     await runRefusalChecks(transport, sponsor, existing);
     return;
