@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(47);
+select plan(54);
 
 -- 1. Every application table has RLS enabled and no anonymous read privilege.
 select is_empty(
@@ -161,13 +161,12 @@ select throws_ok(
 );
 select throws_ok(
   $$insert into storage.objects (bucket_id, name) values ('originals', 'unregistered-original')$$,
-  '42501', 'new row violates row-level security policy for table "objects"',
+  'P0001', 'ORIGINAL_IMMUTABLE',
   '8. An unregistered storage path is refused'
 );
-select results_eq(
+select is_empty(
   $$select name from storage.objects where bucket_id = 'originals'$$,
-  $$select current_setting('test.path')$$,
-  '8. An owner member can read the original'
+  '8. An authenticated owner member cannot read originals'
 );
 select lives_ok($$
   do $modify$
@@ -211,10 +210,9 @@ select results_eq(
   $$values ('20000000-0000-4000-8000-000000000001'::uuid)$$,
   '5. Lender One can read exactly the object a Khunou admin granted'
 );
-select results_eq(
+select is_empty(
   $$select name from storage.objects where bucket_id = 'originals'$$,
-  $$select current_setting('test.path')$$,
-  '8. The object grant also allows reading its original'
+  '8. An authenticated grantee cannot read originals even with an active object grant'
 );
 select throws_ok(
   $$insert into storage.objects (bucket_id, name) values ('originals', current_setting('test.lender_upload'))$$,
@@ -242,7 +240,7 @@ update public.evidence_access set revoked_at = now() where organisation_id = cur
 set local "request.jwt.claims" = '{"sub":"10000000-0000-4000-8000-000000000003","role":"authenticated","email":"lender@example.test"}';
 select is_empty($$select id from public.evidence_objects$$, '5. Lender One loses access after the grant is revoked');
 select is_empty($$select name from storage.objects where bucket_id = 'originals'$$,
-  '8. Revoking the grant removes original visibility');
+  '8. An authenticated grantee cannot read originals after grant revocation');
 
 reset role;
 set local role service_role;
@@ -263,11 +261,58 @@ select throws_ok(
 );
 reset role;
 
+-- The Storage service role bypasses RLS as the table owner.
+select ok(
+  (select relowner = 'supabase_storage_admin'::regrole and not relforcerowsecurity
+    from pg_catalog.pg_class where oid = 'storage.objects'::regclass),
+  '8. The Storage service role owns storage.objects and bypasses its RLS'
+);
+
+-- Supabase CLI's postgres login cannot assume the reserved Storage role. In
+-- that runner use service_role to exercise the same triggers with RLS bypassed.
+select pg_has_role(session_user, 'supabase_storage_admin', 'SET') as can_set_storage_role
+\gset
+\if :can_set_storage_role
+  grant usage on schema extensions to supabase_storage_admin;
+  set local role supabase_storage_admin;
+\else
+  set local role service_role;
+\endif
+set local "request.jwt.claims" = '{}';
+select is(row_security_active('storage.objects'), false,
+  '8. The current role reaches the Storage triggers without RLS');
+select lives_ok(
+  $$insert into storage.objects (bucket_id, name) values ('originals', current_setting('test.other_upload'))$$,
+  '8. With RLS bypassed, a registered unfinalized path accepts an original'
+);
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name) values ('originals', 'unregistered-original')$$,
+  'P0001', 'ORIGINAL_IMMUTABLE',
+  '8. With RLS bypassed, an unregistered path refuses an original'
+);
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name) values ('originals', current_setting('test.finalized_path'))$$,
+  'P0001', 'ORIGINAL_IMMUTABLE',
+  '8. With RLS bypassed, a finalized path refuses an original'
+);
+select throws_ok(
+  $$update storage.objects set metadata = '{"changed":true}'
+    where bucket_id = 'originals' and name = current_setting('test.path')$$,
+  'P0001', 'ORIGINAL_IMMUTABLE',
+  '8. With RLS bypassed, the trigger refuses to update an original'
+);
+select throws_ok(
+  $$delete from storage.objects where bucket_id = 'originals' and name = current_setting('test.path')$$,
+  'P0001', 'ORIGINAL_IMMUTABLE',
+  '8. With RLS bypassed, the trigger refuses to delete an original'
+);
+reset role;
+
 set local role authenticated;
 set local "request.jwt.claims" = '{"sub":"10000000-0000-4000-8000-000000000002","role":"authenticated","email":"member@example.test"}';
 select throws_ok(
   $$insert into storage.objects (bucket_id, name) values ('originals', current_setting('test.finalized_path'))$$,
-  '42501', 'new row violates row-level security policy for table "objects"',
+  'P0001', 'ORIGINAL_IMMUTABLE',
   '8. The uploader cannot insert at an already finalized path'
 );
 select is_empty($$select id from public.audit_events$$, '9. A member who is not an admin sees no audit rows');
@@ -302,7 +347,7 @@ select is_empty($$select id from public.organisations$$, '4. A revoked member im
 select is_empty($$select id from public.memberships$$, '4. A revoked member immediately loses membership reads');
 select is_empty($$select id from public.evidence_objects$$, '4. A revoked member immediately loses evidence reads');
 select is_empty($$select name from storage.objects where bucket_id = 'originals'$$,
-  '4. A revoked member immediately loses original reads');
+  '8. An authenticated former member cannot read originals');
 
 reset role;
 select * from finish();

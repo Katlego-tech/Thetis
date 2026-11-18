@@ -133,9 +133,37 @@ begin
 end;
 $$;
 
+create function public.revoke_wallet_link(link_id uuid)
+returns void
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  actor_id uuid := auth.uid();
+  link public.signer_links%rowtype;
+begin
+  select s.* into link
+  from public.signer_links s
+  where s.id = link_id and (s.user_id = actor_id or private.is_admin(s.organisation_id))
+  for update;
+
+  if not found then
+    raise exception using errcode = 'P0001', message = 'NOT_AUTHORISED';
+  end if;
+  if link.revoked_at is not null then
+    raise exception using errcode = 'P0001', message = 'LINK_INVALID';
+  end if;
+
+  update public.signer_links set revoked_at = pg_catalog.now() where id = link.id;
+
+  insert into public.audit_events (actor_user_id, organisation_id, action, subject)
+  values (actor_id, link.organisation_id, 'wallet.revoked', link.id::text);
+end;
+$$;
+
 revoke all on function private.enforce_challenge_consumption(), public.issue_wallet_link_challenge(uuid, text),
-  public.complete_wallet_link(uuid) from public, anon, authenticated, service_role;
-grant execute on function public.issue_wallet_link_challenge(uuid, text) to authenticated;
+  public.complete_wallet_link(uuid), public.revoke_wallet_link(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.issue_wallet_link_challenge(uuid, text), public.revoke_wallet_link(uuid)
+  to authenticated;
 grant execute on function public.complete_wallet_link(uuid) to service_role;
 
 alter table private.settings enable row level security;
@@ -145,18 +173,12 @@ alter table public.signer_links enable row level security;
 revoke all on table private.settings, public.wallet_link_challenges, public.signer_links
   from public, anon, authenticated, service_role;
 grant select on table public.wallet_link_challenges, public.signer_links to authenticated, service_role;
-grant update on table public.signer_links to authenticated, service_role;
 
 create policy wallet_link_challenges_owner_select on public.wallet_link_challenges
   for select to authenticated using (user_id = (select auth.uid()));
 
-create policy signer_links_member_select on public.signer_links
-  for select to authenticated using (private.is_member(organisation_id));
-
-create policy signer_links_owner_or_admin_revoke on public.signer_links
-  for update to authenticated
-  using (user_id = (select auth.uid()) or private.is_admin(organisation_id))
-  with check (user_id = (select auth.uid()) or private.is_admin(organisation_id));
+create policy signer_links_member_or_owner_select on public.signer_links
+  for select to authenticated using (private.is_member(organisation_id) or user_id = (select auth.uid()));
 
 create trigger wallet_link_challenges_consume_once before update on public.wallet_link_challenges
   for each row execute function private.enforce_challenge_consumption();
