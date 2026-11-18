@@ -3,5 +3,6 @@ packages:
   - "apps/*"
   - "services/*"
   - "infra"
+  - "tools/*"
 allowBuilds:
   esbuild: false  # its binary arrives as an optional dependency; no install script needed
