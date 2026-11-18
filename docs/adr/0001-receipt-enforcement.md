@@ -25,8 +25,16 @@ Its only movement path, `move_units`, requires the from-position owner's signatu
 `transfer_checked` CPI signed by the vault PDA, re-reads both vaults and checks they equal the
 updated positions.
 
-Toolchain: Anchor 1.2.2, anchor-spl 1.2.2, spl-token-2022-interface 2.1.0, LiteSVM 0.15.0 with
-its bundled Token-2022 and associated-token programs, Solana platform tools v1.54, Rust 1.89.0.
+What ran:
+
+- **The Token-2022 program that refused every attempt:** the SPL Token-2022 **11.0.0** binary
+  bundled in LiteSVM 0.15.0 (`spl_token_2022-11.0.0.so`), with its bundled associated-token
+  program 1.1.1.
+- **Instructions built with:** spl-token-2022-interface 2.1.0 and
+  spl-associated-token-account-interface 2.0.0.
+- **Program built with:** Anchor 1.2.2 and anchor-spl 1.2.2, Rust 1.89.0, and Solana
+  platform-tools v1.57. That is the toolchain `anchor build` selects under Anchor 1.2.2, locally
+  and in CI.
 
 ## Evidence
 
@@ -92,5 +100,5 @@ positions without tokens, the fallback in DESIGN §5, is not needed.
 - Anyone can create their own token account for the mint, but it can only ever hold zero: no
   path mints or transfers into it.
 - Adding any Token-2022 extension later reopens this ADR and needs the same tests run again.
-- These tests run in LiteSVM against its bundled Token-2022 build. Before mainnet, repeat them
-  against the deployed Token-2022 program version.
+- These tests ran against Token-2022 11.0.0 as bundled in LiteSVM. Before mainnet, repeat them
+  against the Token-2022 version deployed on that cluster.
