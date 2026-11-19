@@ -1,10 +1,11 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from "aws-lambda";
+import { route } from "./routes.ts";
+import { createAccessClients } from "./supabase.ts";
+
+const clients = createAccessClients();
 
 export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
-  if (event.requestContext.http.method !== "GET" || event.rawPath !== "/health") {
-    return { statusCode: 404 };
-  }
-  return { statusCode: 200, body: JSON.stringify({ status: "ok", service: "api" }) };
+  return route(event, clients);
 }
