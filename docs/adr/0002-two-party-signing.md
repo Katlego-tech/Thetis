@@ -1,7 +1,8 @@
 # ADR 0002: Two parties authorise one instruction through the Programmatic Signer
 
-**Status:** accepted for the on-chain part, 18 November 2026 · **Decision:** D32 checks (b) and (c)
-confirmed; check (a) still open (needs the phones) · **Sources:** D23, D24, D27, D32
+**Status:** accepted for the on-chain part; check (a) **failed on real wallets**, 18 November 2026 ·
+**Decision:** D32 checks (b) and (c) confirmed; check (a) refuted, so D32 was reopened and **re-decided: in-house verification**, not yet proven on the phones · **Sources:**
+D23, D24, D27, D32
 
 ## Context
 
@@ -99,14 +100,61 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
   next slot, so this never happens at handover time. The Thetis account layout should also cut
   per-handover accounts where it can, for example by storing the derived signer on the batch
   Re-measure once the real instruction exists.
-- **Still open, (a):** what the wallets show when asked to sign these bytes. A wallet's
-  message-signing prompt may show them as unreadable bytes or refuse them as transaction-like; its
-  transaction-signing prompt would sign the same bytes but display an Executor `Execute`
-  instruction. Both routes will be tried on Solflare and on Phantom, on real Android phones
-  through Mobile Wallet Adapter, and on the Mock MWA Wallet. The rule applies **per wallet and
-  per signing route**: wherever a prompt shows only unreadable bytes, the app shows the decoded
-  intent beside it and that wallet's blind signing is disclosed, even if the other wallet is
-  readable. If both wallets refuse both routes, D32 is reopened.
+- **(a) is refuted on real wallets** (phone session, 18 November 2026; results below). The
+  Programmatic Signer authorization is shaped like a transaction message, so wallets either
+  refuse to sign it as a message or treat it as a normal transaction they can't simulate.
+  Neither wallet showed any readable intent. That meets D32's trigger for reconsidering the
+  approach: two-party signing works on chain, but not through these wallets' prompts.
+
+## Phone session: D32 check (a), 18 November 2026
+
+**Setup:**
+- **Program:** `signing-spike` deployed to devnet at `EH7cQ4xmoJ92v2y1JW1xHwVQgtCNvkkVka3jiK1ByQnb`
+  (slot 523703336). `tools/signing-relay setup` opened batch
+  `73M1cR5TN8NKgzQyii1Fx6huUgCGQvdwSABUiEH52kSo` with its nonce account and lookup table.
+- **Phones:** the Android test app (`apps/signing-spike`, Mobile Wallet Adapter) on two phones,
+  reaching the laptop relay through `adb reverse`:
+  - Galaxy A50, Android 11: **Phantom 26.38.1**, sender;
+  - Galaxy A32, Android 13: **Solflare 2.33.2**, receiver.
+
+  Both wallets are new, devnet-only test wallets. Each route was sent the same authorization
+  bytes, whose digest begins `772ec3f1`.
+- **Not run:** the Mock MWA Wallet emulator rehearsal. It has no published APK, and building it
+  from source was not done here.
+
+| Wallet | Route | What the wallet showed | Result |
+|---|---|---|---|
+| Phantom | `sign_messages` | No prompt. Phantom received the request, stalled, then closed. | Timeout; no signature |
+| Phantom | `sign_transactions` | Connect sheet: "This app's identity could not be verified. It may be impersonating another app". Then "Confirm transaction" with no readable intent, "Failed to simulate the results of this request" and a network fee. Then "Are you sure? Proceeding is unsafe, so Phantom blocked this request", with continuing possible only after ticking "I understand that I could lose all of my funds" and pressing "Yes, confirm (unsafe)". | ✅ Signature **verified over exactly the authorization bytes** (relay check). Blind signing behind Phantom's strongest warnings. |
+| Solflare | `sign_messages` | No prompt. Solflare ended the session within 0.1 s of the request. | `CancellationException`; no signature |
+| Solflare | `sign_transactions` | "Unknown site", plus a blocking "Network mismatch: your current network is set to devnet, but this transaction is for mainnet", with **Close as the only option**. With the wallet switched to mainnet, it refused because the test wallet had no SOL for the fee it believed it would pay. | ❌ Refused; no signature |
+
+The two-party handover was therefore **not submitted**: the relay never had both signatures.
+
+**Interpretation:**
+- **The zeroed blockhash.** The authorization message's blockhash field is ignored by the
+  Programmatic Signer and zeroed. Solflare appears to read it to infer the network.
+- **The wrong frame.** Both wallets present the bytes as a transaction the user's wallet pays
+  for, which it is not.
+- **Why a real blockhash doesn't help.** Writing a real devnet blockhash into that field would
+  make the signed bytes a submittable transaction for about 60–90 seconds, with the phone as fee
+  payer. That is not adopted. It would still not make the intent readable, and it adds risk that
+  would need a separate security review.
+
+**Compatibility findings, fixed in the test app:**
+- **Token reuse:** Phantom rejects reuse of the session token. The library sends
+  `reauthorize` without the chain, giving error -1. The app now authorises afresh before each
+  signature.
+- **Identity URI:** Phantom auto-declines sign requests when the app identity has no URI
+  ("identityUri is not defined", code -3).
+- **Power saving:** Android's power-saving mode on the A50 firewalled the backgrounded test app,
+  so its local connection to the wallet timed out.
+- **Memory:** the A32 ran out of memory with the debug build, and Android killed the test app and
+  the wallet mid-request. A restart cleared it.
+
+**Next:** the user chose **in-house verification** (D32, 18 November 2026). Parties sign a
+human-readable intent that the program rebuilds byte for byte and checks against a native
+Ed25519 verification instruction. It is proved offline, then on the same phones, in its own ADR.
 
 The three committed binaries are Apache-2.0 upstream; the licence text sits beside them in
 `programs/signing-spike/tests/fixtures/LICENSE-ed25519-programmatic-signer`. The upstream
@@ -114,9 +162,16 @@ repository has no NOTICE file.
 
 ## Consequences
 
-- Phones never submit transactions; they return one signature over the authorization bytes (D24).
-- The Thetis `Authority` record stores the wallet key and its derived Programmatic Signer address
-  (D32 (1)), as `Party` does here.
-- Before the main demo depends on these programs, re-dump them, compare their hashes and re-run
+**Superseded in part (18 November 2026):** after check (a) failed, D32 was re-decided as in-house
+verification. The points below that depend on the Programmatic Signer apply only to this spike;
+the replacement is proved in its own ADR (0003).
+
+- Phones never submit transactions (D24). Under the new decision they return one signature over a
+  readable text, not over authorization bytes.
+- ~~The Thetis `Authority` record stores the wallet key and its derived Programmatic Signer
+  address~~: void under the new decision; the `Authority` record stores the wallet key, which
+  Thetis checks directly.
+- This spike's binaries stay in the repository as evidence. If anything ever depends on them
+  again, re-dump them, compare their hashes and re-run
   this suite. They are devnet-only and unaudited, which must be disclosed (D32). The committed
   binaries are listed in the [reuse manifest](../reuse-manifest.md).
