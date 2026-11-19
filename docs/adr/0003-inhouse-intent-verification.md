@@ -1,7 +1,7 @@
 # ADR 0003: Parties sign a readable text; the program rebuilds it and checks the Ed25519 precompile
 
-**Status:** accepted offline (19 November 2026); the phone check is still to run · **Decision:**
-D32 as re-decided on 18 November 2026 holds offline (LiteSVM with the real Ed25519 precompile); expiry moves from a slot to chain time ·
+**Status:** accepted (19 November 2026): proven offline, on devnet and on the two phones · **Decision:**
+D32 as re-decided on 18 November 2026 holds; both phone wallets displayed and signed the readable text, and the two-party handover is finalized on devnet; expiry moves from a slot to chain time ·
 **Sources:** D23, D24, D32; [ADR 0002](0002-two-party-signing.md)
 
 ## Context
@@ -116,10 +116,60 @@ the same instruction data at the same offsets.
 - **The test harness carries an old Ed25519 library.** LiteSVM's `precompiles` feature brings
   `ed25519-dalek` 1.0.1 into the test graph only. Its advisories are accepted under #5 until
   2026-12-02.
-- **No wallet has signed this text yet.** Whether Phantom and Solflare sign the raw bytes, and what
-  they display, is the phone check below.
+- **Only two wallets, on Android, through Mobile Wallet Adapter, have signed the text.** Desktop
+  browser wallets (D36) and Ledger are still to be checked.
 
-## Phone session
+## Phone session, 19 November 2026
 
-*To be recorded:* both wallets' prompts (screenshots), whether each signed the exact bytes, and
-the devnet outcome of the two-party handover.
+**Setup:**
+- **Program:** `intent_spike` on devnet at `3LfZrLC2R3AdjAQgdoEjdC3YZpbHLaJGy446H74cPEyH`, deployed
+  the same day. The dumped bytes equal the local build. The sponsor is the upgrade authority.
+- **Batch:** `DiNw8LXxJaEEAEZtSgJb3NgYjnFfXAxue9AkdQTch46X`, lot `CR-0001`, 2,000,000 kg, from
+  `Kopano Stockyard Custody` to `Mosela Haulage`, registered for the two phone wallets.
+- **Phones:** the Android test app (`apps/signing-spike`, #20) on the same two phones as ADR 0002,
+  reaching the laptop relay (`intent-serve`) through `adb reverse`:
+  - Galaxy A50, Android 11: **Phantom 26.38.1**, sender (`Vjh6…gcY`);
+  - Galaxy A32, Android 13: **Solflare 2.33.2**, receiver (`8dRT…5px`).
+- **The text:** both phones were given the same text (SHA-256 `ecfd605d…`), valid until 12:24:09
+  SAST.
+
+| Wallet | What it showed | Result |
+|---|---|---|
+| Phantom | The usual Connect sheet, with its "This app's identity could not be verified" banner (the app has no verified web domain). Then a plain **Sign message** sheet: the text in a collapsed card showing three lines; expanded, **all twelve lines** in full. No "unsafe" warning, no simulation error, no fee. | ✅ Signed; the relay verified it over the exact bytes. It took three attempts. First, an in-wallet "Update to the latest version" pop-up covered the request. Second, Phantom reloaded itself after Confirm and returned nothing. The third returned the signature 2 s after the request. |
+| Solflare | **Sign message**, showing the app's name and **all twelve lines** in full, with "Slide to approve". No network-mismatch error, no fee. | ✅ Signed on the first attempt; the relay verified it over the exact bytes. |
+
+![Phantom's expanded Sign message sheet (second attempt; the third, which signed, showed the same sheet)](0003-evidence/phantom-sign-message.png)
+![Solflare's Sign message sheet](0003-evidence/solflare-sign-message.png)
+
+**On chain:**
+- **Transaction:** `[Ed25519 verify (2 signatures), handover]`, the sponsor as the only signer:
+  `3PbE7tMYLBR4Y3Crt3pFMwx6Bv4thDXAPh4J9XmgmjddDFy6Pvq9cqiJAAbwAwDehbKVvoEyyD4mjbctnzUJuhor`.
+- **Status:** `Ok`, **finalized** at slot 523959128; 936 bytes.
+- **Fee:** 15,000 lamports (the transaction signature plus the two precompile signatures), paid by
+  the sponsor. Both phone wallets still hold 0 SOL.
+- **Batch afterwards:** `handed_over = true`, read back from devnet.
+
+The app showed "Verified over exact text: yes", `confirmed` and the same signature.
+
+![The app after the handover](0003-evidence/app-confirmed.png)
+
+**What this settles:**
+- **D32 check (a), the one that failed in ADR 0002, now passes.** Both wallets show the intent as
+  readable text. No warning in either asks a person to accept risk.
+- **Both wallets sign the raw UTF-8 bytes**, with no off-chain-message envelope (design §10, D36).
+  The relay's Ed25519 verify over the exact bytes passed for each.
+- **The phones never sign a transaction or pay a fee** (D24).
+
+**Practical notes for the demo:**
+- **Phantom's own interruptions** (an update prompt, a reload) can swallow a request. The app must
+  let a person tap Sign again, which it does, and the relay keeps the first verified signature
+  per role.
+- **The text has to be signed before the window closes** (here 9½ minutes). A fresh text is issued
+  automatically after that.
+- **Phantom labels the requester by its identity URI** (here github.com). A deployment uses the
+  Thetis web domain with Digital Asset Links, which also removes the unverified-identity banner.
+
+Raw evidence is kept locally in `.phone-sessions/2026-11-19/`: logcat, relay log, MWA timelines,
+all screenshots, device and wallet versions read from the phones with `dumpsys`, the program's
+upgrade authority, and the SHA-256 of the deployed and local builds, with SHA256SUMS. It is not
+committed, because logcat is phone-wide and can hold device and account details.
