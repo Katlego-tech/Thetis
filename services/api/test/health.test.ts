@@ -1,6 +1,18 @@
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { describe, expect, it } from "vitest";
-import { handler } from "../src/main.ts";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+let handler: typeof import("../src/main.ts").handler;
+
+beforeAll(async () => {
+  vi.stubEnv("SUPABASE_URL", "http://127.0.0.1:54321");
+  vi.stubEnv("SUPABASE_ANON_KEY", "test-anon");
+  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service");
+  vi.stubEnv("SITE_URL", "http://localhost:3100");
+  vi.stubEnv("CORS_ORIGIN", "http://localhost:3100");
+  ({ handler } = await import("../src/main.ts"));
+});
+
+afterAll(() => vi.unstubAllEnvs());
 
 function request(method: string, path: string): APIGatewayProxyEventV2 {
   return {

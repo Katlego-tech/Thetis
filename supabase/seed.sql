@@ -9,5 +9,5 @@ insert into public.organisations (slug, name, kind, synthetic) values
 on conflict (slug) do nothing;
 
 insert into private.settings (key, value)
-values ('link_domain', 'localhost:3000')
+values ('link_domain', 'localhost:3100')
 on conflict (key) do nothing;

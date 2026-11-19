@@ -52,7 +52,7 @@ select results_eq(
       expires_at, current_setting('test.expires')::timestamptz, nonce ~ '^[0-9a-f]{32}$'
     from public.wallet_link_challenges where id = current_setting('test.first')::uuid$$,
   $$select convert_to(
-      E'localhost:3000 wants you to link a Solana wallet to Thetis.\n\n' ||
+      E'localhost:3100 wants you to link a Solana wallet to Thetis.\n\n' ||
       E'Wallet: 11111111111111111111111111111111\n' ||
       E'Organisation: khunou\n' ||
       E'User: 12000000-0000-4000-8000-000000000001\n' ||

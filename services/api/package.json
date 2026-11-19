@@ -7,12 +7,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "voice:agent": "node --env-file=../../.env src/voice/setup-agent.ts"
+    "voice:agent": "node --env-file=../../.env src/voice/setup-agent.ts",
+    "dev": "node src/local.ts",
+    "test:unit": "vitest run .unit.test.ts test/health.test.ts"
   },
   "devDependencies": {
     "@types/aws-lambda": "8.10.164"
   },
   "dependencies": {
-    "@elevenlabs/elevenlabs-js": "2.76.0"
+    "@elevenlabs/elevenlabs-js": "2.76.0",
+    "@supabase/supabase-js": "2.119.0"
   }
 }
