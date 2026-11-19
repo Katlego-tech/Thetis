@@ -195,9 +195,20 @@ function createRpcTransport(
     getGenesisHash: () => rpc.getGenesisHash().send(requestTimeout()),
     getSlot,
     async getChainTime() {
-      const blockTime = await rpc.getBlockTime(await getSlot()).send(requestTimeout());
-      if (blockTime === null) throw new Error("Devnet did not return the latest slot time");
-      return blockTime;
+      // The newest confirmed slot may not have its block time yet; step back up to two slots.
+      const latest = await getSlot();
+      let lastError: unknown;
+      for (let back = 0n; back <= 2n && back <= latest; back++) {
+        try {
+          const blockTime = await rpc.getBlockTime(latest - back).send(requestTimeout());
+          if (blockTime !== null) return blockTime;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw new Error(
+        `Devnet did not return a block time near slot ${latest}${lastError ? `: ${errorMessage(lastError)}` : ""}`,
+      );
     },
     getBlockHeight,
     getSignatureStatus,
