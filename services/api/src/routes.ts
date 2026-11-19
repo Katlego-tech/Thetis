@@ -98,11 +98,6 @@ async function createInvitation(
   }
 
   const token = databaseData(await caller.rpc("create_invitation", { org, email, role }));
-  const { error } = await clients.service.auth.admin.createUser({ email, email_confirm: false });
-  if (error && error.code !== "email_exists" && error.code !== "user_already_exists") {
-    throw new RouteError("INTERNAL");
-  }
-
   const tokenDigest = createHash("sha256").update(token).digest("hex");
   const invitation = databaseData(
     await caller
@@ -111,7 +106,18 @@ async function createInvitation(
       .eq("token_sha256", `\\x${tokenDigest}`)
       .maybeSingle(),
   );
-  if (!invitation) throw new RouteError("NOT_FOUND");
+  if (!invitation) throw new RouteError("INTERNAL");
+
+  const { error } = await clients.service.auth.admin.createUser({ email, email_confirm: false });
+  if (error && error.code !== "email_exists" && error.code !== "user_already_exists") {
+    // The invitation is already stored; revoke it so the admin can retry instead of hitting
+    // INVITATION_EXISTS for an invitee who has no account (access.md §3).
+    await caller
+      .from("invitations")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("token_sha256", `\\x${tokenDigest}`);
+    throw new RouteError("INTERNAL");
+  }
   return {
     inviteUrl: `${clients.siteUrl}/invite?token=${token}`,
     expiresAt: invitation.expires_at,
@@ -159,7 +165,7 @@ async function completeWalletLink(
   const challenge = databaseData(
     await caller
       .from("wallet_link_challenges")
-      .select("id, wallet, message, expires_at, consumed_at")
+      .select("id, wallet, organisation_id, message, expires_at, consumed_at")
       .eq("id", id)
       .maybeSingle(),
   );
@@ -184,11 +190,7 @@ async function completeWalletLink(
   const linkId = databaseData(
     await service.rpc("complete_wallet_link", { challenge_id: challenge.id }),
   );
-  const link = databaseData(
-    await caller.from("signer_links").select("organisation_id").eq("id", linkId).single(),
-  );
-  if (!link) throw new RouteError("INTERNAL");
-  return { linkId, wallet: challenge.wallet, organisationId: link.organisation_id };
+  return { linkId, wallet: challenge.wallet, organisationId: challenge.organisation_id };
 }
 
 async function finalizeEvidence(
