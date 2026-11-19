@@ -1,7 +1,7 @@
 # ADR 0002: Two parties authorise one instruction through the Programmatic Signer
 
 **Status:** accepted for the on-chain part; check (a) **failed on real wallets**, 18 November 2026 ·
-**Decision:** D32 checks (b) and (c) confirmed; check (a) refuted, so D32 is **reopened** · **Sources:**
+**Decision:** D32 checks (b) and (c) confirmed; check (a) refuted, so D32 was reopened and **re-decided: in-house verification**, not yet proven on the phones · **Sources:**
 D23, D24, D27, D32
 
 ## Context
@@ -117,7 +117,7 @@ Every refusal also checks that the `Batch` account is byte-identical afterwards.
   - Galaxy A50, Android 11: **Phantom 26.38.1**, sender;
   - Galaxy A32, Android 13: **Solflare 2.33.2**, receiver.
 
-  Both wallets are new, devnet-only test wallets. Each route signed the same authorization
+  Both wallets are new, devnet-only test wallets. Each route was sent the same authorization
   bytes, whose digest begins `772ec3f1`.
 - **Not run:** the Mock MWA Wallet emulator rehearsal. It has no published APK, and building it
   from source was not done here.
@@ -156,11 +156,22 @@ The two-party handover was therefore **not submitted**: the relay never had both
 human-readable intent that the program rebuilds byte for byte and checks against a native
 Ed25519 verification instruction. It is proved offline, then on the same phones, in its own ADR.
 
+The three committed binaries are Apache-2.0 upstream; the licence text sits beside them in
+`programs/signing-spike/tests/fixtures/LICENSE-ed25519-programmatic-signer`. The upstream
+repository has no NOTICE file.
+
 ## Consequences
 
-- Phones never submit transactions; they return one signature over the authorization bytes (D24).
-- The Thetis `Authority` record stores the wallet key and its derived Programmatic Signer address
-  (D32 (1)), as `Party` does here.
-- Before the main demo depends on these programs, re-dump them, compare their hashes and re-run
+**Superseded in part (18 November 2026):** after check (a) failed, D32 was re-decided as in-house
+verification. The points below that depend on the Programmatic Signer apply only to this spike;
+the replacement is proved in its own ADR (0003).
+
+- Phones never submit transactions (D24). Under the new decision they return one signature over a
+  readable text, not over authorization bytes.
+- ~~The Thetis `Authority` record stores the wallet key and its derived Programmatic Signer
+  address~~: void under the new decision; the `Authority` record stores the wallet key, which
+  Thetis checks directly.
+- This spike's binaries stay in the repository as evidence. If anything ever depends on them
+  again, re-dump them, compare their hashes and re-run
   this suite. They are devnet-only and unaudited, which must be disclosed (D32). The committed
   binaries are listed in the [reuse manifest](../reuse-manifest.md).
