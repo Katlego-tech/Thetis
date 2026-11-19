@@ -1,7 +1,7 @@
 # ADR 0003: Parties sign a readable text; the program rebuilds it and checks the Ed25519 precompile
 
 **Status:** accepted offline (19 November 2026); the phone check is still to run · **Decision:**
-D32 as re-decided on 18 November 2026 holds on chain; expiry moves from a slot to chain time ·
+D32 as re-decided on 18 November 2026 holds offline (LiteSVM with the real Ed25519 precompile); expiry moves from a slot to chain time ·
 **Sources:** D23, D24, D32; [ADR 0002](0002-two-party-signing.md)
 
 ## Context
@@ -88,17 +88,20 @@ the same instruction data at the same offsets.
 
 ## Decision
 
-- **D32's in-house route holds on chain.** Two readable signatures authorise one instruction. The
+- **D32's in-house route holds offline** (LiteSVM with the real Ed25519 precompile; no devnet
+  transaction has run it yet). Two readable signatures authorise one instruction. The
   sponsor alone signs and pays. The transaction is 936 bytes against the 1,232-byte limit,
   without a lookup table.
 - **Expiry is chain time, not a slot.** The text says when it stops working in a form a person
-  can read, and the program enforces a ceiling per action class:
+  can read, and the program enforces a ceiling per action class (the spike implements only
+  custody; money and the default are design ceilings for the real program):
   - custody: 600 s;
   - money: 300 s;
   - anything later: 600 s unless its catalogue row says otherwise.
 
-  The relay sets `valid_until` from the chain's clock minus a 30 s margin, never from a device
-  clock. D23 and D32 are amended to match.
+  The relay is to set `valid_until` to the chain's current time plus the window, kept 30 s inside
+  the ceiling so clock drift can't push it over, and never from a device clock (the relay change
+  is built separately). D23 and D32 are amended to match.
 - **The sequence is the replay guard.** A signature that was never used dies at its expiry.
 
 ## Limits and what is not proven

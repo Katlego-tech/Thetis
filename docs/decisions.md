@@ -80,7 +80,7 @@ Source: the reports and notes in `/home/kirito/Documents/projects/personal/Solan
 
 - Blockhash lifetime is about 30 s (200 ms slots), so sponsor-built transactions are built immediately before sending. Send with `maxRetries: 0` and rebroadcast until `lastValidBlockHeight`. Re-sign only after expiry.
 - `confirmed` and `finalized` now describe the same state. Request `finalized` everywhere, including the indexer, to avoid Alpenglow's multiple candidate blocks per slot. Use `confirmationStatus` and `signatureSubscribe`, not the `confirmations` count.
-- `Clock.unix_timestamp` is set by the leader. Use slot-based expiries for D23 messages. Accept small timestamp drift for interest accrual on devnet, and bound it before production.
+- `Clock.unix_timestamp` is set by the leader. Use chain-time expiries under a per-action ceiling for D23 messages ([ADR 0003](adr/0003-inhouse-intent-verification.md)). Accept small timestamp drift for interest accrual on devnet, and bound it before production.
 - v1 transactions allow up to 4 KB and 64 inline accounts, with no lookup tables. Two signed messages plus their verification fit; size each instruction in phase 0.
 - Rent fell sharply in 2026, so per-batch accounts and permanent tombstones are cheap.
 
