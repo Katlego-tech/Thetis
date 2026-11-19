@@ -1,0 +1,40 @@
+[package]
+name = "intent-spike"
+version = "0.1.0"
+description = "D32 in-house verification spike: two parties sign a readable intent the program rebuilds and checks against the Ed25519 precompile"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "intent_spike"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = "1.2.2"
+solana-instructions-sysvar = "3.0.1"
+solana-sdk-ids = "3.1.0"
+
+[dev-dependencies]
+litesvm = { version = "0.15.0", features = ["precompiles"] }
+solana-message = "4"
+solana-transaction = "4"
+solana-signer = "3"
+solana-keypair = "3"
+solana-signature = "3"
+solana-hash = "4"
+solana-clock = "3"
+ed25519-dalek = "2.2.0"
+serde_json = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
