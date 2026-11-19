@@ -120,7 +120,8 @@ export async function runIntentRefusals(
 
   // The relay reads chain time from the latest confirmed block, which on devnet trails the
   // executing slot's clock by a few seconds, so a window one second over the 600 s ceiling can
-  // land inside it. 660 s is over the ceiling by more than that drift. The second handover makes
+  // land inside it. 660 s is over the ceiling by 60 s, so this holds while the lag stays under
+  // 60 s; a StaleSequence here means devnet lagged longer than that. The second handover makes
   // the transaction roll back if the first were ever accepted, so the batch stays usable.
   const [verify, overlong] = await build(660n);
   refused("window 660 seconds", await refusalName([verify, overlong, overlong]), "WindowTooLong");
