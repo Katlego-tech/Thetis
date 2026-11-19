@@ -1,11 +1,6 @@
 # Temporary vulnerability exceptions tracked in GitHub issues.
 
 [[IgnoredVulns]]
-id = "GHSA-fc5q-39xc-vjpf"
-ignoreUntil = 2026-12-02T00:00:00Z
-reason = "#4: picomatch <=4.0.7 ReDoS, no fixed release (checked 2026-11-18). Dev-only globbing through vitest/vite (tinyglobby -> fdir) and the shadcn CLI (fast-glob -> micromatch -> picomatch 2.3.2, and dotenvx -> picomatch 4.0.7). These tools glob the repo's own paths without user input. shadcn is a web devDependency (its CSS is resolved at build time), so none of these paths are in the production install graph. Upgrade when a fix ships."
-
-[[IgnoredVulns]]
 id = "RUSTSEC-2026-0387"
 ignoreUntil = 2026-12-02T00:00:00Z
 reason = "#5: crypto-bigint 0.5.5 timing variability; LiteSVM test harness only, not on-chain; fix 0.7.6 unreachable from k256 0.13 (checked 2026-11-18)."
