@@ -35,7 +35,7 @@ export function WaterfallTable({ currency, inputs, preview, minorDigits }: Water
   const haircut = inputs.haircutBps === 0n ? "0" : formatBpsPercent(inputs.haircutBps);
   const rows = [
     ["Debt before", money(preview.debtBefore), "Principal plus booked interest and fees"],
-    ["Confirmed payment", money(preview.confirmedPayment), "Buyer amount plus seller top-up"],
+    ["Payment, once attested", money(preview.confirmedPayment), "Buyer amount plus seller top-up"],
     ["Applied to debt", money(preview.applied), "The lesser of debt and payment"],
     ["Debt after", money(debtAfter), "Remains recorded against the lot"],
     [
@@ -71,6 +71,10 @@ export function WaterfallTable({ currency, inputs, preview, minorDigits }: Water
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      <p className="text-[12px] text-(--ink-2)">
+        Preview from the reported terms. Nothing here is recorded until the lender attests the
+        payment and the chain confirms the release.
+      </p>
       {!allowed && (
         <p role="alert" className="border border-(--refuse) bg-(--sheet) p-3 text-(--refuse)">
           Refused: debt after {money(debtAfter)} exceeds the {money(preview.limitAfter)} limit.

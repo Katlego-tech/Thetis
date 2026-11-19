@@ -39,6 +39,9 @@ it("renders the requested release, all waterfall lines, and separate payment and
     screen.getByText(/seller Khunou Ore Exports. Expires 28 Nov 2026, 17:00 SAST./),
   ).toBeInTheDocument();
   expect(screen.getByText("Facility currency USD")).toBeInTheDocument();
+  expect(
+    screen.getByText(/^Preview from the reported terms\. Nothing here is recorded until/),
+  ).toBeInTheDocument();
   expect(screen.getByText("FIAT_ATTESTATION_TEST · devnet")).toBeInTheDocument();
   expect(
     within(screen.getByRole("table"))
@@ -48,7 +51,7 @@ it("renders the requested release, all waterfall lines, and separate payment and
 
   const lines = [
     ["Debt before", "USD 600,000.00", "Principal plus booked interest and fees"],
-    ["Confirmed payment", "USD 400,000.00", "Buyer amount plus seller top-up"],
+    ["Payment, once attested", "USD 400,000.00", "Buyer amount plus seller top-up"],
     ["Applied to debt", "USD 400,000.00", "The lesser of debt and payment"],
     ["Debt after", "USD 200,000.00", "Remains recorded against the lot"],
     ["Quantity after", "3,000.000 t", "5,000.000 t locked less 2,000.000 t sold"],
