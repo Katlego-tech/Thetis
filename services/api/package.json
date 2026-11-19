@@ -6,9 +6,13 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "voice:agent": "node --env-file=../../.env src/voice/setup-agent.ts"
   },
   "devDependencies": {
     "@types/aws-lambda": "8.10.164"
+  },
+  "dependencies": {
+    "@elevenlabs/elevenlabs-js": "2.76.0"
   }
 }
