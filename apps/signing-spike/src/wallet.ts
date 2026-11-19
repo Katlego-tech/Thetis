@@ -6,13 +6,8 @@ import {
 } from "@solana-mobile/mobile-wallet-adapter-protocol";
 import { copy } from "./lib/copy";
 import { decodeBase64, encodeBase58, encodeBase64 } from "./lib/encoding";
-import type { Intent, Route } from "./lib/relay";
-import {
-  getMessageSignature,
-  matchesSignedMessage,
-  matchesSignedTransaction,
-  wrapUnsignedTransaction,
-} from "./lib/wire";
+import { checkMessageText, type Intent } from "./lib/relay";
+import { getMessageSignature, matchesSignedMessage } from "./lib/wire";
 import type { SignatureSubmission } from "./relay-client";
 
 const authorizationRequest = {
@@ -106,16 +101,13 @@ export async function connectWallet(): Promise<WalletConnection> {
 
 type WalletPayload = { submission?: SignatureSubmission; payloadMismatch?: number | null };
 
-export async function signWithWallet(
+export async function signIntent(
   connection: WalletConnection,
   intent: Intent,
-  route: Route,
   onAuthorized: (connection: WalletConnection) => void,
   beforeSigning: () => Promise<boolean>,
 ): Promise<WalletPayload | undefined> {
-  const message = decodeBase64(intent.authorizationBase64);
-  const unsignedPayload = route === "transaction" ? wrapUnsignedTransaction(message) : message;
-  const payloadBase64 = encodeBase64(unsignedPayload);
+  const message = checkMessageText(intent.messageText, intent.messageBase64);
   const signed = await walletSession(async (wallet) => {
     const authorization = await walletCall(() => wallet.authorize(authorizationRequest));
     const refreshed = readConnection(authorization);
@@ -125,9 +117,7 @@ export async function signWithWallet(
 
     if (!(await beforeSigning())) return undefined;
     const response = await walletCall(() =>
-      route === "message"
-        ? wallet.signMessages({ addresses: [account.addressBase64], payloads: [payloadBase64] })
-        : wallet.signTransactions({ payloads: [payloadBase64] }),
+      wallet.signMessages({ addresses: [account.addressBase64], payloads: [intent.messageBase64] }),
     );
     return { account, payloads: response?.signed_payloads };
   }, connection.walletUri);
@@ -141,28 +131,17 @@ export async function signWithWallet(
   const bytes = readSignedPayload(payload);
   if (!bytes) return { payloadMismatch: null };
 
-  const common = {
-    role: intent.role,
-    address: account.address,
-    authorizationSha256: intent.authorizationSha256,
-  };
-  if (route === "message") {
-    const signature = getMessageSignature(bytes);
-    if (!signature) return { payloadMismatch: bytes.length };
-    return {
-      submission: { ...common, route, signatureBase58: encodeBase58(signature) },
-      payloadMismatch:
-        payloads.length === 1 && matchesSignedMessage(bytes, message) ? undefined : bytes.length,
-    };
-  }
-
-  if (bytes.length === 0) return { payloadMismatch: 0 };
+  const signature = getMessageSignature(bytes);
+  if (!signature) return { payloadMismatch: bytes.length };
   return {
-    submission: { ...common, route, signedTransactionBase64: payload },
+    submission: {
+      role: intent.role,
+      address: account.address,
+      messageSha256: intent.messageSha256,
+      signatureBase58: encodeBase58(signature),
+    },
     payloadMismatch:
-      payloads.length === 1 && matchesSignedTransaction(bytes, unsignedPayload.length, message)
-        ? undefined
-        : bytes.length,
+      payloads.length === 1 && matchesSignedMessage(bytes, message) ? undefined : bytes.length,
   };
 }
 

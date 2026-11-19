@@ -1,14 +1,8 @@
-import {
-  blockhash,
-  getCompiledTransactionMessageEncoder,
-  address as solanaAddress,
-} from "@solana/kit";
 import { type MobileWallet, transact } from "@solana-mobile/mobile-wallet-adapter-protocol";
 import { expect, it, vi } from "vitest";
 import { decodeBase64, encodeBase58, encodeBase64 } from "../src/lib/encoding";
 import type { Intent } from "../src/lib/relay";
-import { wrapUnsignedTransaction } from "../src/lib/wire";
-import { connectWallet, signWithWallet, type WalletConnection } from "../src/wallet";
+import { connectWallet, signIntent, type WalletConnection } from "../src/wallet";
 
 vi.mock("@solana-mobile/mobile-wallet-adapter-protocol", () => ({ transact: vi.fn() }));
 
@@ -29,31 +23,17 @@ const expectedIdentity = {
   name: "Thetis signing spike",
   uri: "https://github.com/Katlego-tech/Thetis",
 };
-const message = getCompiledTransactionMessageEncoder().encode({
-  version: "legacy",
-  header: {
-    numSignerAccounts: 1,
-    numReadonlySignerAccounts: 0,
-    numReadonlyNonSignerAccounts: 0,
-  },
-  staticAccounts: [solanaAddress(address)],
-  lifetimeToken: blockhash("11111111111111111111111111111111"),
-  instructions: [],
-});
+const messageText = "Thetis authorisation v1\nTest network only. Synthetic data.";
+const message = Buffer.from(messageText);
 const intent: Intent = {
   role: "sender",
   expectedAddress: address,
-  authorizationBase64: encodeBase64(message),
-  authorizationSha256: "0".repeat(64),
-  intent: {
-    text: "Synthetic test data.",
-    batchId: "0123456789abcdef0123456789abcdef",
-    quantityKg: "2000000",
-    from: "Kopano Stockyard Custody",
-    to: "Mosela Haulage",
-    expirySlot: 9001,
-    expectedSequence: 0,
-  },
+  messageBase64: encodeBase64(message),
+  messageText,
+  messageSha256: "0".repeat(64),
+  validUntil: "1795098725",
+  validUntilText: "2026-11-19 16:32:05 SAST",
+  expectedSequence: "0",
   network: "devnet",
 };
 
@@ -84,9 +64,9 @@ it("saves the refreshed token before signing even when the wallet cancels", asyn
   });
   mockWallet({ authorize, signMessages });
 
-  await expect(
-    signWithWallet(connection, intent, "message", saveConnection, async () => true),
-  ).rejects.toThrow("User cancelled signing");
+  await expect(signIntent(connection, intent, saveConnection, async () => true)).rejects.toThrow(
+    "User cancelled signing",
+  );
   expect(authorize.mock.calls).toStrictEqual([
     [{ chain: "solana:devnet", identity: expectedIdentity }],
   ]);
@@ -103,33 +83,26 @@ it("rejects a different wallet account before saving its token or asking it to s
   const signMessages = vi.fn();
   mockWallet({ authorize, signMessages });
 
-  await expect(
-    signWithWallet(connection, intent, "message", saveConnection, async () => true),
-  ).rejects.toThrow("The authorized address does not match this role.");
+  await expect(signIntent(connection, intent, saveConnection, async () => true)).rejects.toThrow(
+    "The authorized address does not match this role.",
+  );
   expect(saveConnection).not.toHaveBeenCalled();
   expect(signMessages).not.toHaveBeenCalled();
 });
 
-it.each(["message", "transaction"] as const)(
-  "rechecks freshness after wallet authorization and suppresses the %s signing prompt",
-  async (route) => {
-    const authorize = vi.fn().mockResolvedValue(authorization);
-    const signMessages = vi.fn();
-    const signTransactions = vi.fn();
-    mockWallet({ authorize, signMessages, signTransactions });
-    const checkFreshness = vi.fn(async () => {
-      expect(authorize).toHaveBeenCalledOnce();
-      return false;
-    });
+it("rechecks freshness after wallet authorization before prompting for a signature", async () => {
+  const authorize = vi.fn().mockResolvedValue(authorization);
+  const signMessages = vi.fn();
+  mockWallet({ authorize, signMessages });
+  const checkFreshness = vi.fn(async () => {
+    expect(authorize).toHaveBeenCalledOnce();
+    return false;
+  });
 
-    await expect(
-      signWithWallet(connection, intent, route, vi.fn(), checkFreshness),
-    ).resolves.toBeUndefined();
-    expect(checkFreshness).toHaveBeenCalledOnce();
-    expect(signMessages).not.toHaveBeenCalled();
-    expect(signTransactions).not.toHaveBeenCalled();
-  },
-);
+  await expect(signIntent(connection, intent, vi.fn(), checkFreshness)).resolves.toBeUndefined();
+  expect(checkFreshness).toHaveBeenCalledOnce();
+  expect(signMessages).not.toHaveBeenCalled();
+});
 
 it("reports a prefixed message's received length and submits its trailing signature with the digest", async () => {
   const signature = new Uint8Array(64).fill(19);
@@ -141,15 +114,12 @@ it("reports a prefixed message's received length and submits its trailing signat
   });
   mockWallet({ authorize: vi.fn().mockResolvedValue(authorization), signMessages });
 
-  await expect(
-    signWithWallet(connection, intent, "message", vi.fn(), checkFreshness),
-  ).resolves.toEqual({
+  await expect(signIntent(connection, intent, vi.fn(), checkFreshness)).resolves.toEqual({
     payloadMismatch: payload.length,
     submission: {
       role: "sender",
-      route: "message",
       address,
-      authorizationSha256: intent.authorizationSha256,
+      messageSha256: intent.messageSha256,
       signatureBase58: encodeBase58(signature),
     },
   });
@@ -162,34 +132,33 @@ it("reports a short message as a payload mismatch without fabricating a signatur
       .fn()
       .mockResolvedValue({ signed_payloads: [encodeBase64(new Uint8Array(63))] }),
   });
-  const result = await signWithWallet(connection, intent, "message", vi.fn(), async () => true);
+  const result = await signIntent(connection, intent, vi.fn(), async () => true);
   expect(result?.payloadMismatch).toBe(63);
   expect(result?.submission).toBeUndefined();
 });
 
-it.each(["extra bytes", "changed message at the expected length"] as const)(
-  "reports a signed transaction with %s and submits the full payload with the digest",
-  async (change) => {
-    const unsigned = wrapUnsignedTransaction(decodeBase64(intent.authorizationBase64));
-    const payload =
-      change === "extra bytes" ? Uint8Array.of(...unsigned, 99) : Uint8Array.from(unsigned);
-    if (change !== "extra bytes") payload.set([1], payload.length - 1);
-    const signed = encodeBase64(payload);
-    const signTransactions = vi.fn().mockResolvedValue({ signed_payloads: [signed] });
-    mockWallet({ authorize: vi.fn().mockResolvedValue(authorization), signTransactions });
+it.each([false, true])(
+  "sends the exact message bytes and reads the signature (attached: %s)",
+  async (attached) => {
+    const signature = new Uint8Array(64).fill(19);
+    const payload = attached ? Uint8Array.of(...message, ...signature) : signature;
+    const signMessages = vi.fn().mockResolvedValue({ signed_payloads: [encodeBase64(payload)] });
+    mockWallet({ authorize: vi.fn().mockResolvedValue(authorization), signMessages });
 
-    await expect(
-      signWithWallet(connection, intent, "transaction", vi.fn(), async () => true),
-    ).resolves.toEqual({
-      payloadMismatch: payload.length,
-      submission: {
-        role: "sender",
-        route: "transaction",
-        address,
-        authorizationSha256: intent.authorizationSha256,
-        signedTransactionBase64: signed,
-      },
+    const signed = await signIntent(connection, intent, vi.fn(), async () => true);
+    expect(signMessages).toHaveBeenCalledWith({
+      addresses: [addressBase64],
+      payloads: [intent.messageBase64],
     });
-    expect(signTransactions).toHaveBeenCalledWith({ payloads: [encodeBase64(unsigned)] });
+    expect(decodeBase64(signMessages.mock.lastCall?.[0].payloads[0])).toEqual(
+      decodeBase64(intent.messageBase64),
+    );
+    expect(signed?.payloadMismatch).toBeUndefined();
+    expect(signed?.submission).toEqual({
+      role: "sender",
+      address,
+      messageSha256: intent.messageSha256,
+      signatureBase58: encodeBase58(signature),
+    });
   },
 );
