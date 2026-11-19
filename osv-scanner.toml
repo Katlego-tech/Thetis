@@ -34,3 +34,18 @@ reason = "#5: libsecp256k1 0.7.2 unmaintained; dev/test graph only (checked 2026
 id = "RUSTSEC-2024-0436"
 ignoreUntil = 2026-12-02T00:00:00Z
 reason = "#5: paste 1.0.15 unmaintained; proc-macro, build time only (checked 2026-11-18)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2022-0093"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: ed25519-dalek 1.0.1 signing-oracle misuse; LiteSVM 'precompiles' test harness only (agave-precompiles 4.1.2 verifies, never signs), not on-chain (checked 2026-11-19)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0344"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: curve25519-dalek 3.2.0 timing variability; via ed25519-dalek 1.0.1 in the LiteSVM precompiles test harness only, not on-chain (checked 2026-11-19)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0097"
+ignoreUntil = 2026-12-02T00:00:00Z
+reason = "#5: rand 0.7.3; via ed25519-dalek 1.0.1 in the LiteSVM precompiles test harness only, not on-chain (checked 2026-11-19)."

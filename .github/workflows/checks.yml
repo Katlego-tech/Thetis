@@ -85,12 +85,6 @@ jobs:
           set -o pipefail
           pnpm lint 2>&1 | tee "$RUNNER_TEMP/logs/lint.log"
 
-      - name: Test
-        shell: bash
-        run: |
-          set -o pipefail
-          pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
-
       - name: Cache Cargo
         id: cargo-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -163,6 +157,36 @@ jobs:
             set -eo pipefail
             cargo test --workspace
           ) 2>&1 | tee "$RUNNER_TEMP/logs/program-tests.log"
+
+      - name: Test  # after the program build: the relay tests load it
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13  # v3.2.0
+        with:
+          version: 2.122.1
+
+      - name: Start Supabase
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            supabase start -x studio,imgproxy,edge-runtime,logflare,vector,realtime,postgres-meta,supavisor
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/start-supabase.log"
+
+      - name: Database tests
+        shell: bash
+        run: |
+          set -o pipefail
+          (
+            set -eo pipefail
+            supabase db reset
+            supabase test db
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/database-tests.log"
 
       - name: Scan dependencies for known vulnerabilities
         shell: bash

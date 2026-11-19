@@ -2,7 +2,15 @@
 
 The criteria below define the evidence required during implementation.
 
-> **Phase-0 progress, 18 November 2026.** Item 1 is done: Token-2022 restriction is proven and D25 confirmed ([ADR 0001](adr/0001-receipt-enforcement.md)). Item 3 is partly done: the toolchain is pinned, and generated program clients wait for the Thetis program. Item 6 is done (`packages/domain` and its fixtures). Item 7 is done: in checkouts with the hooks enabled, one gate runs locally before every push, and CI runs the same checks on every pull request whether or not the hooks were enabled. Items 2 (D27, needs the two phones), 4, 5 and 8 remain.
+> **Phase-0 progress, 18 November 2026.** Item 1 is done: Token-2022 restriction is proven and D25 confirmed ([ADR 0001](adr/0001-receipt-enforcement.md)). Item 2 is partly done: the on-chain half (two parties authorising one instruction through the Programmatic Signer, with the sponsor paying) passes offline in PR #10, using raw keys. On real phones (18 November 2026), Phantom and Solflare did not support it usably: neither showed a readable intent, neither signed as a message, and only Phantom signed as a transaction, behind an "unsafe" override (ADR 0002). D32 was reopened and re-decided (in-house verification of a readable signed text), and item 2 stays open until that is proven offline and on the phones. Item 3 is partly done: the toolchain is pinned, and generated program clients wait for the Thetis program. Item 4 is partly done: the database access rules are proven (`supabase/`, 102 tests in CI); invitation login, the wallet-link API and the web-wallet provider choice remain. Item 6 is done (`packages/domain` and its fixtures). Item 7 is done: in checkouts with the hooks enabled, one gate runs locally before every push, and CI runs the same checks on every pull request whether or not the hooks were enabled. Item 8 is decided (demo assumptions, confirmed by the user; nothing here runs yet):
+>
+> - **Route:** inland mine stockpile → rail siding → port terminal stockyard at a generic east-coast port. No real port, corridor or operator is named.
+> - **Synthetic organisations,** each labelled synthetic on screen: Khunou Ore Exports (exporter), Kopano Stockyard Custody (custodian), Mosela Haulage (transporter), Port Terminal T1, Lender One Bank, Lender Two Bank and Buyer Smelter Co.
+> - **Lot:** chrome ore lot CR-0001 of 5,000 t, valued at USD 200/t with a USD 600,000 advance. A buyer takes 2,000 t for USD 400,000. Facility currency is USD.
+> - **Manifest grouping:** one labelled synthetic batch (D21).
+> - **Loading document:** a synthetic bill of lading PDF whose SHA-256 is recorded. The demo never claims it secures the loan.
+>
+> Item 5 remains.
 
 ## 1. Phase 0 choices and proof
 

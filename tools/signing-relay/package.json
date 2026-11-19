@@ -1,0 +1,19 @@
+{
+  "name": "@thetis/signing-relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "signing-relay": "./src/cli.ts" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check . && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "relay": "node src/cli.ts"
+  },
+  "dependencies": {
+    "@solana/kit": "8.6.0"
+  },
+  "devDependencies": {
+    "litesvm": "1.6.1"
+  }
+}
