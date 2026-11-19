@@ -442,7 +442,7 @@ it("runs the devnet refusal command against the program in LiteSVM", async () =>
     "D32-inhouse-devnet swapped signers: refused (WrongSigner)",
     "D32-inhouse-devnet another receiver signer: refused (WrongSigner)",
     "D32-inhouse-devnet another quantity in signed text: refused (MessageMismatch)",
-    "D32-inhouse-devnet window 601 seconds: refused (WindowTooLong)",
+    "D32-inhouse-devnet window 660 seconds: refused (WindowTooLong)",
     "D32-inhouse-devnet replay: refused (StaleSequence)",
   ]);
 });

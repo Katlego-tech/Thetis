@@ -118,14 +118,12 @@ export async function runIntentRefusals(
     "MessageMismatch",
   );
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const [verify, handover] = await build(601n);
-    // If the chain clock advances before preflight, the second handover rolls back the first.
-    const error = await refusalName([verify, handover, handover]);
-    if (error === "StaleSequence" && attempt < 3) continue;
-    refused("window 601 seconds", error, "WindowTooLong");
-    break;
-  }
+  // The relay reads chain time from the latest confirmed block, which on devnet trails the
+  // executing slot's clock by a few seconds, so a window one second over the 600 s ceiling can
+  // land inside it. 660 s is over the ceiling by more than that drift. The second handover makes
+  // the transaction roll back if the first were ever accepted, so the batch stays usable.
+  const [verify, overlong] = await build(660n);
+  refused("window 660 seconds", await refusalName([verify, overlong, overlong]), "WindowTooLong");
 
   const honest = [...(await build(570n))];
   const original = await sendConfirmed(transport, sponsor, honest, legacy);
