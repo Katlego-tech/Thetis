@@ -136,9 +136,9 @@ the same instruction data at the same offsets.
 | Wallet | What it showed | Result |
 |---|---|---|
 | Phantom | The usual Connect sheet, with its "This app's identity could not be verified" banner (the app has no verified web domain). Then a plain **Sign message** sheet: the text in a collapsed card showing three lines; expanded, **all twelve lines** in full. No "unsafe" warning, no simulation error, no fee. | ✅ Signed; the relay verified it over the exact bytes. It took three attempts. First, an in-wallet "Update to the latest version" pop-up covered the request. Second, Phantom reloaded itself after Confirm and returned nothing. The third returned the signature 2 s after the request. |
-| Solflare | **Sign message** titled with the app's name, showing **all twelve lines** in full, with "Slide to approve". No network-mismatch error, no fee. | ✅ Signed on the first attempt; the relay verified it over the exact bytes. |
+| Solflare | **Sign message**, showing the app's name and **all twelve lines** in full, with "Slide to approve". No network-mismatch error, no fee. | ✅ Signed on the first attempt; the relay verified it over the exact bytes. |
 
-![Phantom's expanded Sign message sheet](0003-evidence/phantom-sign-message.png)
+![Phantom's expanded Sign message sheet (second attempt; the third, which signed, showed the same sheet)](0003-evidence/phantom-sign-message.png)
 ![Solflare's Sign message sheet](0003-evidence/solflare-sign-message.png)
 
 **On chain:**
@@ -169,5 +169,7 @@ The app showed "Verified over exact text: yes", `confirmed` and the same signatu
 - **Phantom labels the requester by its identity URI** (here github.com). A deployment uses the
   Thetis web domain with Digital Asset Links, which also removes the unverified-identity banner.
 
-Raw evidence (logcat, relay log, timelines, all screenshots, SHA256SUMS) is kept locally in
-`.phone-sessions/2026-11-19/`.
+Raw evidence is kept locally in `.phone-sessions/2026-11-19/`: logcat, relay log, MWA timelines,
+all screenshots, device and wallet versions read from the phones with `dumpsys`, the program's
+upgrade authority, and the SHA-256 of the deployed and local builds, with SHA256SUMS. It is not
+committed, because logcat is phone-wide and can hold device and account details.

@@ -1,7 +1,7 @@
 # ADR 0002: Two parties authorise one instruction through the Programmatic Signer
 
 **Status:** accepted for the on-chain part; check (a) **failed on real wallets**, 18 November 2026 ·
-**Decision:** D32 checks (b) and (c) confirmed; check (a) refuted, so D32 was reopened and **re-decided: in-house verification**, not yet proven on the phones · **Sources:**
+**Decision:** D32 checks (b) and (c) confirmed; check (a) refuted, so D32 was reopened and **re-decided: in-house verification**, proven on the phones on 19 November 2026 ([ADR 0003](0003-inhouse-intent-verification.md)) · **Sources:**
 D23, D24, D27, D32
 
 ## Context
