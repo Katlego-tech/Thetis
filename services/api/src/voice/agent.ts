@@ -9,6 +9,8 @@ type Tool = NonNullable<Prompt["tools"]>[number];
 
 export const AGENT_NAME = "Thetis navigator";
 export const SCREENS = ["queue", "exceptions", "lot", "release", "account"] as const;
+// The tool schema can only describe this to the model; the web and Android clients enforce it
+// and answer BAD_ID (docs/design/voice.md §3).
 export const ID_PATTERN = "^[A-Z0-9-]{1,16}$";
 
 const PROMPT = `# Personality

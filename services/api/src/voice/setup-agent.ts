@@ -14,7 +14,7 @@ async function main() {
 
   const config = agentConfig(VOICE_ID, ALLOWED_HOST);
   const existing = (
-    await client.conversationalAi.agents.list({ search: AGENT_NAME })
+    await client.conversationalAi.agents.list({ search: AGENT_NAME, pageSize: 100 })
   ).agents.filter((agent) => agent.name === AGENT_NAME);
   if (existing.length > 1) {
     throw new Error(`${existing.length} agents are named "${AGENT_NAME}"; delete the extras first`);
