@@ -20,7 +20,6 @@ const authorizationRequest = {
   identity: {
     name: copy.title,
     uri: "https://github.com/Katlego-tech/Thetis",
-    icon: "favicon.ico",
   },
 } as const;
 

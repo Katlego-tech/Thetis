@@ -28,7 +28,6 @@ const authorization = {
 const expectedIdentity = {
   name: "Thetis signing spike",
   uri: "https://github.com/Katlego-tech/Thetis",
-  icon: "favicon.ico",
 };
 const message = getCompiledTransactionMessageEncoder().encode({
   version: "legacy",
