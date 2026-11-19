@@ -8,28 +8,19 @@ import {
   Text,
   View,
 } from "react-native";
+import { copy, outcomeCopy, refusalCopy, roleCopy } from "./src/lib/copy";
 import {
-  copy,
-  outcomeCopy,
-  refusalCopy,
-  roleCopy,
-  routeCheckCopy,
-  routeCopy,
-} from "./src/lib/copy";
-import {
-  authorizationStatus,
   type Check,
   type Intent,
   type Outcome,
   type Role,
-  type Route,
   roles,
-  routes,
+  sameIntent,
 } from "./src/lib/relay";
 import { getIntent, getOutcome, postSignature, RelayUnreachable } from "./src/relay-client";
 import {
   connectWallet,
-  signWithWallet,
+  signIntent,
   WalletAccountError,
   type WalletConnection,
   WalletRefused,
@@ -109,12 +100,15 @@ function OutcomePanel({
   notice?: Notice;
   intentDigest?: string;
 }) {
-  const outcomeDigest = outcome?.authorizationSha256;
+  const outcomeDigest = outcome?.submittedMessageSha256;
   const differentBytes =
     intentDigest !== undefined && outcomeDigest !== undefined && intentDigest !== outcomeDigest;
   const currentOutcome =
-    intentDigest === undefined || outcomeDigest === intentDigest ? outcome : undefined;
-  const checksDigest = outcomeDigest ?? outcome?.activeAuthorizationSha256;
+    intentDigest === undefined ||
+    (outcome?.state === "waiting" ? outcome.activeMessageSha256 : outcomeDigest) === intentDigest
+      ? outcome
+      : undefined;
+  const checksDigest = outcomeDigest ?? outcome?.activeMessageSha256;
   const checks =
     intentDigest === undefined || checksDigest === intentDigest ? outcome?.checks : undefined;
   return (
@@ -149,12 +143,7 @@ function OutcomePanel({
       {roles.map((role) => (
         <View key={role} style={styles.section}>
           <Text style={styles.heading}>{roleCopy[role]}</Text>
-          {routes.map((route) => (
-            <View key={route}>
-              <Text>{routeCheckCopy[route]}</Text>
-              <CheckText check={checks?.[role][route]} />
-            </View>
-          ))}
+          <CheckText check={checks?.[role]} />
         </View>
       ))}
     </View>
@@ -168,7 +157,7 @@ export default function App() {
   const [progress, setProgress] = useState<string>();
   const [notice, setNotice] = useState<Notice>();
   const [payloadMismatch, setPayloadMismatch] = useState<number | null>();
-  const [lastCheck, setLastCheck] = useState<{ route: Route; result: Check }>();
+  const [lastCheck, setLastCheck] = useState<Check>();
   const pending = useRef(false);
   const { outcome, notice: outcomeNotice } = useOutcome();
   const expectedAddress = intent?.expectedAddress;
@@ -217,12 +206,6 @@ export default function App() {
     });
   }
 
-  function showStaleIntent(reason: "STALE_INTENT" | "INTENT_EXPIRED") {
-    setIntent(undefined);
-    setLastCheck(undefined);
-    setNotice({ title: refusalCopy[reason] });
-  }
-
   function loadIntent() {
     void run(copy.loading, async () => {
       const result = await getIntent(role).catch((error: unknown) => {
@@ -230,12 +213,12 @@ export default function App() {
         setLastCheck(undefined);
         throw error;
       });
-      if (!("intent" in result) && result.reason === "CHAIN_UNAVAILABLE") {
+      if (!("messageText" in result) && result.reason === "CHAIN_UNAVAILABLE") {
         setNotice({ title: refusalCopy.CHAIN_UNAVAILABLE });
         return;
       }
       setLastCheck(undefined);
-      if ("intent" in result) {
+      if ("messageText" in result) {
         setIntent(result);
       } else {
         setIntent(undefined);
@@ -244,59 +227,41 @@ export default function App() {
     });
   }
 
-  async function authorizationIsCurrent(loaded: Intent): Promise<boolean> {
+  async function intentIsCurrent(loaded: Intent): Promise<boolean> {
     const latest = await getIntent(loaded.role);
-    const submittedDigest =
-      "reason" in latest && latest.reason === "BATCH_COMPLETE"
-        ? (await getOutcome().catch(() => undefined))?.authorizationSha256
-        : undefined;
-    const status = authorizationStatus(loaded, latest, submittedDigest);
-    if (status === "current") return true;
-    if (status === "stale") {
-      showStaleIntent("intent" in latest ? "STALE_INTENT" : "INTENT_EXPIRED");
-    } else if (status === "batchComplete") {
+    if ("messageText" in latest && sameIntent(loaded, latest)) return true;
+
+    const reason = "messageText" in latest ? "STALE_INTENT" : latest.reason;
+    if (reason !== "CHAIN_UNAVAILABLE") {
       setIntent(undefined);
       setLastCheck(undefined);
-      setNotice({ title: refusalCopy.BATCH_COMPLETE });
-    } else {
-      setNotice({ title: refusalCopy[status] });
     }
+    setNotice({ title: refusalCopy[reason] });
     return false;
   }
 
-  function sign(route: Route) {
+  function sign() {
     if (!intent || !connection || mismatch) return;
     void run(copy.checkingIntent, async () => {
       setLastCheck(undefined);
-      if (!(await authorizationIsCurrent(intent))) return;
+      if (!(await intentIsCurrent(intent))) return;
       setProgress(copy.signing);
-      const signed = await signWithWallet(connection, intent, route, setConnection, async () => {
+      const signed = await signIntent(connection, intent, setConnection, async () => {
         setProgress(copy.checkingIntent);
-        if (!(await authorizationIsCurrent(intent))) return false;
+        if (!(await intentIsCurrent(intent))) return false;
         setProgress(copy.signing);
         return true;
       });
       if (!signed) return;
       setPayloadMismatch(signed.payloadMismatch);
+      if (!signed.submission) return;
 
       setProgress(copy.checkingIntent);
-      if (!(await authorizationIsCurrent(intent)) || !signed.submission) return;
+      if (!(await intentIsCurrent(intent))) return;
       setProgress(copy.sending);
       const result = await postSignature(signed.submission);
-      if (
-        result.verified ||
-        result.reason === "WRONG_ADDRESS" ||
-        result.reason === "BAD_SIGNATURE"
-      ) {
-        setLastCheck({ route, result });
-        if (!result.verified && result.reason === "BAD_SIGNATURE") {
-          await authorizationIsCurrent(intent);
-        }
-      } else if (result.reason === "INTENT_EXPIRED" || result.reason === "STALE_INTENT") {
-        showStaleIntent(result.reason);
-      } else {
-        setNotice({ title: refusalCopy[result.reason] });
-      }
+      setLastCheck(result);
+      if (!result.verified && result.reason === "STALE_INTENT") setIntent(undefined);
     });
   }
 
@@ -330,20 +295,17 @@ export default function App() {
         <View style={styles.section}>
           <Text>{copy.expectedAddress}</Text>
           <Text selectable>{intent.expectedAddress}</Text>
-          <Text style={styles.intent}>{intent.intent.text}</Text>
-          <Text selectable>
-            {copy.fingerprint} {intent.authorizationSha256.slice(0, 8)}
+          <Text selectable style={styles.intent}>
+            {intent.messageText}
           </Text>
+          <Text selectable>{`${copy.fingerprint} ${intent.messageSha256.slice(0, 8)}`}</Text>
         </View>
       )}
-      {routes.map((route) => (
-        <Button
-          key={route}
-          title={routeCopy[route]}
-          onPress={() => sign(route)}
-          disabled={busy || !connection || mismatch || !intent}
-        />
-      ))}
+      <Button
+        title={copy.sign}
+        onPress={sign}
+        disabled={busy || !connection || mismatch || !intent}
+      />
       {progress && <Text accessibilityLiveRegion="polite">{progress}</Text>}
       {notice && <NoticeText notice={notice} />}
       {payloadMismatch !== undefined && (
@@ -354,17 +316,8 @@ export default function App() {
           }}
         />
       )}
-      {lastCheck && (
-        <View accessibilityLiveRegion="polite">
-          <Text>{routeCheckCopy[lastCheck.route]}</Text>
-          <CheckText check={lastCheck.result} />
-        </View>
-      )}
-      <OutcomePanel
-        outcome={outcome}
-        notice={outcomeNotice}
-        intentDigest={intent?.authorizationSha256}
-      />
+      {lastCheck && <CheckText check={lastCheck} />}
+      <OutcomePanel outcome={outcome} notice={outcomeNotice} intentDigest={intent?.messageSha256} />
     </ScrollView>
   );
 }
@@ -381,5 +334,5 @@ const styles = StyleSheet.create({
   section: { gap: 8 },
   title: { fontSize: 24, fontWeight: "bold" },
   heading: { fontSize: 16, fontWeight: "bold" },
-  intent: { fontSize: 22 },
+  intent: { fontSize: 16, fontFamily: "monospace" },
 });

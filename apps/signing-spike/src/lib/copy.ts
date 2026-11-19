@@ -1,19 +1,9 @@
-import type { Outcome, RefusalReason, Role, Route } from "./relay";
+import type { Outcome, RefusalReason, Role } from "./relay";
 
 export const roleCopy = {
   sender: "Sender · Kopano",
   receiver: "Receiver · Mosela",
 } satisfies Record<Role, string>;
-
-export const routeCopy = {
-  message: "Sign as message",
-  transaction: "Sign as transaction",
-} satisfies Record<Route, string>;
-
-export const routeCheckCopy = {
-  message: "Message",
-  transaction: "Transaction",
-} satisfies Record<Route, string>;
 
 export const outcomeCopy = {
   waiting: "waiting",
@@ -28,9 +18,8 @@ export const refusalCopy = {
   BAD_SIGNATURE: "The relay could not verify the signature.",
   UNKNOWN_ROLE: "The relay did not recognize this role.",
   ALREADY_SUBMITTED: "The handover was already submitted.",
-  INTENT_EXPIRED: "Intent expired. Reload it.",
   STALE_INTENT: "Intent changed. Reload it.",
-  BATCH_COMPLETE: "Ask the operator to run setup",
+  BATCH_COMPLETE: "This batch is complete. Ask the operator for a fresh batch.",
   CHAIN_UNAVAILABLE: "The relay can't reach devnet right now. Try again.",
 } satisfies Record<RefusalReason, string>;
 
@@ -40,6 +29,7 @@ export const copy = {
   connecting: "Connecting…",
   loadIntent: "Load intent",
   loading: "Loading intent…",
+  sign: "Sign",
   signing: "Waiting for wallet…",
   checkingIntent: "Checking intent…",
   sending: "Sending signature to relay…",
@@ -59,8 +49,8 @@ export const copy = {
   notChecked: "Not checked",
   expectedAddress: "Expected address",
   authorizedAddress: "Authorized address",
-  fingerprint: "Authorization SHA-256",
+  fingerprint: "Message SHA-256",
   devnetSignature: "Devnet signature",
   size: (bytes: number) => `Size: ${bytes} bytes`,
-  verified: (verified: boolean) => `Verified over exact bytes: ${verified ? "yes" : "no"}`,
+  verified: (verified: boolean) => `Verified over exact text: ${verified ? "yes" : "no"}`,
 };

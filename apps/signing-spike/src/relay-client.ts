@@ -5,10 +5,12 @@ const REQUEST_TIMEOUT_MS = 8_000;
 
 export class RelayUnreachable extends Error {}
 
-export type SignatureSubmission = { role: Role; address: string; authorizationSha256: string } & (
-  | { route: "message"; signatureBase58: string }
-  | { route: "transaction"; signedTransactionBase64: string }
-);
+export interface SignatureSubmission {
+  role: Role;
+  address: string;
+  messageSha256: string;
+  signatureBase58: string;
+}
 
 async function request<T>(
   path: string,
@@ -34,7 +36,7 @@ async function request<T>(
 
 export async function getIntent(role: Role) {
   const result = await request(`/intent?role=${role}`, parseIntent);
-  if ("intent" in result) checkIntentRole(result, role);
+  if ("messageText" in result) checkIntentRole(result, role);
   return result;
 }
 

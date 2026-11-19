@@ -37,6 +37,7 @@ interface Lifetime {
 export interface ChainTransport {
   getGenesisHash(): Promise<string>;
   getSlot(): Promise<bigint>;
+  getChainTime(): Promise<bigint>;
   getBlockHeight(): Promise<bigint>;
   getSignatureStatus(signature: Signature): Promise<"confirmed" | "failed" | null>;
   waitForSlot(after: bigint): Promise<void>;
@@ -56,6 +57,8 @@ export class ChainTransactionError extends Error {
     this.logs = logs;
   }
 }
+
+export class BlockhashExpiredError extends Error {}
 
 export class SendPreflightError extends ChainTransactionError {
   override name = "SendPreflightError";
@@ -107,7 +110,11 @@ export async function prepareTransaction(
   transport: ChainTransport,
   sponsor: KeyPairSigner,
   instructions: Instruction[],
-  options: { signers?: KeyPairSigner[]; tables?: AddressesByLookupTableAddress } = {},
+  options: {
+    signers?: KeyPairSigner[];
+    tables?: AddressesByLookupTableAddress;
+    version?: "legacy" | 0;
+  } = {},
 ) {
   const lifetime = await transport.getLatestBlockhash();
   const message = appendTransactionMessageInstructions(
@@ -117,12 +124,17 @@ export async function prepareTransaction(
       setTransactionMessageFeePayer(sponsor.address, createTransactionMessage({ version: 0 })),
     ),
   );
-  const compressed = options.tables
-    ? compressTransactionMessageUsingAddressLookupTables(message, options.tables)
-    : message;
+  const compiled =
+    options.version === "legacy"
+      ? compileTransaction({ ...message, version: "legacy" })
+      : compileTransaction(
+          options.tables
+            ? compressTransactionMessageUsingAddressLookupTables(message, options.tables)
+            : message,
+        );
   const transaction = await partiallySignTransaction(
     [sponsor, ...(options.signers ?? [])].map(({ keyPair }) => keyPair),
-    compileTransaction(compressed),
+    compiled,
   );
   assertIsFullySignedTransaction(transaction);
   const sizeBytes = getTransactionEncoder().encode(transaction).length;
@@ -150,11 +162,24 @@ export async function sendConfirmed(
 }
 
 export function rpcTransport(url: string): ChainTransport {
+  return createRpcTransport(url, "confirmed");
+}
+
+export function intentRpcTransport(url: string): ChainTransport {
+  // Only replace an expired intent transaction once the expiry is finalized.
+  return createRpcTransport(url, "finalized");
+}
+
+function createRpcTransport(
+  url: string,
+  expiryCommitment: "confirmed" | "finalized",
+): ChainTransport {
   const rpc = createSolanaRpc(url);
   const commitment = "confirmed";
   const requestTimeout = () => ({ abortSignal: AbortSignal.timeout(15_000) });
   const getSlot = () => rpc.getSlot({ commitment }).send(requestTimeout());
-  const getBlockHeight = () => rpc.getBlockHeight({ commitment }).send(requestTimeout());
+  const getBlockHeight = () =>
+    rpc.getBlockHeight({ commitment: expiryCommitment }).send(requestTimeout());
   const getSignatureStatus: ChainTransport["getSignatureStatus"] = async (signature) => {
     const {
       value: [status],
@@ -169,6 +194,11 @@ export function rpcTransport(url: string): ChainTransport {
   return {
     getGenesisHash: () => rpc.getGenesisHash().send(requestTimeout()),
     getSlot,
+    async getChainTime() {
+      const blockTime = await rpc.getBlockTime(await getSlot()).send(requestTimeout());
+      if (blockTime === null) throw new Error("Devnet did not return the latest slot time");
+      return blockTime;
+    },
     getBlockHeight,
     getSignatureStatus,
     async waitForSlot(after) {
@@ -234,7 +264,7 @@ export function rpcTransport(url: string): ChainTransport {
           );
         }
         if ((await getBlockHeight()) > lastValidBlockHeight) {
-          throw new Error(`Blockhash expired before ${signature} was confirmed`);
+          throw new BlockhashExpiredError(`Blockhash expired before ${signature} was confirmed`);
         }
         if (performance.now() >= deadline) {
           throw new Error(`Confirmation timed out for ${signature}`);

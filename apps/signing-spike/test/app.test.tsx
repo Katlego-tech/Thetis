@@ -1,4 +1,3 @@
-import { address, blockhash, getCompiledTransactionMessageEncoder } from "@solana/kit";
 import { type MobileWallet, transact } from "@solana-mobile/mobile-wallet-adapter-protocol";
 import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -42,35 +41,19 @@ vi.mock("react", async (importOriginal) => ({
 
 const key = new Uint8Array(32).fill(7);
 const otherKey = new Uint8Array(32).fill(8);
-const expectedAddress = address(encodeBase58(key));
-const authorizationBase64 = encodeBase64(
-  getCompiledTransactionMessageEncoder().encode({
-    version: "legacy",
-    header: {
-      numSignerAccounts: 1,
-      numReadonlySignerAccounts: 0,
-      numReadonlyNonSignerAccounts: 0,
-    },
-    staticAccounts: [expectedAddress],
-    lifetimeToken: blockhash("11111111111111111111111111111111"),
-    instructions: [],
-  }),
-);
+const expectedAddress = encodeBase58(key);
+const messageText = "Thetis authorisation v1\nTest network only. Synthetic data.";
+const messageBase64 = Buffer.from(messageText).toString("base64");
 const intent = {
   role: "sender",
   expectedAddress,
-  authorizationBase64,
-  authorizationSha256: "a".repeat(64),
+  messageBase64,
+  messageText,
+  messageSha256: "a".repeat(64),
+  validUntil: "1795098725",
+  validUntilText: "2026-11-19 16:32:05 SAST",
+  expectedSequence: "0",
   network: "devnet",
-  intent: {
-    text: "Synthetic test data.",
-    batchId: "0123456789abcdef0123456789abcdef",
-    quantityKg: "2000000",
-    from: "Kopano Stockyard Custody",
-    to: "Mosela Haulage",
-    expirySlot: 9001,
-    expectedSequence: 0,
-  },
 };
 const authorization = {
   accounts: [{ address: encodeBase64(key) }],
@@ -139,12 +122,12 @@ it("clears the loaded intent and asks for a reload when the relay refuses STALE_
   );
   await press("Connect wallet");
   await press("Load intent");
-  await press("Sign as message");
+  await press("Sign");
 
   const { buttons, text } = inspectScreen();
   expect(text).toContain("Intent changed. Reload it.");
-  expect(text).not.toContain(intent.intent.text);
-  expect(buttons.get("Sign as message")?.disabled).toBe(true);
+  expect(text).not.toContain(intent.messageText);
+  expect(buttons.get("Sign")?.disabled).toBe(true);
   expect(fetchRelay.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
     "/intent",
     "/intent",
@@ -153,29 +136,29 @@ it("clears the loaded intent and asks for a reload when the relay refuses STALE_
     "/signature",
   ]);
   expect(JSON.parse(fetchRelay.mock.lastCall?.[1].body)).toMatchObject({
-    authorizationSha256: intent.authorizationSha256,
+    messageSha256: intent.messageSha256,
   });
 });
 
-it.each(["refreshed", "expired"])(
+it.each(["refreshed", "completed"])(
   "does not prompt or submit when /intent reports %s bytes after wallet authorization",
   async (change) => {
     const latest =
       change === "refreshed"
-        ? { ...intent, authorizationSha256: "b".repeat(64) }
-        : { verified: false, reason: "INTENT_EXPIRED" };
+        ? { ...intent, messageSha256: "b".repeat(64) }
+        : { verified: false, reason: "BATCH_COMPLETE" };
     fetchRelay
       .mockResolvedValueOnce(Response.json(intent))
       .mockResolvedValueOnce(Response.json(intent))
-      .mockResolvedValueOnce(Response.json(latest));
+      .mockResolvedValueOnce(Response.json(latest, { status: change === "refreshed" ? 200 : 409 }));
     await press("Connect wallet");
     await press("Load intent");
-    await press("Sign as message");
+    await press("Sign");
 
     expect(authorize).toHaveBeenCalledTimes(2);
     expect(signMessages).not.toHaveBeenCalled();
     expect(fetchRelay).toHaveBeenCalledTimes(3);
-    expect(inspectScreen().text).not.toContain(intent.intent.text);
+    expect(inspectScreen().text).not.toContain(intent.messageText);
   },
 );
 
@@ -184,10 +167,10 @@ it("rechecks freshness after signing and discards a signature for superseded byt
     .mockResolvedValueOnce(Response.json(intent))
     .mockResolvedValueOnce(Response.json(intent))
     .mockResolvedValueOnce(Response.json(intent))
-    .mockResolvedValueOnce(Response.json({ ...intent, authorizationSha256: "b".repeat(64) }));
+    .mockResolvedValueOnce(Response.json({ ...intent, messageSha256: "b".repeat(64) }));
   await press("Connect wallet");
   await press("Load intent");
-  await press("Sign as message");
+  await press("Sign");
 
   expect(signMessages).toHaveBeenCalledOnce();
   expect(fetchRelay.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
@@ -205,13 +188,13 @@ it("reports a relay failure during wallet authorization separately from wallet c
   fetchRelay
     .mockResolvedValueOnce(Response.json(intent))
     .mockRejectedValueOnce(new Error("Offline"));
-  await press("Sign as message");
+  await press("Sign");
   expect(inspectScreen().text).toContain("Run adb reverse");
   expect(inspectScreen().text).not.toContain("Wallet refused");
   expect(signMessages).not.toHaveBeenCalled();
 
   signMessages.mockRejectedValueOnce(new Error("User cancelled signing"));
-  await press("Sign as message");
+  await press("Sign");
   expect(inspectScreen().text).toContain("Wallet refused User cancelled signing");
 });
 
@@ -222,12 +205,12 @@ it("shows a payload mismatch alongside the relay's verification of the parsed si
   );
   await press("Connect wallet");
   await press("Load intent");
-  await press("Sign as message");
+  await press("Sign");
 
   const { text } = inspectScreen();
   expect(text).toContain("Payload mismatch");
   expect(text).toContain("Received 65 bytes");
-  expect(text).toContain("Verified over exact bytes: yes");
+  expect(text).toContain("Verified over exact text: yes");
   expect(text).not.toContain("Wallet refused");
   expect(JSON.parse(fetchRelay.mock.lastCall?.[1].body)).toMatchObject({
     signatureBase58: "1".repeat(64),
@@ -241,23 +224,23 @@ it.each(["bbbbbbbb", "aaaaaaaa"])(
     // A matching eight-character fingerprint still requires comparing the full digest.
     const otherOutcome = {
       state: "confirmed",
-      activeAuthorizationSha256: intent.authorizationSha256,
-      authorizationSha256: `${fingerprint}${"b".repeat(56)}`,
+      activeMessageSha256: intent.messageSha256,
+      submittedMessageSha256: `${fingerprint}${"b".repeat(56)}`,
       signature: "otherDevnetSignature",
-      checks: { sender: { message: { verified: true } }, receiver: {} },
+      checks: { sender: { verified: true } },
     };
     fetchRelay.mockImplementation(async () => Response.json(otherOutcome));
     const startPolling = screen.effect as () => () => void;
     const stopPolling = startPolling();
     try {
       await vi.waitFor(() =>
-        expect(inspectScreen().text).toContain(`Outcome Authorization SHA-256 ${fingerprint}`),
+        expect(inspectScreen().text).toContain(`Outcome Message SHA-256 ${fingerprint}`),
       );
       const { text } = inspectScreen();
       expect(text).toContain("This outcome is for different bytes than the intent on this screen");
       expect(text).not.toContain("confirmed");
       expect(text).not.toContain("otherDevnetSignature");
-      expect(text).not.toContain("Verified over exact bytes: yes");
+      expect(text).not.toContain("Verified over exact text: yes");
     } finally {
       stopPolling();
     }
@@ -265,7 +248,7 @@ it.each(["bbbbbbbb", "aaaaaaaa"])(
 );
 
 it.each([
-  { binding: "matching", digest: intent.authorizationSha256, expected: "confirmed" },
+  { binding: "matching", digest: intent.messageSha256, expected: "confirmed" },
   {
     binding: "missing",
     digest: undefined,
@@ -278,9 +261,9 @@ it.each([
     fetchRelay.mockImplementation(async () =>
       Response.json({
         state: "confirmed",
-        activeAuthorizationSha256: intent.authorizationSha256,
-        authorizationSha256: digest,
-        checks: { sender: { message: { verified: true } }, receiver: {} },
+        activeMessageSha256: intent.messageSha256,
+        submittedMessageSha256: digest,
+        checks: { sender: { verified: true } },
       }),
     );
     const startPolling = screen.effect as () => () => void;
@@ -288,7 +271,7 @@ it.each([
     try {
       await vi.waitFor(() => expect(inspectScreen().text).toContain(expected));
       const { text } = inspectScreen();
-      expect(text).toContain("Verified over exact bytes: yes");
+      expect(text).toContain("Verified over exact text: yes");
       expect(text.includes("confirmed")).toBe(digest !== undefined);
     } finally {
       stopPolling();
@@ -296,29 +279,13 @@ it.each([
   },
 );
 
-it("signs and submits the remaining diagnostic route when BATCH_COMPLETE refers to the loaded bytes", async () => {
+it("shows the full text and fingerprint with one signing action", async () => {
   await press("Connect wallet");
   await press("Load intent");
-  fetchRelay.mockImplementation(async (url: string) => {
-    if (url.endsWith("/outcome")) {
-      return Response.json({
-        state: "confirmed",
-        activeAuthorizationSha256: intent.authorizationSha256,
-        authorizationSha256: intent.authorizationSha256,
-        checks: { sender: { transaction: { verified: true } }, receiver: {} },
-      });
-    }
-    if (url.endsWith("/signature")) return Response.json({ verified: true });
-    return Response.json({ verified: false, reason: "BATCH_COMPLETE" });
-  });
-  await press("Sign as message");
-
-  expect(signMessages).toHaveBeenCalledOnce();
-  expect(JSON.parse(fetchRelay.mock.lastCall?.[1].body)).toMatchObject({
-    route: "message",
-    authorizationSha256: intent.authorizationSha256,
-  });
-  expect(inspectScreen().text).toContain(intent.intent.text);
+  const { buttons, text } = inspectScreen();
+  expect(text).toContain(messageText);
+  expect(text).toContain("Message SHA-256 aaaaaaaa");
+  expect([...buttons.keys()].filter((label) => label.startsWith("Sign"))).toEqual(["Sign"]);
 });
 
 it.each([
@@ -334,38 +301,39 @@ it.each([
         url.endsWith("/outcome")
           ? {
               state: "confirmed",
-              activeAuthorizationSha256: intent.authorizationSha256,
-              authorizationSha256: digest,
-              checks: { sender: {}, receiver: {} },
+              activeMessageSha256: intent.messageSha256,
+              submittedMessageSha256: digest,
+              checks: {},
             }
           : { verified: false, reason: "BATCH_COMPLETE" },
+        { status: url.endsWith("/outcome") ? 200 : 409 },
       ),
     );
-    await press("Sign as message");
+    await press("Sign");
 
-    expect(fetchRelay.mock.lastCall?.[0]).toMatch(/\/outcome$/);
+    expect(fetchRelay.mock.lastCall?.[0]).toContain("/intent");
     expect(authorize).toHaveBeenCalledOnce();
     expect(signMessages).not.toHaveBeenCalled();
     const { text } = inspectScreen();
-    expect(text).toContain("Ask the operator to run setup");
-    expect(text).not.toContain(intent.intent.text);
+    expect(text).toContain("This batch is complete. Ask the operator for a fresh batch.");
+    expect(text).not.toContain(intent.messageText);
   },
 );
 
 it.each([
-  { binding: "matching", digest: intent.authorizationSha256, visible: true },
+  { binding: "matching", digest: intent.messageSha256, visible: true },
   { binding: "different", digest: "b".repeat(64), visible: false },
 ])(
-  "shows both phones' waiting route checks only for a matching active digest ($binding)",
+  "shows both phones' waiting checks only for a matching active digest ($binding)",
   async ({ digest, visible }) => {
     await press("Load intent");
     fetchRelay.mockImplementation(async () =>
       Response.json({
         state: "waiting",
-        activeAuthorizationSha256: digest,
+        activeMessageSha256: digest,
         checks: {
-          sender: { message: { verified: true } },
-          receiver: { transaction: { verified: false, reason: "BAD_SIGNATURE" } },
+          sender: { verified: true },
+          receiver: { verified: false, reason: "BAD_SIGNATURE" },
         },
       }),
     );
@@ -374,9 +342,11 @@ it.each([
     try {
       await vi.waitFor(() => {
         const { text } = inspectScreen();
-        expect(text).toContain("Waiting for an outcome for the loaded intent");
-        expect(text.includes("Verified over exact bytes: yes")).toBe(visible);
-        expect(text.includes("Verified over exact bytes: no")).toBe(visible);
+        expect(text).toContain(
+          visible ? "waiting" : "Waiting for an outcome for the loaded intent",
+        );
+        expect(text.includes("Verified over exact text: yes")).toBe(visible);
+        expect(text.includes("Verified over exact text: no")).toBe(visible);
       });
     } finally {
       stopPolling();
@@ -403,10 +373,10 @@ it("selects a matching secondary authorized account when the intent loads withou
   fetchRelay.mockImplementation(async (url: string) =>
     Response.json(url.endsWith("/signature") ? { verified: true } : intent),
   );
-  await press("Sign as message");
+  await press("Sign");
   expect(signMessages).toHaveBeenCalledWith({
     addresses: [encodeBase64(key)],
-    payloads: [authorizationBase64],
+    payloads: [messageBase64],
   });
 });
 
@@ -422,6 +392,40 @@ it("warns and disables signing when none of the authorized accounts match the lo
   await press("Load intent");
   const { buttons, text } = inspectScreen();
   expect(text).toContain("The authorized address does not match this role.");
-  expect(buttons.get("Sign as message")?.disabled).toBe(true);
-  expect(buttons.get("Sign as transaction")?.disabled).toBe(true);
+  expect(buttons.get("Sign")?.disabled).toBe(true);
+  expect(buttons.has("Sign as transaction")).toBe(false);
+});
+
+it("polls every three seconds and shows an unknown outcome with both checks and transaction details", async () => {
+  fetchRelay.mockImplementation(async () =>
+    Response.json({
+      state: "unknown",
+      activeMessageSha256: intent.messageSha256,
+      submittedMessageSha256: intent.messageSha256,
+      signature: "pendingSignature",
+      sizeBytes: 900,
+      checks: {
+        sender: { verified: true },
+        receiver: { verified: true },
+      },
+    }),
+  );
+  inspectScreen();
+  vi.useFakeTimers();
+  const startPolling = screen.effect as () => () => void;
+  const stopPolling = startPolling();
+  try {
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(fetchRelay).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchRelay).toHaveBeenCalledTimes(2);
+    const { text } = inspectScreen();
+    expect(text).toContain("Outcome unknown: check the explorer");
+    expect(text).toContain("pendingSignature");
+    expect(text).toContain("Size: 900 bytes");
+    expect(text.match(/Verified over exact text: yes/g)).toHaveLength(2);
+  } finally {
+    stopPolling();
+    vi.useRealTimers();
+  }
 });

@@ -95,6 +95,9 @@ async function fixture(rebuiltProgram = false) {
     getGenesisHash,
     getSignatureStatus: signatureStatus,
     getBlockHeight: blockHeight,
+    async getChainTime() {
+      return svm.getClock().unixTimestamp;
+    },
     async getSlot() {
       return svm.getClock().slot;
     },
