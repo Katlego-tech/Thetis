@@ -6,8 +6,9 @@ pub mod instructions;
 pub mod intent;
 pub mod state;
 
+use instructions::documents::{self, *};
 use instructions::setup::{self, *};
-use state::{Role, SettlementMode};
+use state::{DocumentKind, Role, SettlementMode};
 
 declare_id!("jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3");
 
@@ -86,5 +87,20 @@ pub mod thetis {
 
     pub fn unpause(ctx: Context<SetPause>, flags: u16) -> Result<()> {
         setup::set_pause(ctx, flags, false)
+    }
+
+    pub fn attest_document(
+        ctx: Context<AttestDocument>,
+        kind: DocumentKind,
+        subject: [u8; 32],
+        version: u32,
+        sha256: [u8; 32],
+        valid_until: i64,
+    ) -> Result<()> {
+        documents::attest_document(ctx, kind, subject, version, sha256, valid_until)
+    }
+
+    pub fn revoke_document(ctx: Context<RevokeDocument>) -> Result<()> {
+        documents::revoke_document(ctx)
     }
 }

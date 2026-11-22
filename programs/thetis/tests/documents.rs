@@ -292,3 +292,26 @@ fn revoke_rejects_already_revoked_document() {
         Some(NOW)
     );
 }
+
+#[test]
+fn revoke_rejects_revoked_authority() {
+    let (mut f, issuer_org) = issuer_setup();
+    f.ok(attest_origin(&f, Issuer, issuer_org), Issuer);
+    let document = f.document(KIND, INTAKE_DIGEST, 1);
+    let revoke = f.revoke(OrgAdmin, issuer_org, f.authority(f.key(Issuer)));
+    f.ok(revoke, OrgAdmin);
+
+    let revoke_document = f.revoke_document(Issuer, issuer_org, document);
+    f.refused(revoke_document, Issuer, AuthorityRevoked);
+    assert_eq!(f.read::<DocumentAttestation>(document).revoked_at, None);
+}
+
+#[test]
+fn attest_rejects_authority_of_another_wallet() {
+    let (mut f, issuer_org) = issuer_setup();
+    // Issuer2 signs but passes Issuer's Authority (accounts[2] is `authority`).
+    let mut attest = attest_origin(&f, Issuer2, issuer_org);
+    attest.accounts[2].pubkey = f.authority(f.key(Issuer));
+    f.refused(attest, Issuer2, WrongSigner);
+    assert!(!f.account_exists(f.document(KIND, INTAKE_DIGEST, 1)));
+}
