@@ -1037,6 +1037,44 @@ fn split_rejects_custodian_of_another_site() {
 }
 
 #[test]
+fn split_rejects_owner_authority_of_another_organisation() {
+    let mut w = World::demo();
+    let args = SplitArgs {
+        owner_authority: w.buyer_authority,
+        signers: vec![Buyer, Custodian],
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, WrongOrganisation);
+}
+
+#[test]
+fn split_rejects_custodian_authority_of_another_organisation() {
+    let mut w = World::demo();
+    let args = SplitArgs {
+        custodian_authority: w.other_custodian_authority,
+        signers: vec![Owner, Custodian2],
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, WrongOrganisation);
+}
+
+#[test]
+fn split_rejects_other_custodian_with_its_own_site() {
+    let mut w = World::demo();
+    let args = SplitArgs {
+        custodian: w.other_custodian,
+        custodian_class: w.other_custodian_class,
+        custodian_authority: w.other_custodian_authority,
+        signers: vec![Owner, Custodian2],
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, WrongOrganisation);
+}
+
+#[test]
 fn split_rejects_whole_lot() {
     let mut w = World::demo();
 
@@ -1051,6 +1089,30 @@ fn split_rejects_class_without_inheritance() {
     });
 
     w.assert_refused(&w.args("CR-0001-A", 2_000_000, 0), SplitNeedsReassay);
+}
+
+#[test]
+fn split_rejects_class_policy_of_another_class() {
+    let mut w = World::build(Spec {
+        split_inherits_expiry: false,
+        ..Spec::demo()
+    });
+    let register = w.f.register_with_inheritance(
+        Accreditor,
+        "IRON",
+        1,
+        &w.spec.grades,
+        LOT_VALIDITY,
+        true,
+        true,
+    );
+    w.f.ok(register, Accreditor);
+    let args = SplitArgs {
+        class_policy: w.f.class("IRON", 1),
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, WrongOrganisation);
 }
 
 #[test]
@@ -1071,6 +1133,11 @@ fn split_rejects_root_mismatch() {
         ..w.args_for("CR-0001-A", "CR-0001-B", 500_000, 0)
     };
     w.assert_refused(&wrong, RootMismatch);
+    let aliased = SplitArgs {
+        root: Some(w.lot_key("CR-0001-A")),
+        ..w.args_for("CR-0001-A", "CR-0001-B", 500_000, 0)
+    };
+    w.assert_refused(&aliased, RootMismatch);
     // A root parent takes none.
     let present = SplitArgs {
         root: Some(second_root),
@@ -1124,6 +1191,18 @@ fn split_rejects_position_of_another_owner() {
         signers: vec![Buyer, Custodian],
         position: Some(w.root_position(w.owner)),
         ..w.args("CR-0001-A", 500_000, 1)
+    };
+
+    w.assert_refused(&args, WrongOrganisation);
+}
+
+#[test]
+fn split_rejects_position_of_another_lot() {
+    let mut w = World::demo();
+    let second_root = w.issue_second_root();
+    let args = SplitArgs {
+        position: Some(w.position_key(second_root, w.owner)),
+        ..w.args("CR-0001-A", 500_000, 0)
     };
 
     w.assert_refused(&args, WrongOrganisation);
@@ -1217,6 +1296,65 @@ fn split_rejects_when_paused() {
     w.f.ok(pause, Admin);
 
     w.assert_refused(&w.args("CR-0001-A", 2_000_000, 0), Paused);
+}
+
+#[test]
+fn split_rejects_redeemed_lot() {
+    let mut w = World::demo();
+    w.forge_lot(w.spec.lot_id, |lot| lot.state = LotState::Redeemed);
+
+    w.assert_refused(&w.args("CR-0001-A", 2_000_000, 0), LotNotStored);
+}
+
+#[test]
+fn split_rejects_expired_intent() {
+    let mut w = World::demo();
+    let args = SplitArgs {
+        valid_until: w.now - 1,
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, Expired);
+}
+
+#[test]
+fn split_rejects_window_of_601_seconds() {
+    let mut w = World::demo();
+    let args = SplitArgs {
+        valid_until: w.now + 601,
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, WindowTooLong);
+}
+
+#[test]
+fn split_rejects_revoked_owner_authority() {
+    let mut w = World::demo();
+    let revoke = w.f.revoke(OrgAdmin, w.owner, w.authority);
+    w.f.ok(revoke, OrgAdmin);
+
+    w.assert_refused(&w.args("CR-0001-A", 2_000_000, 0), AuthorityRevoked);
+}
+
+#[test]
+fn split_rejects_revoked_custodian_authority() {
+    let mut w = World::demo();
+    let revoke = w.f.revoke(OrgAdmin, w.custodian, w.custodian_authority);
+    w.f.ok(revoke, OrgAdmin);
+
+    w.assert_refused(&w.args("CR-0001-A", 2_000_000, 0), AuthorityRevoked);
+}
+
+#[test]
+fn split_rejects_wrong_text() {
+    let mut w = World::demo();
+    let args = SplitArgs {
+        text: Some(w.text(&w.args("CR-0001-A", 1_000_000, 0))),
+        ..w.args("CR-0001-A", 2_000_000, 0)
+    };
+
+    w.assert_refused(&args, MessageMismatch);
 }
 
 #[test]

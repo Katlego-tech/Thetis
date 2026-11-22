@@ -11,6 +11,7 @@ mod validate;
 use instructions::documents::{self, *};
 use instructions::issue::{self, *};
 use instructions::setup::{self, *};
+use instructions::split::{self, *};
 use instructions::transfer::{self, *};
 use state::{DocumentKind, Role, SettlementMode};
 
@@ -126,5 +127,21 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         transfer::transfer(ctx, quantity_kg, expected_revision, valid_until)
+    }
+
+    pub fn split(
+        ctx: Context<Split>,
+        child_lot_id: String,
+        quantity_kg: u64,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        split::split(
+            ctx,
+            child_lot_id,
+            quantity_kg,
+            expected_revision,
+            valid_until,
+        )
     }
 }
