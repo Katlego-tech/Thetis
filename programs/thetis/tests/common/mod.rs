@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use anchor_lang::{
     __private::base64::{engine::general_purpose::STANDARD, Engine},
-    prelude::Pubkey,
+    prelude::{pubkey, Pubkey, SlotHashes},
     AccountDeserialize, AccountSerialize, Event, InstructionData, ToAccountMetas,
 };
 use litesvm::{
@@ -10,10 +10,10 @@ use litesvm::{
 };
 use solana_clock::Clock;
 use solana_keypair::Keypair;
-use solana_message::{Message, VersionedMessage};
+use solana_message::{v0, AddressLookupTableAccount, Message, VersionedMessage};
 use solana_signer::Signer;
 use solana_transaction::{
-    versioned::VersionedTransaction, Instruction, InstructionError, TransactionError,
+    versioned::VersionedTransaction, AccountMeta, Instruction, InstructionError, TransactionError,
 };
 use thetis::{accounts, error::ThetisError, instruction, state::*, ID};
 
@@ -55,6 +55,8 @@ pub enum Actor {
     OrgAdmin,
     Issuer,
     Issuer2,
+    Custodian,
+    Custodian2,
     Outsider,
 }
 
@@ -70,6 +72,8 @@ pub struct Fixture {
     org_admin: Keypair,
     issuer: Keypair,
     issuer2: Keypair,
+    custodian: Keypair,
+    custodian2: Keypair,
     outsider: Keypair,
     pub protocol: Pubkey,
 }
@@ -98,6 +102,8 @@ impl Fixture {
             org_admin: Keypair::new(),
             issuer: Keypair::new(),
             issuer2: Keypair::new(),
+            custodian: Keypair::new(),
+            custodian2: Keypair::new(),
             outsider: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
@@ -110,7 +116,7 @@ impl Fixture {
         fixture
     }
 
-    fn signer(&self, actor: Actor) -> &Keypair {
+    pub fn signer(&self, actor: Actor) -> &Keypair {
         match actor {
             Admin => &self.admin,
             Accreditor => &self.accreditor,
@@ -119,6 +125,8 @@ impl Fixture {
             OrgAdmin => &self.org_admin,
             Issuer => &self.issuer,
             Issuer2 => &self.issuer2,
+            Custodian => &self.custodian,
+            Custodian2 => &self.custodian2,
             Outsider => &self.outsider,
         }
     }
@@ -182,6 +190,18 @@ impl Fixture {
         grades: &[&str],
         validity: i64,
     ) -> Instruction {
+        self.register_with_origin(signer, code, version, grades, validity, true)
+    }
+
+    pub fn register_with_origin(
+        &self,
+        signer: Actor,
+        code: &str,
+        version: u32,
+        grades: &[&str],
+        validity: i64,
+        origin_required: bool,
+    ) -> Instruction {
         ix(
             accounts::RegisterClass {
                 protocol: self.protocol,
@@ -194,7 +214,7 @@ impl Fixture {
                 class_code: code.into(),
                 version,
                 grades: grades.iter().map(|grade| (*grade).into()).collect(),
-                origin_required: true,
+                origin_required,
                 lot_validity_secs: validity,
                 split_inherits_expiry: true,
             },
@@ -364,6 +384,13 @@ impl Fixture {
         });
     }
 
+    /// Moves the clock to `unix_timestamp` and keeps the slot, so it is safe after a warp.
+    pub fn set_time(&mut self, unix_timestamp: i64) {
+        let mut clock = self.svm.get_sysvar::<Clock>();
+        clock.unix_timestamp = unix_timestamp;
+        self.svm.set_sysvar(&clock);
+    }
+
     pub fn document(&self, kind: DocumentKind, subject: [u8; 32], version: u32) -> Pubkey {
         pda(&[
             b"document",
@@ -520,14 +547,20 @@ impl Fixture {
     }
 
     fn refusal(&mut self, instruction: Instruction, actor: Actor) -> FailedTransactionMetadata {
-        let keys: Vec<_> = instruction
-            .accounts
-            .iter()
-            .map(|meta| meta.pubkey)
-            .collect();
+        let keys = touched_keys(std::slice::from_ref(&instruction));
+        let tx = self.transaction(&instruction, actor);
+        self.failure_without_effect(&keys, tx)
+    }
+
+    /// Sends a transaction that must fail and asserts that it changed nothing but the
+    /// payer's balance (by the fee) and emitted no event.
+    fn failure_without_effect(
+        &mut self,
+        keys: &[Pubkey],
+        tx: VersionedTransaction,
+    ) -> FailedTransactionMetadata {
         let payer = self.payer.pubkey();
         let state_before: Vec<_> = keys.iter().map(|key| self.svm.get_account(key)).collect();
-        let tx = self.transaction(&instruction, actor);
         let failure = self.svm.send_transaction(tx).unwrap_err();
         let mut state_after: Vec<_> = keys.iter().map(|key| self.svm.get_account(key)).collect();
         for (key, account) in keys.iter().zip(&mut state_after) {
@@ -539,5 +572,231 @@ impl Fixture {
         assert_eq!(state_before, state_after, "{}", failure.meta.pretty_logs());
         assert!(event_data(&failure.meta).next().is_none());
         failure
+    }
+
+    pub fn payer(&self) -> Pubkey {
+        self.payer.pubkey()
+    }
+
+    pub fn balance(&self, address: Pubkey) -> u64 {
+        self.svm.get_balance(&address).unwrap_or(0)
+    }
+
+    /// The owning program of an account, if it exists.
+    pub fn owner(&self, address: Pubkey) -> Option<Pubkey> {
+        Some(self.svm.get_account(&address)?.owner)
+    }
+
+    /// The raw data of an account, empty when it does not exist.
+    pub fn data(&self, address: Pubkey) -> Vec<u8> {
+        self.svm
+            .get_account(&address)
+            .map(|account| account.data)
+            .unwrap_or_default()
+    }
+
+    /// Token (Token-2022 or Token) account balance: the u64 at bytes 64..72 of the base layout.
+    pub fn token_amount(&self, address: Pubkey) -> u64 {
+        let data = self.data(address);
+        u64::from_le_bytes(data[64..72].try_into().unwrap())
+    }
+
+    /// Mint supply: the u64 at bytes 36..44 of the base layout.
+    pub fn mint_supply(&self, address: Pubkey) -> u64 {
+        let data = self.data(address);
+        u64::from_le_bytes(data[36..44].try_into().unwrap())
+    }
+
+    /// A signed v0 transaction paid for and signed by the sponsor only.
+    pub fn sponsored_v0(
+        &mut self,
+        instructions: &[Instruction],
+        tables: &[AddressLookupTableAccount],
+    ) -> VersionedTransaction {
+        self.svm.expire_blockhash();
+        let message = v0::Message::try_compile(
+            &self.payer.pubkey(),
+            instructions,
+            tables,
+            self.svm.latest_blockhash(),
+        )
+        .unwrap();
+        VersionedTransaction::try_new(VersionedMessage::V0(message), &[&self.payer]).unwrap()
+    }
+
+    pub fn send(
+        &mut self,
+        tx: VersionedTransaction,
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        self.svm.send_transaction(tx)
+    }
+
+    fn sponsored_transaction(&mut self, instructions: &[Instruction]) -> VersionedTransaction {
+        self.svm.expire_blockhash();
+        let message = Message::new_with_blockhash(
+            instructions,
+            Some(&self.payer.pubkey()),
+            &self.svm.latest_blockhash(),
+        );
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[&self.payer]).unwrap()
+    }
+
+    /// Sends a legacy transaction that the fee payer alone signs: the shape of a sponsored
+    /// intent, whose authority signatures live in an Ed25519 instruction.
+    pub fn send_sponsored(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        let tx = self.sponsored_transaction(instructions);
+        self.svm.send_transaction(tx)
+    }
+
+    pub fn sponsored_ok(&mut self, instructions: &[Instruction]) -> TransactionMetadata {
+        self.send_sponsored(instructions).unwrap_or_else(|failure| {
+            panic!(
+                "sponsored transaction failed: {:?}\n{}",
+                failure.err,
+                failure.meta.pretty_logs()
+            )
+        })
+    }
+
+    /// Asserts instruction `index` fails with `expected`, with no state change and no event.
+    pub fn sponsored_refused(
+        &mut self,
+        instructions: &[Instruction],
+        index: u8,
+        expected: ThetisError,
+    ) {
+        let code: u32 = expected.into();
+        let failure = self.sponsored_failure(instructions);
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(index, InstructionError::Custom(code)),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+    }
+
+    /// Asserts instruction `index` fails because an account it creates already exists.
+    pub fn sponsored_already_in_use(&mut self, instructions: &[Instruction], index: u8) {
+        let failure = self.sponsored_failure(instructions);
+        // System program AccountAlreadyInUse from Anchor's init allocation.
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(index, InstructionError::Custom(0)),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+        assert!(failure
+            .meta
+            .logs
+            .iter()
+            .any(|line| line.contains("already in use")));
+    }
+
+    fn sponsored_failure(&mut self, instructions: &[Instruction]) -> FailedTransactionMetadata {
+        let mut keys = touched_keys(instructions);
+        if !keys.contains(&self.payer.pubkey()) {
+            keys.push(self.payer.pubkey());
+        }
+        let tx = self.sponsored_transaction(instructions);
+        self.failure_without_effect(&keys, tx)
+    }
+
+    /// Creates an address lookup table holding `addresses` and warps one slot so that it is
+    /// active. The clock keeps its time.
+    pub fn create_lookup_table(&mut self, addresses: Vec<Pubkey>) -> AddressLookupTableAccount {
+        const LOOKUP_PROGRAM: Pubkey = pubkey!("AddressLookupTab1e1111111111111111111111111");
+        // The table is derived from a slot present in SlotHashes; `set_clock` leaves slot 0.
+        let slot = self.svm.get_sysvar::<SlotHashes>()[0].0;
+        let mut clock = self.svm.get_sysvar::<Clock>();
+        clock.slot = slot;
+        self.svm.set_sysvar(&clock);
+
+        let payer = self.payer.pubkey();
+        let (key, bump) =
+            Pubkey::find_program_address(&[payer.as_ref(), &slot.to_le_bytes()], &LOOKUP_PROGRAM);
+        // Native lookup-table bincode ABI: CreateLookupTable = 0, ExtendLookupTable = 2.
+        let table_accounts = vec![
+            AccountMeta::new(key, false),
+            AccountMeta::new_readonly(payer, true),
+            AccountMeta::new(payer, true),
+            AccountMeta::new_readonly(SYSTEM, false),
+        ];
+        let create = Instruction::new_with_bincode(
+            LOOKUP_PROGRAM,
+            &(0_u32, slot, bump),
+            table_accounts.clone(),
+        );
+        let extend =
+            Instruction::new_with_bincode(LOOKUP_PROGRAM, &(2_u32, &addresses), table_accounts);
+        self.sponsored_ok(&[create, extend]);
+        // Extended addresses become available in the slot after the extension.
+        self.svm.warp_to_slot(slot + 1);
+        AddressLookupTableAccount { key, addresses }
+    }
+}
+
+/// Every account the instructions name, once each, in first-seen order.
+fn touched_keys(instructions: &[Instruction]) -> Vec<Pubkey> {
+    let mut keys = Vec::new();
+    for meta in instructions.iter().flat_map(|ix| &ix.accounts) {
+        if !keys.contains(&meta.pubkey) {
+            keys.push(meta.pubkey);
+        }
+    }
+    keys
+}
+
+/// The serialised size of a signed transaction, as the network counts it against the
+/// 1,232-byte packet limit.
+pub fn transaction_size(tx: &VersionedTransaction) -> usize {
+    Instruction::new_with_wincode(ID, tx, vec![]).data.len()
+}
+
+/// An Ed25519 precompile instruction with one entry per `(signer, message)` pair; every
+/// instruction-index field is `0xFFFF`, so the data refers to the instruction itself.
+pub fn ed25519_instruction(entries: &[(&Keypair, &[u8])]) -> Instruction {
+    ed25519_instruction_at(entries, u16::MAX)
+}
+
+/// As `ed25519_instruction`, but every instruction-index field is `instruction_index`: an
+/// explicit number instead of the self-reference sentinel.
+pub fn ed25519_instruction_at(
+    entries: &[(&Keypair, &[u8])],
+    instruction_index: u16,
+) -> Instruction {
+    const OFFSETS_LEN: u16 = 14;
+    let count = u8::try_from(entries.len()).unwrap();
+    let mut payload_offset = 2 + OFFSETS_LEN * u16::from(count);
+    let mut data = vec![count, 0];
+    let mut payloads = Vec::new();
+    for (signer, message) in entries {
+        let message_size = u16::try_from(message.len()).unwrap();
+        let signature_offset = payload_offset;
+        let public_key_offset = signature_offset + 64;
+        let message_offset = public_key_offset + 32;
+        for field in [
+            signature_offset,
+            instruction_index,
+            public_key_offset,
+            instruction_index,
+            message_offset,
+            message_size,
+            instruction_index,
+        ] {
+            data.extend_from_slice(&field.to_le_bytes());
+        }
+        payloads.extend_from_slice(signer.sign_message(message).as_ref());
+        payloads.extend_from_slice(signer.pubkey().as_ref());
+        payloads.extend_from_slice(message);
+        payload_offset = message_offset + message_size;
+    }
+    data.extend_from_slice(&payloads);
+    Instruction {
+        program_id: solana_sdk_ids::ed25519_program::ID,
+        accounts: vec![],
+        data,
     }
 }
