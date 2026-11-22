@@ -4611,8 +4611,10 @@ dependencies = [
  "anchor-spl",
  "litesvm",
  "solana-clock",
+ "solana-instructions-sysvar 3.0.1",
  "solana-keypair",
  "solana-message",
+ "solana-sdk-ids",
  "solana-signer",
  "solana-transaction",
 ]

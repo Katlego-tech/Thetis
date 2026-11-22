@@ -339,6 +339,10 @@ impl Fixture {
         }
     }
 
+    pub fn account_exists(&self, address: Pubkey) -> bool {
+        self.svm.get_account(&address).is_some()
+    }
+
     pub fn read<T: AccountDeserialize>(&self, address: Pubkey) -> T {
         let account = self.svm.get_account(&address).unwrap();
         assert_eq!(account.owner, ID);

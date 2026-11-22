@@ -216,6 +216,29 @@ fn delegation_checks_admin_expiry_and_one_authority_per_wallet() {
 }
 
 #[test]
+fn delegate_rejects_zero_scopes() {
+    let mut f = Fixture::initialized();
+    let org = f.add_org(1, Role::Exporter);
+    let wallet = Pubkey::new_unique();
+    f.refused(
+        f.delegate(OrgAdmin, org, wallet, 0, NOW + 1),
+        OrgAdmin,
+        InvalidField,
+    );
+    assert!(!f.account_exists(f.authority(wallet)));
+
+    // The refusal did not use up the wallet's one Authority.
+    f.ok(
+        f.delegate(OrgAdmin, org, wallet, state::scope::TRANSFER, NOW + 1),
+        OrgAdmin,
+    );
+    assert_eq!(
+        f.read::<Authority>(f.authority(wallet)).scopes,
+        state::scope::TRANSFER
+    );
+}
+
+#[test]
 fn delegation_enforces_the_complete_role_scope_table() {
     let mut f = Fixture::initialized();
     for (index, (role, mask)) in [
@@ -235,7 +258,9 @@ fn delegation_enforces_the_complete_role_scope_table() {
         for scopes in (0..=31).chain([0x20, 0x8000, 0xffff]) {
             let wallet = Pubkey::new_unique();
             let ix = f.delegate(OrgAdmin, org, wallet, scopes, NOW + 1);
-            if scopes & !mask == 0 {
+            if scopes == 0 {
+                f.refused(ix, OrgAdmin, InvalidField);
+            } else if scopes & !mask == 0 {
                 f.ok(ix, OrgAdmin);
                 assert_eq!(f.read::<Authority>(f.authority(wallet)).scopes, scopes);
             } else {

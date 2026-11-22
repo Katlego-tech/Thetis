@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 pub mod error;
 pub mod events;
 pub mod instructions;
+pub mod intent;
 pub mod state;
 
 use instructions::setup::{self, *};
