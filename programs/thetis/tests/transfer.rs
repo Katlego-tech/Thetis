@@ -112,6 +112,8 @@ struct TransferArgs {
     signers: Vec<Actor>,
     /// A text to sign instead of the one the program will rebuild.
     text: Option<Vec<u8>>,
+    /// A source Position to pass instead of the owner's own.
+    from_position: Option<Pubkey>,
 }
 
 /// The addresses `transfer` derives for one call.
@@ -314,7 +316,9 @@ impl World {
     }
 
     fn addresses(&self, args: &TransferArgs) -> Addresses {
-        let from_position = self.position(args.owner);
+        let from_position = args
+            .from_position
+            .unwrap_or_else(|| self.position(args.owner));
         let from_vault_authority = pda(&[b"vault", from_position.as_ref()]);
         let to_position = self.position(args.recipient);
         let to_vault_authority = pda(&[b"vault", to_position.as_ref()]);
@@ -423,6 +427,7 @@ impl World {
             authority: self.authority,
             signers: vec![Owner],
             text: None,
+            from_position: None,
         }
     }
 
@@ -790,6 +795,62 @@ fn transfer_rejects_wrong_owner() {
     };
 
     w.assert_refused(&args, WrongOrganisation);
+}
+
+#[test]
+fn transfer_rejects_position_of_another_owner() {
+    let mut w = World::demo();
+    // The Buyer names itself as owner but passes the Exporter's Position.
+    let args = TransferArgs {
+        owner: w.buyer,
+        recipient: w.other_buyer,
+        authority: w.buyer_authority,
+        signers: vec![Buyer],
+        from_position: Some(w.position(w.owner)),
+        ..w.args(1_000_000, 0)
+    };
+
+    w.assert_refused(&args, WrongOrganisation);
+}
+
+#[test]
+fn transfer_rejects_authority_without_transfer_scope() {
+    let mut w = World::demo();
+    let delegate = w.f.delegate(
+        OrgAdmin,
+        w.owner,
+        w.f.key(Outsider),
+        state::scope::SPLIT,
+        NOW + DAY,
+    );
+    w.f.ok(delegate, OrgAdmin);
+    let args = TransferArgs {
+        authority: w.f.authority(w.f.key(Outsider)),
+        signers: vec![Outsider],
+        ..w.args(1_000_000, 0)
+    };
+
+    w.assert_refused(&args, ScopeMissing);
+}
+
+#[test]
+fn transfer_rejects_revoked_authority() {
+    let mut w = World::demo();
+    let revoke = w.f.revoke(OrgAdmin, w.owner, w.authority);
+    w.f.ok(revoke, OrgAdmin);
+
+    w.assert_refused(&w.args(1_000_000, 0), AuthorityRevoked);
+}
+
+#[test]
+fn transfer_rejects_window_of_601_seconds() {
+    let mut w = World::demo();
+    let args = TransferArgs {
+        valid_until: w.now + 601,
+        ..w.args(1_000_000, 0)
+    };
+
+    w.assert_refused(&args, WindowTooLong);
 }
 
 #[test]

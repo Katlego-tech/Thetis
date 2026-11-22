@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::{self, Create},
-    token_2022::{self, MintTo},
+    token_2022::{self, MintTo, TransferChecked},
     token_interface::TokenAccount,
 };
 
@@ -33,4 +33,23 @@ pub(crate) fn check_vault_balance(vault: &AccountInfo<'_>, quantity: u64) -> Res
     let vault = TokenAccount::try_deserialize(&mut data.as_ref())?;
     require_eq!(vault.amount, quantity, ThetisError::BalanceMismatch);
     Ok(())
+}
+
+pub(crate) fn transfer_receipts(
+    program: Pubkey,
+    accounts: TransferChecked<'_>,
+    vault_authority_bump: u8,
+    from_position: Pubkey,
+    quantity: u64,
+) -> Result<()> {
+    let seeds: &[&[u8]] = &[
+        VAULT_AUTHORITY_SEED,
+        from_position.as_ref(),
+        &[vault_authority_bump],
+    ];
+    token_2022::transfer_checked(
+        CpiContext::new_with_signer(program, accounts, &[seeds]),
+        quantity,
+        0,
+    )
 }
