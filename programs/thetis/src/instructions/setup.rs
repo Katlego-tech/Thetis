@@ -5,7 +5,7 @@
 
 use anchor_lang::prelude::*;
 
-use crate::{error::ThetisError, events::*, state::*};
+use crate::{error::ThetisError, events::*, intent::message::valid_display_name, state::*};
 
 #[derive(Accounts)]
 #[instruction(instance_id: [u8; 16])]
@@ -218,6 +218,7 @@ pub fn delegate_authority(
         Role::Transporter | Role::Terminal | Role::Lender | Role::Inspector => 0,
     };
     require!(scopes & !allowed == 0, ThetisError::ScopeNotAllowed);
+    require!(scopes != 0, ThetisError::InvalidField);
     require!(
         expires_at > Clock::get()?.unix_timestamp,
         ThetisError::InvalidField
@@ -350,14 +351,6 @@ pub fn set_pause(ctx: Context<SetPause>, flags: u16, paused: bool) -> Result<()>
         emit!(PauseChanged { flags: next });
     }
     Ok(())
-}
-
-fn valid_display_name(name: &str) -> bool {
-    (1..=MAX_DISPLAY_NAME).contains(&name.len())
-        && name.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
-        && !name.starts_with(' ')
-        && !name.ends_with(' ')
-        && !name.contains("  ")
 }
 
 fn valid_code(code: &str, limit: usize) -> bool {
