@@ -1,6 +1,6 @@
 # Thetis
 
-Design baseline 18 November 2026 · Phase 0 under way: the domain package, the receipt spike and the AWS infrastructure definition are built and tested, and nothing is deployed
+Design baseline 18 November 2026 · Phase 0's non-UI work is built and tested (domain package, receipt and signing spikes, AWS definition, data layer, access and voice APIs, web visual reference); Phase 1, the Thetis program, has started. Nothing is deployed except the two signing spikes, on devnet only
 
 Thetis coordinates evidence, collateral locks, payment-confirmed releases and custody of mineral lots on the inland journey from stockpile to port. The initial transaction network is one exporter, an independent custodian, a terminal and a professional lender. Chrome leads; manganese demonstrates configurable policies.
 
@@ -27,9 +27,12 @@ A reviewable specification and the first phase-0 code. It is not a deployed app,
 | Domain calculations | `packages/domain` | Exact-integer available quantity, storage capacity, payment-confirmed release preview with the residual-limit top-up, and simple-interest accrual. Tested against the synthetic examples in [domain](docs/domain.md) §4 (`fixtures/domain/release-examples.json`). |
 | Receipt enforcement | `programs/receipt-spike`, [ADR 0001](docs/adr/0001-receipt-enforcement.md) | Phase-0 spike only, not the Thetis program. 34 direct Token-2022 bypass attempts and 4 unauthorised or invalid program-level moves are refused, so D25 is confirmed. |
 | AWS infrastructure | `infra`, `services/{api,sponsor,worker}` | CDK definitions for the API, the fee sponsor and the worker, plus secrets, alarms, budget and the release role (D33). Each service is a health endpoint for now. **Not deployed.** |
-| Data layer | `supabase/` | Invitation-only membership, access rules scoped by membership and per-document grants, write-once private originals whose fingerprint only the server sets, one-time wallet-link challenges and an audit log. Proved by 102 database tests (pgTAP) in CI. The login and wallet-link API, and a hosted Supabase project, come next. |
+| Data layer | `supabase/` | Invitation-only membership, access rules scoped by membership and per-document grants, write-once private originals whose fingerprint only the server sets, one-time wallet-link challenges and an audit log. Proved by 102 database tests (pgTAP) in CI. A hosted Supabase project comes later. |
+| Access API | `services/api` (PR #26) | Invitations, wallet-link challenge and completion (checked against the exact signed message), evidence finalize and short-lived download links. Every read runs under the caller's own access rules. Tested against a local Supabase in CI. The login, invitation and account screens are not built yet. |
+| Voice | `services/api` (PRs #25, #27) | A private ElevenLabs agent defined as code, a server-issued conversation token for signed-in callers, and a lot-evidence lookup that returns only what the caller's access rules allow. The web and Android talk clients are not built yet. |
+| Web visual reference | `apps/web` (PR #17) | Work queue, exception queue, lot dossier and release review screens on labelled synthetic data. |
 | Two-party signing | `programs/signing-spike` (PR #10) | Phase-0 spike: two parties authorise one handover through the Ed25519 Programmatic Signer, the fee sponsor pays, and 11 attacks are refused. These results come from offline tests against the Programmatic Signer's **devnet-only, not yet fully audited** binaries; they do not validate it for production. On real phones (Phantom and Solflare on Android, 18 November 2026) neither wallet showed a readable intent. Only Phantom produced a signature, behind an "unsafe" override, so D32 was reopened and re-decided: in-house verification of a readable signed text. That was proven on 19 November 2026: Phantom and Solflare each showed the full text and signed it, and the two-party handover is finalized on devnet, paid by the sponsor (`programs/intent-spike`, ADR 0003). |
-| Thetis program, apps, voice | — | Not started. |
+| Thetis program | `programs/thetis` | Phase 1 started 22 November 2026 (setup, lots, positions, collection); not merged or deployed yet. |
 
 Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.6.4; Rust 1.89.0 (pinned in `rust-toolchain.toml`), Solana 3.1.10 and Anchor 1.2.2; AWS CDK 2.275.0 (library) and 2.1147.0 (command-line tool).
 
