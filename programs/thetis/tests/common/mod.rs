@@ -624,6 +624,10 @@ impl Fixture {
         VersionedTransaction::try_new(VersionedMessage::V0(message), &[&self.payer]).unwrap()
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "test helpers return LiteSVM metadata for assertions"
+    )]
     pub fn send(
         &mut self,
         tx: VersionedTransaction,
@@ -643,6 +647,10 @@ impl Fixture {
 
     /// Sends a legacy transaction that the fee payer alone signs: the shape of a sponsored
     /// intent, whose authority signatures live in an Ed25519 instruction.
+    #[allow(
+        clippy::result_large_err,
+        reason = "test helpers return LiteSVM metadata for assertions"
+    )]
     pub fn send_sponsored(
         &mut self,
         instructions: &[Instruction],
