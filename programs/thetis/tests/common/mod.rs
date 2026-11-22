@@ -1,7 +1,8 @@
+#![allow(dead_code)]
 use anchor_lang::{
     __private::base64::{engine::general_purpose::STANDARD, Engine},
     prelude::Pubkey,
-    AccountDeserialize, Event, InstructionData, ToAccountMetas,
+    AccountDeserialize, AccountSerialize, Event, InstructionData, ToAccountMetas,
 };
 use litesvm::{
     types::{FailedTransactionMetadata, TransactionMetadata},
@@ -52,6 +53,8 @@ pub enum Actor {
     Admin2,
     Accreditor2,
     OrgAdmin,
+    Issuer,
+    Issuer2,
     Outsider,
 }
 
@@ -65,6 +68,8 @@ pub struct Fixture {
     admin2: Keypair,
     accreditor2: Keypair,
     org_admin: Keypair,
+    issuer: Keypair,
+    issuer2: Keypair,
     outsider: Keypair,
     pub protocol: Pubkey,
 }
@@ -91,6 +96,8 @@ impl Fixture {
             admin2: Keypair::new(),
             accreditor2: Keypair::new(),
             org_admin: Keypair::new(),
+            issuer: Keypair::new(),
+            issuer2: Keypair::new(),
             outsider: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
@@ -110,6 +117,8 @@ impl Fixture {
             Admin2 => &self.admin2,
             Accreditor2 => &self.accreditor2,
             OrgAdmin => &self.org_admin,
+            Issuer => &self.issuer,
+            Issuer2 => &self.issuer2,
             Outsider => &self.outsider,
         }
     }
@@ -337,6 +346,107 @@ impl Fixture {
         } else {
             ix(accounts, instruction::Unpause { flags })
         }
+    }
+
+    pub fn set_clock(&mut self, unix_timestamp: i64) {
+        self.svm.set_sysvar(&Clock {
+            unix_timestamp,
+            ..Clock::default()
+        });
+    }
+
+    pub fn document(&self, kind: DocumentKind, subject: [u8; 32], version: u32) -> Pubkey {
+        pda(&[
+            b"document",
+            self.protocol.as_ref(),
+            &[kind as u8],
+            &subject,
+            &version.to_le_bytes(),
+        ])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn attest(
+        &self,
+        signer: Actor,
+        organisation: Pubkey,
+        kind: DocumentKind,
+        subject: [u8; 32],
+        version: u32,
+        sha256: [u8; 32],
+        valid_until: i64,
+    ) -> Instruction {
+        ix(
+            accounts::AttestDocument {
+                protocol: self.protocol,
+                organisation,
+                authority: self.authority(self.key(signer)),
+                document: self.document(kind, subject, version),
+                wallet: self.key(signer),
+                payer: self.payer.pubkey(),
+                system_program: SYSTEM,
+            },
+            instruction::AttestDocument {
+                kind,
+                subject,
+                version,
+                sha256,
+                valid_until,
+            },
+        )
+    }
+
+    pub fn revoke_document(
+        &self,
+        signer: Actor,
+        organisation: Pubkey,
+        document: Pubkey,
+    ) -> Instruction {
+        ix(
+            accounts::RevokeDocument {
+                protocol: self.protocol,
+                organisation,
+                authority: self.authority(self.key(signer)),
+                document,
+                wallet: self.key(signer),
+            },
+            instruction::RevokeDocument {},
+        )
+    }
+
+    /// Writes an Authority account directly. Real delegation can never give
+    /// ATTEST_ORIGIN to a non-issuer (delegate_authority refuses it), so this is the
+    /// only way to reach the role check, which is defence in depth.
+    pub fn forge_authority(
+        &mut self,
+        organisation: Pubkey,
+        wallet: Pubkey,
+        scopes: u16,
+        expires_at: i64,
+    ) {
+        let address = self.authority(wallet);
+        let bump = Pubkey::find_program_address(
+            &[b"authority", self.protocol.as_ref(), wallet.as_ref()],
+            &ID,
+        )
+        .1;
+        let authority = Authority {
+            protocol: self.protocol,
+            organisation,
+            wallet,
+            scopes,
+            expires_at,
+            revoked_at: None,
+            bump,
+        };
+        let mut data = Vec::new();
+        authority.try_serialize(&mut data).unwrap();
+        // Reuse the payer's account as a template: solana-account is not a dev-dependency.
+        let mut account = self.svm.get_account(&self.payer.pubkey()).unwrap();
+        account.lamports = self.svm.minimum_balance_for_rent_exemption(data.len());
+        account.data = data;
+        account.owner = ID;
+        self.svm.set_account(address, account).unwrap();
     }
 
     pub fn account_exists(&self, address: Pubkey) -> bool {
