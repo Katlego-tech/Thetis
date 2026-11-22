@@ -210,6 +210,28 @@ impl Fixture {
         validity: i64,
         origin_required: bool,
     ) -> Instruction {
+        self.register_with_inheritance(
+            signer,
+            code,
+            version,
+            grades,
+            validity,
+            origin_required,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_with_inheritance(
+        &self,
+        signer: Actor,
+        code: &str,
+        version: u32,
+        grades: &[&str],
+        validity: i64,
+        origin_required: bool,
+        split_inherits_expiry: bool,
+    ) -> Instruction {
         ix(
             accounts::RegisterClass {
                 protocol: self.protocol,
@@ -224,7 +246,7 @@ impl Fixture {
                 grades: grades.iter().map(|grade| (*grade).into()).collect(),
                 origin_required,
                 lot_validity_secs: validity,
-                split_inherits_expiry: true,
+                split_inherits_expiry,
             },
         )
     }
@@ -838,6 +860,44 @@ pub fn ed25519_instruction_at(
         payload_offset = message_offset + message_size;
     }
     data.extend_from_slice(&payloads);
+    Instruction {
+        program_id: solana_sdk_ids::ed25519_program::ID,
+        accounts: vec![],
+        data,
+    }
+}
+
+/// An Ed25519 precompile instruction with one entry per signer, all signing one `message` that
+/// the data holds once: every entry's message offset points at that single copy. Every
+/// instruction-index field is `0xFFFF`.
+pub fn ed25519_shared_instruction(signers: &[&Keypair], message: &[u8]) -> Instruction {
+    const OFFSETS_LEN: u16 = 14;
+    const ENTRY_LEN: u16 = 64 + 32;
+    let count = u8::try_from(signers.len()).unwrap();
+    let message_size = u16::try_from(message.len()).unwrap();
+    let entries_at = 2 + OFFSETS_LEN * u16::from(count);
+    let message_offset = entries_at + ENTRY_LEN * u16::from(count);
+    let mut data = vec![count, 0];
+    let mut payloads = Vec::new();
+    for (index, signer) in (0_u16..).zip(signers) {
+        let signature_offset = entries_at + ENTRY_LEN * index;
+        let public_key_offset = signature_offset + 64;
+        for field in [
+            signature_offset,
+            u16::MAX,
+            public_key_offset,
+            u16::MAX,
+            message_offset,
+            message_size,
+            u16::MAX,
+        ] {
+            data.extend_from_slice(&field.to_le_bytes());
+        }
+        payloads.extend_from_slice(signer.sign_message(message).as_ref());
+        payloads.extend_from_slice(signer.pubkey().as_ref());
+    }
+    data.extend_from_slice(&payloads);
+    data.extend_from_slice(message);
     Instruction {
         program_id: solana_sdk_ids::ed25519_program::ID,
         accounts: vec![],
