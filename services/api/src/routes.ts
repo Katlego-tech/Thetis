@@ -3,6 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from "aws-lambda";
 import { decodeBase58, verifyEd25519 } from "./ed25519.ts";
 import type { AccessClients } from "./supabase.ts";
+import { ID_PATTERN } from "./voice/agent.ts";
+
+const lotIdPattern = new RegExp(ID_PATTERN);
 
 const errors = {
   VALIDATION: [400, "Invalid request body or path."],
@@ -18,6 +21,7 @@ const errors = {
   BAD_SIGNATURE: [422, "The signature does not match the wallet link challenge."],
   WALLET_INVALID: [422, "The wallet must be a base58-encoded Solana public key."],
   INTERNAL: [500, "An internal error occurred."],
+  VOICE_UNAVAILABLE: [503, "Voice is unavailable."],
 } as const;
 
 type ErrorCode = keyof typeof errors;
@@ -248,6 +252,58 @@ async function evidenceDownloadUrl(
   return { url: data.signedUrl, expiresInSeconds };
 }
 
+async function startConversation() {
+  try {
+    const agentId = process.env.ELEVENLABS_AGENT_ID;
+    if (!agentId?.trim()) throw new Error("Missing ELEVENLABS_AGENT_ID");
+    const { elevenLabsClient } = await import("./elevenlabs.ts");
+    const { token, conversationId } =
+      await elevenLabsClient().conversationalAi.conversations.getWebrtcToken({ agentId });
+    return { conversationToken: token, conversationId, agentId };
+  } catch {
+    throw new RouteError("VOICE_UNAVAILABLE");
+  }
+}
+
+async function lotEvidence(caller: SupabaseClient, lotId: string) {
+  const pageSize = 1000; // Supabase API max_rows
+  const items: { purpose: string; version: number; finalizedAt: string; sha256Prefix: string }[] =
+    [];
+  for (let offset = 0; ; offset += pageSize) {
+    const objects = databaseData(
+      await caller
+        .from("evidence_objects")
+        .select("purpose, evidence_versions!inner(version, finalized_at, sha256)")
+        .eq("subject_kind", "lot")
+        .eq("subject_ref", lotId)
+        .not("evidence_versions.finalized_at", "is", null)
+        .order("version", { referencedTable: "evidence_versions", ascending: false })
+        .limit(1, { referencedTable: "evidence_versions" })
+        .order("id")
+        .range(offset, offset + pageSize - 1),
+    );
+    if (!objects) throw new RouteError("INTERNAL");
+    for (const {
+      purpose,
+      evidence_versions: [latest],
+    } of objects) {
+      if (!latest) continue;
+      items.push({
+        purpose,
+        version: latest.version,
+        finalizedAt: new Date(latest.finalized_at).toISOString(),
+        sha256Prefix: latest.sha256.slice(0, 12),
+      });
+    }
+    if (objects.length < pageSize) break;
+  }
+  if (!items.length) throw new RouteError("NOT_FOUND");
+  items.sort(
+    (a, b) => a.purpose.localeCompare(b.purpose) || a.finalizedAt.localeCompare(b.finalizedAt),
+  );
+  return { lotId, items, observedAt: new Date().toISOString() };
+}
+
 export async function route(
   event: APIGatewayProxyEventV2,
   clients: AccessClients,
@@ -280,7 +336,17 @@ export async function route(
     const isComplete = method === "POST" && rawPath === "/v1/wallet-links";
     const isFinalize = method === "POST" && /^\/v1\/evidence\/[^/]+\/finalize$/.test(rawPath);
     const isDownload = method === "GET" && /^\/v1\/evidence\/[^/]+\/download-url$/.test(rawPath);
-    if (!isInvitation && !isChallenge && !isComplete && !isFinalize && !isDownload) {
+    const isSession = method === "POST" && rawPath === "/v1/conversations/session";
+    const isLotEvidence = method === "GET" && /^\/v1\/voice\/lots\/[^/]+\/evidence$/.test(rawPath);
+    if (
+      !isInvitation &&
+      !isChallenge &&
+      !isComplete &&
+      !isFinalize &&
+      !isDownload &&
+      !isSession &&
+      !isLotEvidence
+    ) {
       throw new RouteError("NOT_FOUND");
     }
 
@@ -303,6 +369,14 @@ export async function route(
       data = await issueWalletLinkChallenge(event, caller);
     } else if (isComplete) {
       data = await completeWalletLink(event, caller, clients.service);
+    } else if (isSession) {
+      requestBody(event, []);
+      data = await startConversation();
+    } else if (isLotEvidence) {
+      const lotId = rawPath.split("/")[4];
+      if (!lotId || !lotIdPattern.test(lotId)) throw new RouteError("VALIDATION");
+      requestBody(event, []);
+      data = await lotEvidence(caller, lotId);
     } else {
       const versionId = uuid(rawPath.split("/")[3]);
       requestBody(event, []);
@@ -313,7 +387,9 @@ export async function route(
     return json(200, { data }, cors);
   } catch (error) {
     const code = error instanceof RouteError ? error.code : "INTERNAL";
-    if (code === "INTERNAL") console.error("INTERNAL", { requestId: requestContext.requestId });
+    if (code === "INTERNAL" || code === "VOICE_UNAVAILABLE") {
+      console.error(code, { requestId: requestContext.requestId });
+    }
     const [status, message] = errors[code];
     return json(status, { error: { code, message } }, cors);
   }
