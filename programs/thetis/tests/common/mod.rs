@@ -58,6 +58,8 @@ pub enum Actor {
     Custodian,
     Custodian2,
     Outsider,
+    Owner,
+    Buyer,
 }
 
 use Actor::*;
@@ -75,6 +77,8 @@ pub struct Fixture {
     custodian: Keypair,
     custodian2: Keypair,
     outsider: Keypair,
+    owner: Keypair,
+    buyer: Keypair,
     pub protocol: Pubkey,
 }
 
@@ -105,6 +109,8 @@ impl Fixture {
             custodian: Keypair::new(),
             custodian2: Keypair::new(),
             outsider: Keypair::new(),
+            owner: Keypair::new(),
+            buyer: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
     }
@@ -128,6 +134,8 @@ impl Fixture {
             Custodian => &self.custodian,
             Custodian2 => &self.custodian2,
             Outsider => &self.outsider,
+            Owner => &self.owner,
+            Buyer => &self.buyer,
         }
     }
 
@@ -480,6 +488,34 @@ impl Fixture {
         // Reuse the payer's account as a template: solana-account is not a dev-dependency.
         let mut account = self.svm.get_account(&self.payer.pubkey()).unwrap();
         account.lamports = self.svm.minimum_balance_for_rent_exemption(data.len());
+        account.data = data;
+        account.owner = ID;
+        self.svm.set_account(address, account).unwrap();
+    }
+
+    /// Overwrites the data of a program-owned account with `value` serialised, keeping its
+    /// lamports and its allocated length (zero-padded), so the program can still write it back.
+    /// Reaches states the instructions cannot yet produce (a redeemed Lot, locked units, a
+    /// revision near `u64::MAX`). An account that does not exist is created owned by the
+    /// program.
+    pub fn set_program_account<T: AccountSerialize>(&mut self, address: Pubkey, value: &T) {
+        let mut data = Vec::new();
+        value.try_serialize(&mut data).unwrap();
+        let rent = self.svm.minimum_balance_for_rent_exemption(data.len());
+        let mut account = match self.svm.get_account(&address) {
+            Some(existing) => {
+                assert_eq!(existing.owner, ID);
+                existing
+            }
+            // Reuse the payer's account as a template: solana-account is not a dev-dependency.
+            None => {
+                let mut template = self.svm.get_account(&self.payer.pubkey()).unwrap();
+                template.lamports = 0;
+                template
+            }
+        };
+        data.resize(data.len().max(account.data.len()), 0);
+        account.lamports = account.lamports.max(rent);
         account.data = data;
         account.owner = ID;
         self.svm.set_account(address, account).unwrap();

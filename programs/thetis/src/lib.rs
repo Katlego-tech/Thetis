@@ -11,6 +11,7 @@ mod validate;
 use instructions::documents::{self, *};
 use instructions::issue::{self, *};
 use instructions::setup::{self, *};
+use instructions::transfer::{self, *};
 use state::{DocumentKind, Role, SettlementMode};
 
 declare_id!("jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3");
@@ -116,5 +117,14 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         issue::issue_lot(ctx, lot_id, grade, quantity_kg, intake_digest, valid_until)
+    }
+
+    pub fn transfer(
+        ctx: Context<Transfer>,
+        quantity_kg: u64,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        transfer::transfer(ctx, quantity_kg, expected_revision, valid_until)
     }
 }
