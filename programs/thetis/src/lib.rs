@@ -4,9 +4,12 @@ pub mod error;
 pub mod events;
 pub mod instructions;
 pub mod intent;
+mod receipts;
 pub mod state;
+mod validate;
 
 use instructions::documents::{self, *};
+use instructions::issue::{self, *};
 use instructions::setup::{self, *};
 use state::{DocumentKind, Role, SettlementMode};
 
@@ -102,5 +105,16 @@ pub mod thetis {
 
     pub fn revoke_document(ctx: Context<RevokeDocument>) -> Result<()> {
         documents::revoke_document(ctx)
+    }
+
+    pub fn issue_lot(
+        ctx: Context<IssueLot>,
+        lot_id: String,
+        grade: String,
+        quantity_kg: u64,
+        intake_digest: [u8; 32],
+        valid_until: i64,
+    ) -> Result<()> {
+        issue::issue_lot(ctx, lot_id, grade, quantity_kg, intake_digest, valid_until)
     }
 }
