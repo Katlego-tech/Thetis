@@ -4,6 +4,7 @@
 )]
 
 use anchor_lang::prelude::*;
+use solana_sha256_hasher::hash;
 
 use crate::{error::ThetisError, events::*, intent::message::valid_display_name, state::*};
 
@@ -105,7 +106,7 @@ pub fn register_class(
 }
 
 #[derive(Accounts)]
-#[instruction(org_id: [u8; 16])]
+#[instruction(org_id: [u8; 16], role: Role, display_name: String)]
 pub struct AccreditOrganisation<'info> {
     #[account(has_one = accreditor @ ThetisError::NotAccreditor)]
     pub protocol: Account<'info, Protocol>,
@@ -117,6 +118,20 @@ pub struct AccreditOrganisation<'info> {
         bump,
     )]
     pub organisation: Account<'info, Organisation>,
+    // Display names are what signed texts show, so one name, any ASCII case, names one organisation.
+    #[account(
+        init,
+        payer = payer,
+        space = OrganisationName::DISCRIMINATOR.len() + OrganisationName::INIT_SPACE,
+        seeds = [
+            b"org_name",
+            protocol.key().as_ref(),
+            // A block, so the IDL leaves this PDA for clients to derive: it cannot express the hash.
+            &{ hash(display_name.to_ascii_lowercase().as_bytes()).to_bytes() }[..],
+        ],
+        bump,
+    )]
+    pub organisation_name: Account<'info, OrganisationName>,
     pub accreditor: Signer<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,
