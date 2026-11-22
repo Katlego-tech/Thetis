@@ -1,17 +1,95 @@
 use anchor_lang::{prelude::*, solana_program::instruction::Instruction};
+use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
+use solana_sdk_ids::ed25519_program;
+
+use crate::error::ThetisError;
+
+const HEADER_LEN: usize = 2;
+const OFFSETS_LEN: usize = 14;
+const SELF_INDEX: u16 = u16::MAX;
 
 pub fn previous_instruction(sysvar: &AccountInfo<'_>) -> Result<Instruction> {
-    let _ = sysvar;
-    unimplemented!()
+    let index = load_current_index_checked(sysvar)?
+        .checked_sub(1)
+        .ok_or(ThetisError::MissingVerification)?;
+    load_instruction_at_checked(usize::from(index), sysvar)
+        .map_err(|_| error!(ThetisError::MissingVerification))
 }
 
+/// Bind runtime verification to the expected roles and text.
 pub fn check_ed25519_instruction(
     ix: &Instruction,
     expected_signers: &[Pubkey],
     expected_message: &[u8],
 ) -> Result<()> {
-    let _ = (ix, expected_signers, expected_message);
-    unimplemented!()
+    require_keys_eq!(
+        ix.program_id,
+        ed25519_program::ID,
+        ThetisError::MissingVerification
+    );
+    let data = &ix.data;
+    let header = checked_slice(data, 0, HEADER_LEN)?;
+    let [count, padding] = <[u8; HEADER_LEN]>::try_from(header)
+        .map_err(|_| error!(ThetisError::MalformedVerification))?;
+    let table_len = usize::from(count)
+        .checked_mul(OFFSETS_LEN)
+        .ok_or(ThetisError::MalformedVerification)?;
+    let table = checked_slice(data, HEADER_LEN, table_len)?;
+    require_eq!(padding, 0, ThetisError::MalformedVerification);
+    require!(
+        (1..=2).contains(&expected_signers.len()),
+        ThetisError::WrongSignatureCount
+    );
+    require_eq!(
+        usize::from(count),
+        expected_signers.len(),
+        ThetisError::WrongSignatureCount
+    );
+
+    let entries = table.chunks_exact(OFFSETS_LEN).map(read_offsets);
+    for entry in entries.clone() {
+        let [_, signature_index, _, key_index, _, _, message_index] = entry?;
+        require!(
+            [signature_index, key_index, message_index] == [SELF_INDEX; 3],
+            ThetisError::CrossInstructionReference
+        );
+    }
+
+    let mut payloads = Vec::with_capacity(usize::from(count));
+    for entry in entries {
+        let [signature, _, key, _, message, size, _] = entry?;
+        checked_slice(data, usize::from(signature), 64)?;
+        let key = checked_slice(data, usize::from(key), 32)?;
+        let message = checked_slice(data, usize::from(message), usize::from(size))?;
+        payloads.push((key, message));
+    }
+    for ((key, _), expected) in payloads.iter().zip(expected_signers) {
+        require!(*key == expected.as_ref(), ThetisError::WrongSigner);
+    }
+    for (_, message) in payloads {
+        require!(message == expected_message, ThetisError::MessageMismatch);
+    }
+    Ok(())
+}
+
+fn checked_slice(data: &[u8], start: usize, size: usize) -> Result<&[u8]> {
+    let end = start
+        .checked_add(size)
+        .ok_or(ThetisError::MalformedVerification)?;
+    data.get(start..end)
+        .ok_or_else(|| error!(ThetisError::MalformedVerification))
+}
+
+fn read_offsets(entry: &[u8]) -> Result<[u16; 7]> {
+    let mut fields = [0; 7];
+    for (field, encoded) in fields.iter_mut().zip(entry.chunks_exact(2)) {
+        *field = u16::from_le_bytes(
+            encoded
+                .try_into()
+                .map_err(|_| error!(ThetisError::MalformedVerification))?,
+        );
+    }
+    Ok(fields)
 }
 
 #[cfg(test)]
@@ -229,5 +307,28 @@ mod tests {
             check_ed25519_instruction(&ix, &[k1], MESSAGE),
             ThetisError::MissingVerification,
         );
+    }
+
+    #[test]
+    fn verify_rejects_malformed_data() {
+        let (k1, k2) = keys();
+        let good = Ed25519Data::new(&[k1, k2], MESSAGE).instruction();
+        let mut cases = vec![vec![], vec![2], good.data[..20].to_vec()];
+        let mut padded = good.data.clone();
+        padded[1] = 1;
+        cases.push(padded);
+        let mut truncated = good.data.clone();
+        truncated.truncate(truncated.len() - 1);
+        cases.push(truncated);
+        for data in cases {
+            let ix = Instruction {
+                data,
+                ..good.clone()
+            };
+            assert_refused(
+                check_ed25519_instruction(&ix, &[k1, k2], MESSAGE),
+                ThetisError::MalformedVerification,
+            );
+        }
     }
 }

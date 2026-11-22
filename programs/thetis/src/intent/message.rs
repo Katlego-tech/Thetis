@@ -1,13 +1,50 @@
+use std::fmt::{Arguments, Write};
+
 use anchor_lang::solana_program::pubkey::Pubkey;
 
+use crate::state::MAX_DISPLAY_NAME;
+
 pub fn format_tonnes(kg: u64) -> String {
-    let _ = kg;
-    unimplemented!()
+    let whole = (kg / 1_000).to_string();
+    let mut tonnes = String::with_capacity(whole.len() + whole.len() / 3 + 6);
+    for (index, digit) in whole.bytes().enumerate() {
+        if index != 0 && (whole.len() - index).is_multiple_of(3) {
+            tonnes.push(',');
+        }
+        tonnes.push(char::from(digit));
+    }
+    write!(tonnes, ".{:03} t", kg % 1_000).unwrap();
+    tonnes
 }
 
 pub fn format_sast(unix: i64) -> String {
-    let _ = unix;
-    unimplemented!()
+    const SECONDS_PER_DAY: i64 = 86_400;
+    const SAST_OFFSET: i64 = 7_200;
+    let local_seconds = unix.rem_euclid(SECONDS_PER_DAY) + SAST_OFFSET;
+    let day = unix.div_euclid(SECONDS_PER_DAY) + local_seconds / SECONDS_PER_DAY;
+    let second_of_day = local_seconds % SECONDS_PER_DAY;
+
+    // Convert Unix days using March-based Gregorian years, where the leap day is last.
+    // An era has 400 years and exactly 146,097 days.
+    let march_days = day + 719_468;
+    let era = march_days.div_euclid(146_097);
+    let day_of_era = march_days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day_of_month = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    };
+    let year = era * 400 + year_of_era + i64::from(month <= 2);
+
+    let hour = second_of_day / 3_600;
+    let minute = second_of_day / 60 % 60;
+    let second = second_of_day % 60;
+    format!("{year:04}-{month:02}-{day_of_month:02} {hour:02}:{minute:02}:{second:02} SAST")
 }
 
 #[allow(
@@ -28,21 +65,28 @@ pub fn issue_message(
     origin: Option<(&[u8; 32], u32)>,
     valid_until: i64,
 ) -> Vec<u8> {
-    let _ = (
-        program_id,
-        lot_id,
-        class_code,
-        class_version,
-        grade,
-        quantity_kg,
-        owner,
-        custodian,
-        site_code,
-        intake_digest,
-        origin,
-        valid_until,
+    let quantity = format_tonnes(quantity_kg);
+    let intake = digest_hex(intake_digest);
+    let origin = origin.map_or_else(
+        || "not required".to_owned(),
+        |(sha, version)| format!("{} v{version}", digest_hex(sha)),
     );
-    unimplemented!()
+    signed_message(
+        program_id,
+        "Issue lot",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Class: {class_code} v{class_version}\n\
+             Grade: {grade}\n\
+             Quantity: {quantity}\n\
+             Owner: {owner}\n\
+             Custodian: {custodian}\n\
+             Site: {site_code}\n\
+             Intake: {intake}\n\
+             Origin document: {origin}"
+        ),
+        valid_until,
+    )
 }
 
 pub fn transfer_message(
@@ -54,16 +98,19 @@ pub fn transfer_message(
     expected_revision: u64,
     valid_until: i64,
 ) -> Vec<u8> {
-    let _ = (
+    let quantity = format_tonnes(quantity_kg);
+    signed_message(
         program_id,
-        lot_id,
-        quantity_kg,
-        from,
-        to,
-        expected_revision,
+        "Transfer receipts",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             From: {from}\n\
+             To: {to}\n\
+             Revision: {expected_revision}"
+        ),
         valid_until,
-    );
-    unimplemented!()
+    )
 }
 
 #[allow(
@@ -80,17 +127,20 @@ pub fn split_message(
     expected_revision: u64,
     valid_until: i64,
 ) -> Vec<u8> {
-    let _ = (
+    let quantity = format_tonnes(quantity_kg);
+    signed_message(
         program_id,
-        lot_id,
-        child_lot_id,
-        quantity_kg,
-        owner,
-        custodian,
-        expected_revision,
+        "Split lot",
+        format_args!(
+            "Lot: {lot_id}\n\
+             New lot: {child_lot_id}\n\
+             Quantity: {quantity}\n\
+             Owner: {owner}\n\
+             Custodian: {custodian}\n\
+             Revision: {expected_revision}"
+        ),
         valid_until,
-    );
-    unimplemented!()
+    )
 }
 
 #[allow(
@@ -107,17 +157,56 @@ pub fn redeem_message(
     expected_revision: u64,
     valid_until: i64,
 ) -> Vec<u8> {
-    let _ = (
+    let quantity = format_tonnes(quantity_kg);
+    let ticket = digest_hex(collection_ticket);
+    signed_message(
         program_id,
-        lot_id,
-        quantity_kg,
-        holder,
-        custodian,
-        collection_ticket,
-        expected_revision,
+        "Collect from stockyard",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             Holder: {holder}\n\
+             Custodian: {custodian}\n\
+             Collection ticket: {ticket}\n\
+             Revision: {expected_revision}"
+        ),
         valid_until,
-    );
-    unimplemented!()
+    )
+}
+
+fn signed_message(
+    program_id: &Pubkey,
+    action: &str,
+    fields: Arguments<'_>,
+    valid_until: i64,
+) -> Vec<u8> {
+    let expiry = format_sast(valid_until);
+    format!(
+        "Thetis authorisation v1\n\
+         Network: devnet\n\
+         Program: {program_id}\n\
+         Action: {action}\n\
+         {fields}\n\
+         Valid until: {expiry}\n\
+         Test network only. Synthetic data."
+    )
+    .into_bytes()
+}
+
+fn digest_hex(digest: &[u8; 32]) -> String {
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        write!(hex, "{byte:02x}").unwrap();
+    }
+    hex
+}
+
+pub(crate) fn valid_display_name(name: &str) -> bool {
+    (1..=MAX_DISPLAY_NAME).contains(&name.len())
+        && name.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        && !name.starts_with(' ')
+        && !name.ends_with(' ')
+        && !name.contains("  ")
 }
 
 #[cfg(test)]
