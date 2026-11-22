@@ -53,6 +53,7 @@ pub fn format_sast(unix: i64) -> String {
 )]
 pub fn issue_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     class_code: &str,
     class_version: u32,
@@ -73,6 +74,7 @@ pub fn issue_message(
     );
     signed_message(
         program_id,
+        instance_id,
         "Issue lot",
         format_args!(
             "Lot: {lot_id}\n\
@@ -89,8 +91,13 @@ pub fn issue_message(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
 pub fn transfer_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     quantity_kg: u64,
     from: &str,
@@ -101,6 +108,7 @@ pub fn transfer_message(
     let quantity = format_tonnes(quantity_kg);
     signed_message(
         program_id,
+        instance_id,
         "Transfer receipts",
         format_args!(
             "Lot: {lot_id}\n\
@@ -119,6 +127,7 @@ pub fn transfer_message(
 )]
 pub fn split_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     child_lot_id: &str,
     quantity_kg: u64,
@@ -130,6 +139,7 @@ pub fn split_message(
     let quantity = format_tonnes(quantity_kg);
     signed_message(
         program_id,
+        instance_id,
         "Split lot",
         format_args!(
             "Lot: {lot_id}\n\
@@ -149,6 +159,7 @@ pub fn split_message(
 )]
 pub fn redeem_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     quantity_kg: u64,
     holder: &str,
@@ -161,6 +172,7 @@ pub fn redeem_message(
     let ticket = digest_hex(collection_ticket);
     signed_message(
         program_id,
+        instance_id,
         "Collect from stockyard",
         format_args!(
             "Lot: {lot_id}\n\
@@ -176,15 +188,18 @@ pub fn redeem_message(
 
 fn signed_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     action: &str,
     fields: Arguments<'_>,
     valid_until: i64,
 ) -> Vec<u8> {
     let expiry = format_sast(valid_until);
+    let instance = hex(instance_id);
     format!(
         "Thetis authorisation v1\n\
          Network: devnet\n\
          Program: {program_id}\n\
+         Protocol: {instance}\n\
          Action: {action}\n\
          {fields}\n\
          Valid until: {expiry}\n\
@@ -194,8 +209,12 @@ fn signed_message(
 }
 
 fn digest_hex(digest: &[u8; 32]) -> String {
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
+    hex(digest)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         write!(hex, "{byte:02x}").unwrap();
     }
     hex
@@ -218,6 +237,16 @@ mod tests {
     };
 
     const VALID_UNTIL: i64 = 1_795_098_725;
+
+    const INSTANCE_ID: [u8; 16] = [
+        0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e,
+        0x6f,
+    ];
+
+    const OTHER_INSTANCE_ID: [u8; 16] = [
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e,
+        0x7f,
+    ];
 
     #[test]
     fn tonnes_known_answers() {
@@ -249,6 +278,7 @@ mod tests {
     const ISSUE_TEXT: &str = "Thetis authorisation v1
 Network: devnet
 Program: jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3
+Protocol: 606162636465666768696a6b6c6d6e6f
 Action: Issue lot
 Lot: CR-0001
 Class: CHROME v1
@@ -265,6 +295,7 @@ Test network only. Synthetic data.";
     const TRANSFER_TEXT: &str = "Thetis authorisation v1
 Network: devnet
 Program: jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3
+Protocol: 606162636465666768696a6b6c6d6e6f
 Action: Transfer receipts
 Lot: CR-0001
 Quantity: 2,000.000 t
@@ -277,6 +308,7 @@ Test network only. Synthetic data.";
     const SPLIT_TEXT: &str = "Thetis authorisation v1
 Network: devnet
 Program: jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3
+Protocol: 606162636465666768696a6b6c6d6e6f
 Action: Split lot
 Lot: CR-0001
 New lot: CR-0002
@@ -290,6 +322,7 @@ Test network only. Synthetic data.";
     const REDEEM_TEXT: &str = "Thetis authorisation v1
 Network: devnet
 Program: jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3
+Protocol: 606162636465666768696a6b6c6d6e6f
 Action: Collect from stockyard
 Lot: CR-0001
 Quantity: 2,000.000 t
@@ -304,9 +337,10 @@ Test network only. Synthetic data.";
         core::array::from_fn(|index| index as u8 + base)
     }
 
-    fn issue(origin: Option<(&[u8; 32], u32)>) -> Vec<u8> {
+    fn issue(instance_id: &[u8; 16], origin: Option<(&[u8; 32], u32)>) -> Vec<u8> {
         issue_message(
             &crate::ID,
+            instance_id,
             "CR-0001",
             "CHROME",
             1,
@@ -321,30 +355,36 @@ Test network only. Synthetic data.";
         )
     }
 
-    fn assert_vector(bytes: Vec<u8>, expected: &str, length: usize, sha256: &str) {
-        assert_eq!(bytes, expected.as_bytes());
-        assert_eq!(bytes.len(), length);
+    fn sha256_hex(bytes: &[u8]) -> String {
         let mut checksum = Command::new("sha256sum")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .expect("start sha256sum");
-        checksum.stdin.take().unwrap().write_all(&bytes).unwrap();
+        checksum.stdin.take().unwrap().write_all(bytes).unwrap();
         let output = checksum.wait_with_output().unwrap();
         assert!(output.status.success());
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
-            format!("{sha256}  -\n")
-        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let hex = stdout
+            .strip_suffix("  -\n")
+            .expect("sha256sum output format");
+        assert_eq!(hex.len(), 64);
+        hex.to_owned()
+    }
+
+    fn assert_vector(bytes: Vec<u8>, expected: &str, length: usize, sha256: &str) {
+        assert_eq!(bytes, expected.as_bytes());
+        assert_eq!(bytes.len(), length);
+        assert_eq!(sha256_hex(&bytes), sha256);
     }
 
     #[test]
     fn issue_text_matches_known_vector() {
         assert_vector(
-            issue(Some((&digest(0x20), 1))),
+            issue(&INSTANCE_ID, Some((&digest(0x20), 1))),
             ISSUE_TEXT,
-            485,
-            "1e4f121b37480b64b7fe9f82fd6822cb07144101a09bb0cd5739a7c06e0ed26e",
+            528,
+            "7e9bbb750a8629a70fefb9c4bce48e0c2869c512511538513546b3c570084638",
         );
     }
 
@@ -354,15 +394,15 @@ Test network only. Synthetic data.";
             "Origin document: 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f v1";
         assert!(ISSUE_TEXT.contains(origin_line));
         let expected = ISSUE_TEXT.replace(origin_line, "Origin document: not required");
-        let bytes = issue(None);
+        let bytes = issue(&INSTANCE_ID, None);
         assert!(String::from_utf8(bytes.clone())
             .unwrap()
             .contains("\nOrigin document: not required\n"));
         assert_vector(
             bytes,
             &expected,
-            430,
-            "b1cef511ce1c133fa69f352c9110e7da42c2b6907a3ce200999b9f17db28efda",
+            473,
+            "7ad36cd94680f1b3a3417b0357c02635cd52d684794ec5236a110e772e119712",
         );
     }
 
@@ -371,6 +411,7 @@ Test network only. Synthetic data.";
         assert_vector(
             transfer_message(
                 &crate::ID,
+                &INSTANCE_ID,
                 "CR-0001",
                 2_000_000,
                 "Khunou Ore Exports",
@@ -379,8 +420,8 @@ Test network only. Synthetic data.";
                 VALID_UNTIL,
             ),
             TRANSFER_TEXT,
-            284,
-            "a7ba52e4567d5f0ce35cb5052862224ef3d471f5e3fa7bc42bccbd0234cec26f",
+            327,
+            "e6bbf185e764a8bd172de5fa2c100d41eb1ad12ef713ee0a0122467dc43f246e",
         );
     }
 
@@ -389,6 +430,7 @@ Test network only. Synthetic data.";
         assert_vector(
             split_message(
                 &crate::ID,
+                &INSTANCE_ID,
                 "CR-0001",
                 "CR-0002",
                 1_000_000,
@@ -398,8 +440,8 @@ Test network only. Synthetic data.";
                 VALID_UNTIL,
             ),
             SPLIT_TEXT,
-            309,
-            "6f338fd268988ad6e12578ecd9f9af49189fe4f27cfb65d8de292866006f0df8",
+            352,
+            "950c1c074b08857c6b92a1d67acd2d76b4e1141d08a3af28387c8b3e411e8c85",
         );
     }
 
@@ -408,6 +450,7 @@ Test network only. Synthetic data.";
         assert_vector(
             redeem_message(
                 &crate::ID,
+                &INSTANCE_ID,
                 "CR-0001",
                 2_000_000,
                 "Buyer Smelter Co",
@@ -417,8 +460,24 @@ Test network only. Synthetic data.";
                 VALID_UNTIL,
             ),
             REDEEM_TEXT,
-            388,
-            "3fde8cb8cd766fca4b3584d65e65b6b2537fa3a7de2940cb77433f8e33271f55",
+            431,
+            "411d5fdfde1297fd212b6c4a85aefaf030a4b7a66987e19fc68d7821567a9be7",
         );
+    }
+
+    #[test]
+    fn text_names_protocol_instance() {
+        let first = issue(&INSTANCE_ID, Some((&digest(0x20), 1)));
+        let second = issue(&OTHER_INSTANCE_ID, Some((&digest(0x20), 1)));
+        assert_eq!(first, ISSUE_TEXT.as_bytes());
+        let first_text = String::from_utf8(first.clone()).unwrap();
+        let second_text = String::from_utf8(second.clone()).unwrap();
+        assert!(first_text.contains("\nProtocol: 606162636465666768696a6b6c6d6e6f\n"));
+        assert!(second_text.contains("\nProtocol: 707172737475767778797a7b7c7d7e7f\n"));
+        assert!(second_text
+            .contains("Program: jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3\nProtocol: 7071"));
+        assert_ne!(first, second);
+        assert_eq!(first.len(), second.len());
+        assert_ne!(sha256_hex(&first), sha256_hex(&second));
     }
 }
