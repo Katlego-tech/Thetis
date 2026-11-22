@@ -91,6 +91,10 @@ pub fn issue_message(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
 pub fn transfer_message(
     program_id: &Pubkey,
     instance_id: &[u8; 16],
