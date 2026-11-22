@@ -10,6 +10,10 @@ skip-lint = false
 receipt_spike = "CBKfw6VcsKcQNXL5ZmjgsAu99qMswxreozhqBYeSUAqj"
 signing_spike = "EH7cQ4xmoJ92v2y1JW1xHwVQgtCNvkkVka3jiK1ByQnb"
 intent_spike = "3LfZrLC2R3AdjAQgdoEjdC3YZpbHLaJGy446H74cPEyH"
+thetis = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3"
+
+[programs.devnet]
+thetis = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3"
 
 [provider]
 cluster = "localnet"
