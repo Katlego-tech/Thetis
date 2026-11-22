@@ -53,6 +53,7 @@ pub fn format_sast(unix: i64) -> String {
 )]
 pub fn issue_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     class_code: &str,
     class_version: u32,
@@ -73,6 +74,7 @@ pub fn issue_message(
     );
     signed_message(
         program_id,
+        instance_id,
         "Issue lot",
         format_args!(
             "Lot: {lot_id}\n\
@@ -91,6 +93,7 @@ pub fn issue_message(
 
 pub fn transfer_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     quantity_kg: u64,
     from: &str,
@@ -101,6 +104,7 @@ pub fn transfer_message(
     let quantity = format_tonnes(quantity_kg);
     signed_message(
         program_id,
+        instance_id,
         "Transfer receipts",
         format_args!(
             "Lot: {lot_id}\n\
@@ -119,6 +123,7 @@ pub fn transfer_message(
 )]
 pub fn split_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     child_lot_id: &str,
     quantity_kg: u64,
@@ -130,6 +135,7 @@ pub fn split_message(
     let quantity = format_tonnes(quantity_kg);
     signed_message(
         program_id,
+        instance_id,
         "Split lot",
         format_args!(
             "Lot: {lot_id}\n\
@@ -149,6 +155,7 @@ pub fn split_message(
 )]
 pub fn redeem_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     lot_id: &str,
     quantity_kg: u64,
     holder: &str,
@@ -161,6 +168,7 @@ pub fn redeem_message(
     let ticket = digest_hex(collection_ticket);
     signed_message(
         program_id,
+        instance_id,
         "Collect from stockyard",
         format_args!(
             "Lot: {lot_id}\n\
@@ -176,15 +184,18 @@ pub fn redeem_message(
 
 fn signed_message(
     program_id: &Pubkey,
+    instance_id: &[u8; 16],
     action: &str,
     fields: Arguments<'_>,
     valid_until: i64,
 ) -> Vec<u8> {
     let expiry = format_sast(valid_until);
+    let instance = hex(instance_id);
     format!(
         "Thetis authorisation v1\n\
          Network: devnet\n\
          Program: {program_id}\n\
+         Protocol: {instance}\n\
          Action: {action}\n\
          {fields}\n\
          Valid until: {expiry}\n\
@@ -194,8 +205,12 @@ fn signed_message(
 }
 
 fn digest_hex(digest: &[u8; 32]) -> String {
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
+    hex(digest)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         write!(hex, "{byte:02x}").unwrap();
     }
     hex
