@@ -132,6 +132,67 @@ fn accredit_organisation_checks_accreditor_and_display_name() {
 }
 
 #[test]
+fn accredit_rejects_duplicate_display_name() {
+    let mut f = Fixture::initialized();
+    f.ok(
+        f.accredit(Accreditor, 1, Role::Exporter, "Khunou Ore"),
+        Accreditor,
+    );
+    f.already_initialized(
+        f.accredit(Accreditor, 2, Role::Custodian, "Khunou Ore"),
+        Accreditor,
+    );
+    assert!(!f.account_exists(f.organisation(2)));
+}
+
+#[test]
+fn accredit_rejects_duplicate_display_name_other_case() {
+    let mut f = Fixture::initialized();
+    assert_eq!(
+        f.organisation_name("Khunou Ore"),
+        f.organisation_name("KHUNOU ore")
+    );
+    f.ok(
+        f.accredit(Accreditor, 1, Role::Exporter, "Khunou Ore"),
+        Accreditor,
+    );
+    f.already_initialized(
+        f.accredit(Accreditor, 2, Role::Custodian, "KHUNOU ore"),
+        Accreditor,
+    );
+    assert!(!f.account_exists(f.organisation(2)));
+}
+
+#[test]
+fn accredit_accepts_distinct_names() {
+    let mut f = Fixture::initialized();
+    f.ok(
+        f.accredit(Accreditor, 1, Role::Exporter, "Khunou Ore"),
+        Accreditor,
+    );
+    f.ok(
+        f.accredit(Accreditor, 2, Role::Custodian, "Khunou Ores"),
+        Accreditor,
+    );
+    let first = f.organisation_name("Khunou Ore");
+    let second = f.organisation_name("Khunou Ores");
+    assert_ne!(first, second);
+    for marker in [first, second] {
+        let (owner, data_len) = f.owner_and_data_len(marker).expect("name marker exists");
+        assert_eq!(owner, thetis::ID);
+        assert_eq!(data_len, 8);
+    }
+    assert_eq!(
+        f.read::<Organisation>(f.organisation(1)).display_name,
+        "Khunou Ore"
+    );
+    assert_eq!(
+        f.read::<Organisation>(f.organisation(2)).display_name,
+        "Khunou Ores"
+    );
+}
+
+#[test]
 fn relationship_is_bidirectional_unique_and_bounded() {
     let mut f = Fixture::initialized();
     let a = f.add_org(1, Role::Exporter);

@@ -205,11 +205,20 @@ impl Fixture {
         pda(&[b"org", self.protocol.as_ref(), &[id; 16]])
     }
 
+    pub fn organisation_name(&self, display_name: &str) -> Pubkey {
+        pda(&[
+            b"org_name",
+            self.protocol.as_ref(),
+            &solana_sha256_hasher::hash(display_name.to_ascii_lowercase().as_bytes()).to_bytes(),
+        ])
+    }
+
     pub fn accredit(&self, signer: Actor, id: u8, role: Role, name: &str) -> Instruction {
         ix(
             accounts::AccreditOrganisation {
                 protocol: self.protocol,
                 organisation: self.organisation(id),
+                organisation_name: self.organisation_name(name),
                 accreditor: self.key(signer),
                 payer: self.payer.pubkey(),
                 system_program: SYSTEM,
@@ -228,9 +237,9 @@ impl Fixture {
     }
 
     pub fn add_org_with_accreditor(&mut self, accreditor: Actor, id: u8, role: Role) -> Pubkey {
-        let name = "Kopano Stockyard Custody";
+        let name = format!("Kopano Stockyard Custody {id}");
         let address = self.organisation(id);
-        let tx = self.ok(self.accredit(accreditor, id, role, name), accreditor);
+        let tx = self.ok(self.accredit(accreditor, id, role, &name), accreditor);
         assert_event(
             &tx,
             thetis::events::OrganisationAccredited {
@@ -451,6 +460,11 @@ impl Fixture {
 
     pub fn account_exists(&self, address: Pubkey) -> bool {
         self.svm.get_account(&address).is_some()
+    }
+
+    pub fn owner_and_data_len(&self, address: Pubkey) -> Option<(Pubkey, usize)> {
+        let account = self.svm.get_account(&address)?;
+        Some((account.owner, account.data.len()))
     }
 
     pub fn read<T: AccountDeserialize>(&self, address: Pubkey) -> T {

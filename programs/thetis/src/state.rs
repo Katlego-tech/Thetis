@@ -49,6 +49,11 @@ pub struct Organisation {
     pub bump: u8,
 }
 
+/// Marker for a display name taken in one protocol; its address carries the meaning.
+#[account]
+#[derive(InitSpace)]
+pub struct OrganisationName {}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Authority {
