@@ -8,6 +8,13 @@ const johannesburg = new Intl.DateTimeFormat("en-GB", {
   minute: "2-digit",
   hourCycle: "h23",
 });
+const johannesburgClock = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Africa/Johannesburg",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
 
 function formatFixed(value: bigint, digits: number): string {
   const scale = 10n ** BigInt(digits);
@@ -37,4 +44,8 @@ export function formatDateTime(iso: string): string {
     johannesburg.formatToParts(new Date(iso)).map(({ type, value }) => [type, value]),
   );
   return `${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} SAST`;
+}
+
+export function formatClockTime(iso: string): string {
+  return `${johannesburgClock.format(new Date(iso))} SAST`;
 }
