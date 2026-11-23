@@ -30,16 +30,16 @@ before the event (phase 0) unless its date says otherwise.
 
 | Deliverable | Pull request | Date | Licence | Solana-related |
 |---|---|---|---|---|
-| Decisions D34, D35 (the patterns are adapted, see §3) | #1 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| CI that keeps every run's step logs; local log archiver | #2 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| `packages/domain`: exact-integer position, capacity, release preview and accrual calculations; CI Node workspace checks (install, lint, typecheck, test), dependency scan and duplication scan | #3 | 2026-11-18 | not yet licensed (repository licence pending) | yes (on-chain quantities and amounts) |
-| `programs/receipt-spike`: Token-2022 receipt enforcement spike (ADR 0001); CI Rust and Anchor checks (verified Solana and Anchor install, fmt, clippy, build, tests) and Cargo dependency scan | #6 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
-| `infra/`, `services/`: AWS CDK app for the API, fee sponsor and worker (not deployed) | #7 | 2026-11-18 | not yet licensed (repository licence pending) | partly (fee sponsor) |
-| Documentation updates for phase-0 progress | #8 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| Supabase migrations and RLS proof; CI database tests | #9 | 2026-11-18 | not yet licensed (repository licence pending) | no |
-| `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
-| `tools/signing-relay`: laptop relay for the two-phone signing test (Programmatic Signer instructions encoded from the published IDL; no upstream client copied) | #12 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
-| `apps/signing-spike`: Android app for the two-phone signing test (Mobile Wallet Adapter) | #13 | 2026-11-18 | not yet licensed (repository licence pending) | yes |
+| Decisions D34, D35 (the patterns are adapted, see §3) | #1 | 2026-11-18 | Apache-2.0 (this repository) | no |
+| CI that keeps every run's step logs; local log archiver | #2 | 2026-11-18 | Apache-2.0 (this repository) | no |
+| `packages/domain`: exact-integer position, capacity, release preview and accrual calculations; CI Node workspace checks (install, lint, typecheck, test), dependency scan and duplication scan | #3 | 2026-11-18 | Apache-2.0 (this repository) | yes (on-chain quantities and amounts) |
+| `programs/receipt-spike`: Token-2022 receipt enforcement spike (ADR 0001); CI Rust and Anchor checks (verified Solana and Anchor install, fmt, clippy, build, tests) and Cargo dependency scan | #6 | 2026-11-18 | Apache-2.0 (this repository) | yes |
+| `infra/`, `services/`: AWS CDK app for the API, fee sponsor and worker (not deployed) | #7 | 2026-11-18 | Apache-2.0 (this repository) | partly (fee sponsor) |
+| Documentation updates for phase-0 progress | #8 | 2026-11-18 | Apache-2.0 (this repository) | no |
+| Supabase migrations and RLS proof; CI database tests | #9 | 2026-11-18 | Apache-2.0 (this repository) | no |
+| `programs/signing-spike`: two-party Programmatic Signer spike (ADR 0002) | #10 | 2026-11-18 | Apache-2.0 (this repository) | yes |
+| `tools/signing-relay`: laptop relay for the two-phone signing test (Programmatic Signer instructions encoded from the published IDL; no upstream client copied) | #12 | 2026-11-18 | Apache-2.0 (this repository) | yes |
+| `apps/signing-spike`: Android app for the two-phone signing test (Mobile Wallet Adapter) | #13 | 2026-11-18 | Apache-2.0 (this repository) | yes |
 
 ## 3. Patterns adapted from the author's other projects
 

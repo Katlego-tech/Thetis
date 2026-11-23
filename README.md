@@ -92,3 +92,7 @@ python3 scripts/check_design.py
 ```
 
 This checks package-authored links and snapshot integrity. It does not test an application. The program and app checks are under [Built so far](#built-so-far).
+
+## Licence
+
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Code and templates reused from elsewhere keep their own licences, listed in [docs/reuse-manifest.md](docs/reuse-manifest.md).
