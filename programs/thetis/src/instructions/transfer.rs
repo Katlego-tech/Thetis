@@ -17,9 +17,8 @@ use crate::{
     },
     receipts::{self, VAULT_AUTHORITY_SEED},
     state::*,
+    validate::{check_authority, CUSTODY_WINDOW_SECS},
 };
-
-const CUSTODY_WINDOW_SECS: i64 = 600;
 
 #[derive(Accounts)]
 pub struct Transfer<'info> {
@@ -101,15 +100,7 @@ pub fn transfer(
     require!(window <= CUSTODY_WINDOW_SECS, ThetisError::WindowTooLong);
 
     let authority = &accounts.authority;
-    require!(
-        authority.revoked_at.is_none(),
-        ThetisError::AuthorityRevoked
-    );
-    require!(authority.expires_at > now, ThetisError::AuthorityExpired);
-    require!(
-        authority.scopes & scope::TRANSFER != 0,
-        ThetisError::ScopeMissing
-    );
+    check_authority(authority, now, scope::TRANSFER)?;
 
     let protocol_key = protocol.key();
     let owner = &accounts.owner;

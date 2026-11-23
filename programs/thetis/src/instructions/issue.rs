@@ -22,10 +22,8 @@ use crate::{
     },
     receipts::{self, MINT_AUTHORITY_SEED, VAULT_AUTHORITY_SEED},
     state::*,
-    validate::{code_seed, valid_code},
+    validate::{check_authority, code_seed, valid_code, CUSTODY_WINDOW_SECS},
 };
-
-const CUSTODY_WINDOW_SECS: i64 = 600;
 
 #[derive(Accounts)]
 #[instruction(lot_id: String, grade: String, quantity_kg: u64, intake_digest: [u8; 32])]
@@ -128,15 +126,7 @@ pub fn issue_lot(
     require!(window <= CUSTODY_WINDOW_SECS, ThetisError::WindowTooLong);
 
     let authority = &accounts.authority;
-    require!(
-        authority.revoked_at.is_none(),
-        ThetisError::AuthorityRevoked
-    );
-    require!(authority.expires_at > now, ThetisError::AuthorityExpired);
-    require!(
-        authority.scopes & scope::ISSUE != 0,
-        ThetisError::ScopeMissing
-    );
+    check_authority(authority, now, scope::ISSUE)?;
 
     let protocol_key = protocol.key();
     let owner = &accounts.owner;

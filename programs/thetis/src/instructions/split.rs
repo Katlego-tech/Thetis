@@ -22,10 +22,8 @@ use crate::{
     },
     receipts::{self, MINT_AUTHORITY_SEED, VAULT_AUTHORITY_SEED},
     state::*,
-    validate::code_seed,
+    validate::{check_authority, code_seed, CUSTODY_WINDOW_SECS},
 };
-
-const CUSTODY_WINDOW_SECS: i64 = 600;
 
 #[derive(Accounts)]
 #[instruction(child_lot_id: String)]
@@ -323,18 +321,5 @@ pub fn split(
         quantity_kg,
         parent_revision: lot.revision,
     });
-    Ok(())
-}
-
-fn check_authority(authority: &Authority, now: i64, required_scope: u16) -> Result<()> {
-    require!(
-        authority.revoked_at.is_none(),
-        ThetisError::AuthorityRevoked
-    );
-    require!(authority.expires_at > now, ThetisError::AuthorityExpired);
-    require!(
-        authority.scopes & required_scope != 0,
-        ThetisError::ScopeMissing
-    );
     Ok(())
 }

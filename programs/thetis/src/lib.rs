@@ -10,6 +10,7 @@ mod validate;
 
 use instructions::documents::{self, *};
 use instructions::issue::{self, *};
+use instructions::redeem::{self, *};
 use instructions::setup::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
@@ -140,6 +141,22 @@ pub mod thetis {
             ctx,
             child_lot_id,
             quantity_kg,
+            expected_revision,
+            valid_until,
+        )
+    }
+
+    pub fn redeem(
+        ctx: Context<Redeem>,
+        quantity_kg: u64,
+        collection_ticket: [u8; 32],
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        redeem::redeem(
+            ctx,
+            quantity_kg,
+            collection_ticket,
             expected_revision,
             valid_until,
         )
