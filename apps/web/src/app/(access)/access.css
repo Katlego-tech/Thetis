@@ -1,0 +1,226 @@
+.access-banner {
+  min-height: 32px;
+  padding: 7px 20px;
+  background: var(--banner);
+  color: var(--banner-ink);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.access-banner strong {
+  margin-inline-end: 8px;
+  font-weight: 600;
+}
+
+.access-topbar,
+.access-main {
+  padding-inline: 36px;
+}
+
+.access-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 56px;
+  background: var(--rail);
+  color: var(--rail-ink);
+}
+
+.access-wordmark {
+  color: var(--rail-ink);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  font-variation-settings: "wdth" 125;
+  letter-spacing: 0.02em;
+}
+
+.access-who {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.access-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.access-sign-out {
+  color: var(--rail-ink);
+  white-space: nowrap;
+}
+
+.access-gate {
+  display: flex;
+  justify-content: center;
+  padding-block: 72px 96px;
+}
+
+.access-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 440px;
+  padding: 28px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--sheet);
+}
+
+.access-title {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variation-settings: "wdth" 118;
+}
+
+.access-intro {
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.access-address {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.access-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.access-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.access-input {
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--ink-2);
+  border-radius: var(--radius);
+  background: var(--sheet);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.access-input[aria-invalid="true"] {
+  border-color: var(--refuse);
+}
+
+.access-code {
+  padding: 12px 14px;
+  font:
+    500 22px / 1 var(--font-mono),
+    monospace;
+  letter-spacing: 0.5em;
+}
+
+.access-help,
+.access-field-error {
+  font-size: 12px;
+}
+
+.access-help {
+  color: var(--ink-2);
+}
+
+.access-field-error,
+.access-error {
+  color: var(--refuse);
+}
+
+.access-error,
+.access-note {
+  padding: 6px 0 6px 12px;
+  border-inline-start: 2px solid var(--ink);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.access-error {
+  border-inline-start-color: var(--refuse);
+}
+
+.access-status:empty {
+  position: absolute;
+}
+
+.access-primary {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--act);
+  color: var(--act-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.access-primary:disabled {
+  background: var(--hair);
+  color: var(--ink-2);
+}
+
+.access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.access-link {
+  color: var(--act);
+  font-size: 13px;
+}
+
+.access-link,
+.access-sign-out {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.access-primary,
+.access-link,
+.access-sign-out {
+  cursor: pointer;
+}
+
+.access-link:disabled,
+.access-link[aria-disabled="true"] {
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.access-primary:disabled,
+.access-link:disabled,
+.access-link[aria-disabled="true"],
+.access-sign-out:disabled {
+  cursor: not-allowed;
+}
+
+@media (width < 768px) {
+  .access-topbar,
+  .access-main {
+    padding-inline: 16px;
+  }
+
+  .access-email {
+    display: none;
+  }
+
+  .access-gate {
+    padding-block: 32px 56px;
+  }
+
+  .access-card {
+    padding: 20px;
+  }
+}
