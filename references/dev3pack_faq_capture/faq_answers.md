@@ -1,5 +1,13 @@
 # Dev3Pack FAQ answers, extracted verbatim
 
+> **Note (2026-11-22).** These answers come from the `/faq` page's script bundle. On 22 Nov the user
+> confirmed, by screenshot, that https://hack.dev3pack.xyz/faq shows the "Can I start building before
+> the hackathon?" answer as captured here. The homepage, https://hack.dev3pack.xyz, has its own FAQ
+> section with different wording for that question ("Yes — as long as the project is related to
+> Solana. … What matters at submission is that it's your work."). Both versions were in the same
+> deployment (`dpl_AXFjpWNqcCf6BuopDyABQ9AztSU2`) on 18 and 22 Nov. Nothing here shows that the site
+> changed. Check other answers against the live page before citing them.
+
 - Source page: https://hack.dev3pack.xyz/faq
 - Script: https://hack.dev3pack.xyz/_next/static/chunks/0thwfx_~hqd~4.js?dpl=dpl_AXFjpWNqcCf6BuopDyABQ9AztSU2
 - Retrieved: 2026-11-18T05:24:59Z (UTC) by Claude, with curl; saved copy: `faq_script_0thwfx_hqd4.js`
