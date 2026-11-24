@@ -224,3 +224,205 @@
     padding: 20px;
   }
 }
+
+.access-primary-link {
+  display: block;
+  text-align: center;
+}
+
+.access-account {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding-block: 28px 48px;
+  overflow-wrap: anywhere;
+}
+
+.access-account-cert,
+.access-wallet-address {
+  font:
+    500 12px / 1.4 var(--font-mono),
+    monospace;
+}
+
+.access-account-cert,
+.access-wallet-basis,
+.access-link-state > span {
+  color: var(--ink-2);
+}
+
+.access-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.access-stack + .access-stack {
+  margin-top: 16px;
+}
+
+.access-stack h2 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variation-settings: "wdth" 110;
+}
+
+.access-table {
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-collapse: collapse;
+  background: var(--sheet);
+}
+
+.access-table th {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ink);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.access-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--hair);
+  vertical-align: top;
+}
+
+.access-table td.access-table-action {
+  width: 1%;
+  text-align: right;
+}
+
+.access-wallet-basis {
+  display: block;
+  font-size: 12px;
+}
+
+.access-link-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px dashed var(--ink-2);
+  border-radius: var(--radius);
+  background: var(--sheet);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.access-account-button {
+  width: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.access-outline {
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.access-outline:disabled {
+  color: var(--ink-2);
+  cursor: not-allowed;
+}
+
+.access-table-action .access-outline {
+  padding: 6px 10px;
+}
+
+.access-revoke-confirm {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.access-revoke-confirm strong,
+.access-revoke-confirm .access-wallet-address {
+  color: var(--ink);
+}
+
+.access-skeleton {
+  display: block;
+  min-width: 12px;
+  width: 80%;
+  height: 12px;
+  border-radius: var(--radius);
+  background: var(--hair);
+}
+
+.access-table tr:nth-child(even) .access-skeleton {
+  width: 60%;
+}
+
+@media (width < 768px) {
+  .access-account {
+    padding-block: 20px 40px;
+  }
+
+  .access-account .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .access-account .page-aside {
+    text-align: left;
+  }
+
+  .access-table,
+  .access-table tbody,
+  .access-table tr,
+  .access-table td {
+    display: block;
+  }
+
+  .access-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .access-table tr {
+    padding-block: 6px;
+  }
+
+  .access-table tr:not(:last-child) {
+    border-bottom: 1px solid var(--hair);
+  }
+
+  .access-table td {
+    padding: 4px 14px;
+    border: none;
+  }
+
+  .access-table td.access-table-action {
+    width: auto;
+    text-align: left;
+  }
+
+  .access-table td:empty {
+    display: none;
+  }
+
+  .access-table td[data-label]::before {
+    display: block;
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    content: attr(data-label);
+  }
+}
