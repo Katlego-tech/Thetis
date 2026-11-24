@@ -141,6 +141,29 @@ function expectError(response: Awaited<ReturnType<typeof call>>, status: number,
   expect(JSON.parse(response.body ?? "")).toEqual({ error: { code, message: expect.any(String) } });
 }
 
+const mailpitUrl = process.env.MAILPIT_URL ?? "http://127.0.0.1:54324";
+
+async function mailedCode(email: string): Promise<string> {
+  const search = `${mailpitUrl}/api/v1/search?query=${encodeURIComponent(`to:"${email}"`)}`;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const found = await fetch(search);
+    if (!found.ok) throw new Error(`Mailpit search failed with ${found.status}`);
+    const { messages } = (await found.json()) as { messages?: { ID: string }[] };
+    const latest = messages?.[0];
+    if (latest) {
+      const response = await fetch(`${mailpitUrl}/api/v1/message/${latest.ID}`);
+      if (!response.ok) throw new Error(`Mailpit message fetch failed with ${response.status}`);
+      const message = (await response.json()) as { Text?: string; HTML?: string };
+      const code =
+        /\b(\d{6})\b/.exec(message.Text ?? "")?.[1] ?? /\b(\d{6})\b/.exec(message.HTML ?? "")?.[1];
+      if (!code) throw new Error(`Mailpit message to ${email} contains no 6-digit code`);
+      return code;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`No Mailpit message arrived for ${email} within 10 seconds`);
+}
+
 describe("invitations", () => {
   function invite(actor: Account, email: string) {
     return call("POST", "/v1/invitations", actor.token, { organisationId, email, role: "member" });
@@ -190,7 +213,7 @@ describe("invitations", () => {
     expectError(await invite(admin, email), 409, "INVITATION_EXISTS");
   });
 
-  it("creates an unconfirmed account for a new invitee", async () => {
+  it("creates a confirmed account with no password for a new invitee", async () => {
     const email = `new-${namespace}@example.com`;
     async function matchingUsers() {
       const users = [];
@@ -205,7 +228,48 @@ describe("invitations", () => {
     responseData(await invite(admin, email));
     const created = await matchingUsers();
     expect(created).toHaveLength(1);
-    expect(created[0]?.email_confirmed_at).toBeFalsy();
+    expect(created[0]?.email_confirmed_at).toBeTruthy();
+    const attempt = await createClient(authUrl, anonKey, clientOptions).auth.signInWithPassword({
+      email,
+      password,
+    });
+    expect(attempt.error).not.toBeNull();
+    expect(attempt.data.session).toBeNull();
+  });
+
+  it("sends an invitee a 6-digit code and gives a session only for that code", async () => {
+    const email = `code-${namespace}@example.com`;
+    const { inviteUrl } = responseData<{ inviteUrl: string }>(await invite(admin, email));
+    const token = new URL(inviteUrl).searchParams.get("token");
+    const client = createClient(authUrl, anonKey, clientOptions);
+    const sent = await client.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+    expect(sent.error).toBeNull();
+    const code = await mailedCode(email);
+    expect(code).toMatch(/^\d{6}$/);
+
+    const wrong = String((Number(code) + 1) % 1_000_000).padStart(6, "0");
+    const refused = await client.auth.verifyOtp({ email, token: wrong, type: "email" });
+    expect(refused.error).not.toBeNull();
+    expect(refused.data.session).toBeNull();
+
+    const verified = await client.auth.verifyOtp({ email, token: code, type: "email" });
+    expect(verified.error).toBeNull();
+    expect(verified.data.session).not.toBeNull();
+
+    const membershipId = mustSucceed(await client.rpc("accept_invitation", { token }));
+    expect(membershipId).toEqual(expect.any(String));
+  });
+
+  it("refuses an invitation to a signed-in user whose email does not match", async () => {
+    const email = `mismatch-${namespace}@example.com`;
+    const { inviteUrl } = responseData<{ inviteUrl: string }>(await invite(admin, email));
+    const token = new URL(inviteUrl).searchParams.get("token");
+    const refused = await outsider.client.rpc("accept_invitation", { token });
+    expect(refused.error?.message).toBe("INVITATION_INVALID");
+    const invitation = mustSucceed(
+      await service.from("invitations").select("accepted_at").eq("email", email).single(),
+    );
+    expect(invitation.accepted_at).toBeNull();
   });
 });
 
