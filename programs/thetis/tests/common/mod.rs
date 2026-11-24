@@ -4,6 +4,10 @@ use anchor_lang::{
     prelude::{pubkey, Pubkey, SlotHashes},
     AccountDeserialize, AccountSerialize, Event, InstructionData, ToAccountMetas,
 };
+use anchor_spl::token_2022::spl_token_2022::{
+    extension::StateWithExtensionsMut,
+    state::{Account as TokenAccount, AccountState},
+};
 use litesvm::{
     types::{FailedTransactionMetadata, TransactionMetadata},
     LiteSVM,
@@ -63,6 +67,16 @@ pub enum Actor {
 }
 
 use Actor::*;
+
+/// A whole account as the ledger holds it: what a test compares before and after a refusal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawAccount {
+    pub lamports: u64,
+    pub owner: Pubkey,
+    pub data: Vec<u8>,
+    pub executable: bool,
+    rent_epoch: u64,
+}
 
 pub struct Fixture {
     svm: LiteSVM,
@@ -547,6 +561,31 @@ impl Fixture {
         self.svm.get_account(&address).is_some()
     }
 
+    /// Every field of an account that a refused transaction must leave alone.
+    pub fn raw_account(&self, address: Pubkey) -> Option<RawAccount> {
+        self.svm.get_account(&address).map(|account| RawAccount {
+            lamports: account.lamports,
+            owner: account.owner,
+            data: account.data,
+            executable: account.executable,
+            rent_epoch: account.rent_epoch,
+        })
+    }
+
+    /// Sets a Token-2022 account's state to Frozen in the ledger, so a thaw has something to
+    /// thaw. The account must be initialised.
+    pub fn freeze_token_account(&mut self, address: Pubkey) {
+        let mut account = self.svm.get_account(&address).unwrap();
+        {
+            let mut token = StateWithExtensionsMut::<TokenAccount>::unpack(&mut account.data)
+                .expect("a Token-2022 account");
+            assert_eq!(token.base.state, AccountState::Initialized);
+            token.base.state = AccountState::Frozen;
+            token.pack_base();
+        }
+        self.svm.set_account(address, account).unwrap();
+    }
+
     pub fn owner_and_data_len(&self, address: Pubkey) -> Option<(Pubkey, usize)> {
         let account = self.svm.get_account(&address)?;
         Some((account.owner, account.data.len()))
@@ -570,6 +609,31 @@ impl Fixture {
             &[&self.payer, self.signer(actor)],
         )
         .unwrap()
+    }
+
+    /// Sends `instructions` in one legacy transaction that the sponsor pays for and `actor`
+    /// also signs: a direct call to a program, as a wallet would make it.
+    #[allow(
+        clippy::result_large_err,
+        reason = "test helpers return LiteSVM metadata for assertions"
+    )]
+    pub fn send_signed(
+        &mut self,
+        instructions: &[Instruction],
+        actor: Actor,
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        self.svm.expire_blockhash();
+        let message = Message::new_with_blockhash(
+            instructions,
+            Some(&self.payer.pubkey()),
+            &self.svm.latest_blockhash(),
+        );
+        let tx = VersionedTransaction::try_new(
+            VersionedMessage::Legacy(message),
+            &[&self.payer, self.signer(actor)],
+        )
+        .unwrap();
+        self.svm.send_transaction(tx)
     }
 
     pub fn ok(&mut self, instruction: Instruction, actor: Actor) -> TransactionMetadata {
