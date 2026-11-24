@@ -27,8 +27,12 @@ const errors = {
 type ErrorCode = keyof typeof errors;
 
 class RouteError extends Error {
-  constructor(readonly code: ErrorCode) {
+  // A declared field, not a parameter property: `node src/local.ts` runs in strip-only mode.
+  readonly code: ErrorCode;
+
+  constructor(code: ErrorCode) {
     super(code);
+    this.code = code;
   }
 }
 
@@ -112,7 +116,7 @@ async function createInvitation(
   );
   if (!invitation) throw new RouteError("INTERNAL");
 
-  const { error } = await clients.service.auth.admin.createUser({ email, email_confirm: false });
+  const { error } = await clients.service.auth.admin.createUser({ email, email_confirm: true });
   if (error && error.code !== "email_exists" && error.code !== "user_already_exists") {
     // The invitation is already stored; revoke it so the admin can retry instead of hitting
     // INVITATION_EXISTS for an invitee who has no account (access.md §3).
