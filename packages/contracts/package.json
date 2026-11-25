@@ -1,0 +1,24 @@
+{
+  "name": "@thetis/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check . && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "generate": "node scripts/generate.mjs"
+  },
+  "dependencies": {
+    "@solana/kit": "8.6.0",
+    "@solana/program-client-core": "8.6.0"
+  },
+  "devDependencies": {
+    "@codama/nodes-from-anchor": "1.5.6",
+    "@codama/renderers-js": "2.9.1",
+    "codama": "1.11.0"
+  }
+}
