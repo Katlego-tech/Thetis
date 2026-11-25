@@ -15,6 +15,12 @@ importers:
       '@biomejs/biome':
         specifier: 2.6.4
         version: 2.6.4
+      '@solana/kit':
+        specifier: 8.6.0
+        version: 8.6.0(typescript@7.0.2)
+      '@thetis/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
