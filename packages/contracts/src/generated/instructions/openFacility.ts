@@ -8,7 +8,7 @@
 
 import { combineCodec, fixDecoderSize, fixEncoderSize, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU16Decoder, getU16Encoder, getU32Decoder, getU32Encoder, getU8Decoder, getU8Encoder, SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS, SolanaError, transformEncoder, type AccountMeta, type AccountSignerMeta, type Address, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type Instruction, type InstructionWithAccounts, type InstructionWithData, type ReadonlyAccount, type ReadonlySignerAccount, type ReadonlyUint8Array, type WritableAccount, type WritableSignerAccount } from '@solana/kit';
 import { getAccountMetaFactory, getAddressFromResolvedInstructionAccount, getNonNullResolvedInstructionInput, type InstructionAccountInput, type InstructionAccountInputAddress, type InstructionSignerInput, type ResolvedInstructionAccount, type ResolvedInstructionAccountMeta } from '@solana/program-client-core';
-import { findFacilityPda, findOpenFacilityAuthorityPda, findPoolPda } from '../pdas/index.ts';
+import { findAuthorityPda, findFacilityPda } from '../pdas/index.ts';
 import { THETIS_PROGRAM_ADDRESS } from '../programs/index.ts';
 
 export const OPEN_FACILITY_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([3, 64, 248, 119, 95, 41, 149, 222]);
@@ -72,13 +72,10 @@ const args = { ...input,  };
 
 // Resolve default values.
 if (!accounts.authority.value) {
-accounts.authority.value = await findOpenFacilityAuthorityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), lender: getAddressFromResolvedInstructionAccount("lender", accounts.lender.value) }, { programAddress });
+accounts.authority.value = await findAuthorityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), wallet: getAddressFromResolvedInstructionAccount("lender", accounts.lender.value) }, { programAddress });
 }
 if (!accounts.facility.value) {
 accounts.facility.value = await findFacilityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), lenderOrg: getAddressFromResolvedInstructionAccount("lenderOrg", accounts.lenderOrg.value), facilityId: getNonNullResolvedInstructionInput("facilityId", args.facilityId) }, { programAddress });
-}
-if (!accounts.pool.value) {
-accounts.pool.value = await findPoolPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value) }, { programAddress });
 }
 if (!accounts.systemProgram.value) {
 accounts.systemProgram.value = "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -157,7 +154,7 @@ const getNextAccount = () => {
 }
 const getNextOptionalAccount = () => {
   const accountMeta = getNextAccount();
-  return accountMeta.address === THETIS_PROGRAM_ADDRESS ? undefined : accountMeta;
+  return accountMeta.address === instruction.programAddress ? undefined : accountMeta;
 };
   return { programAddress: instruction.programAddress, accounts: { lender: getNextAccount(), payer: getNextAccount(), protocol: getNextAccount(), authority: getNextAccount(), lenderOrg: getNextAccount(), borrowerOrg: getNextAccount(), facility: getNextAccount(), pool: getNextOptionalAccount(), systemProgram: getNextAccount() }, data: getOpenFacilityInstructionDataDecoder().decode(instruction.data) };
 }

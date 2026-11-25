@@ -8,7 +8,7 @@
 
 import { addDecoderSizePrefix, addEncoderSizePrefix, combineCodec, fixDecoderSize, fixEncoderSize, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getStructDecoder, getStructEncoder, getU16Decoder, getU16Encoder, getU32Decoder, getU32Encoder, getU64Decoder, getU64Encoder, getUtf8Decoder, getUtf8Encoder, SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS, SolanaError, transformEncoder, type AccountMeta, type AccountSignerMeta, type Address, type Codec, type Decoder, type Encoder, type Instruction, type InstructionWithAccounts, type InstructionWithData, type ReadonlyAccount, type ReadonlySignerAccount, type ReadonlyUint8Array, type WritableAccount, type WritableSignerAccount } from '@solana/kit';
 import { getAccountMetaFactory, getAddressFromResolvedInstructionAccount, type InstructionAccountInput, type InstructionAccountInputAddress, type InstructionSignerInput, type ResolvedInstructionAccount, type ResolvedInstructionAccountMeta } from '@solana/program-client-core';
-import { findOpenFacilityAuthorityPda } from '../pdas/index.ts';
+import { findAuthorityPda } from '../pdas/index.ts';
 import { THETIS_PROGRAM_ADDRESS } from '../programs/index.ts';
 
 export const SET_VALUATION_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([201, 49, 221, 187, 246, 151, 253, 2]);
@@ -71,7 +71,7 @@ const args = { ...input,  };
 
 // Resolve default values.
 if (!accounts.authority.value) {
-accounts.authority.value = await findOpenFacilityAuthorityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), lender: getAddressFromResolvedInstructionAccount("lender", accounts.lender.value) }, { programAddress });
+accounts.authority.value = await findAuthorityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), wallet: getAddressFromResolvedInstructionAccount("lender", accounts.lender.value) }, { programAddress });
 }
 if (!accounts.systemProgram.value) {
 accounts.systemProgram.value = "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
