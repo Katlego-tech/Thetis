@@ -6,6 +6,8 @@ use crate::{
 };
 
 pub(crate) const CUSTODY_WINDOW_SECS: i64 = 600;
+/// The longest signing window for an action that moves money or encumbers collateral.
+pub const MONEY_WINDOW_SECS: i64 = 300;
 
 pub(crate) fn valid_code(code: &str, limit: usize) -> bool {
     (1..=limit).contains(&code.len())

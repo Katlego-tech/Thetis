@@ -5,16 +5,45 @@ use anchor_lang::solana_program::pubkey::Pubkey;
 use crate::state::MAX_DISPLAY_NAME;
 
 pub fn format_tonnes(kg: u64) -> String {
-    let whole = (kg / 1_000).to_string();
-    let mut tonnes = String::with_capacity(whole.len() + whole.len() / 3 + 6);
+    format!(
+        "{}.{:03} t",
+        group_thousands(&(kg / 1_000).to_string()),
+        kg % 1_000
+    )
+}
+
+/// Writes `<code> <whole>[.<fraction>]`, with comma thousands separators in the whole part.
+/// `minor` is in the currency's smallest unit and `decimals` is the number of fraction digits.
+/// The code must be uppercase ASCII (facility policy guarantees it).
+pub fn format_money(minor: u64, decimals: u8, code: &[u8; 3]) -> String {
+    let decimals = usize::from(decimals);
+    let digits = minor.to_string();
+    // Pad so that there is always at least one whole digit before the fraction.
+    let padded = format!("{digits:0>width$}", width = decimals + 1);
+    let (whole, fraction) = padded.split_at(padded.len() - decimals);
+    let code: String = code.iter().copied().map(char::from).collect();
+    let whole = group_thousands(whole);
+    if decimals == 0 {
+        format!("{code} {whole}")
+    } else {
+        format!("{code} {whole}.{fraction}")
+    }
+}
+
+/// Writes basis points as a percentage with two decimals: 6000 is `60.00%`.
+pub fn format_bps(bps: u16) -> String {
+    format!("{}.{:02}%", bps / 100, bps % 100)
+}
+
+fn group_thousands(whole: &str) -> String {
+    let mut grouped = String::with_capacity(whole.len() + whole.len() / 3);
     for (index, digit) in whole.bytes().enumerate() {
         if index != 0 && (whole.len() - index).is_multiple_of(3) {
-            tonnes.push(',');
+            grouped.push(',');
         }
-        tonnes.push(char::from(digit));
+        grouped.push(char::from(digit));
     }
-    write!(tonnes, ".{:03} t", kg % 1_000).unwrap();
-    tonnes
+    grouped
 }
 
 pub fn format_sast(unix: i64) -> String {
@@ -180,6 +209,52 @@ pub fn redeem_message(
              Holder: {holder}\n\
              Custodian: {custodian}\n\
              Collection ticket: {ticket}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn pledge_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    quantity_kg: u64,
+    owner: &str,
+    lender: &str,
+    facility_id: &[u8; 16],
+    loan_index: u32,
+    currency: &[u8; 3],
+    rate_bps: u16,
+    max_ltv_bps: u16,
+    terms_version: u32,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let quantity = format_tonnes(quantity_kg);
+    let facility = hex(facility_id);
+    let currency: String = currency.iter().copied().map(char::from).collect();
+    let rate = format_bps(rate_bps);
+    let max_ltv = format_bps(max_ltv_bps);
+    signed_message(
+        program_id,
+        instance_id,
+        "Pledge receipts",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             Owner: {owner}\n\
+             Lender: {lender}\n\
+             Facility: {facility}\n\
+             Loan: {loan_index}\n\
+             Currency: {currency}\n\
+             Rate: {rate} a year, simple, actual/365\n\
+             Max LTV: {max_ltv}\n\
+             Terms: v{terms_version}\n\
              Revision: {expected_revision}"
         ),
         valid_until,

@@ -12,6 +12,8 @@ export * from './custodianClass.ts';
 export * from './documentAttestation.ts';
 export * from './facility.ts';
 export * from './intakeIdentity.ts';
+export * from './loan.ts';
+export * from './lockAllocation.ts';
 export * from './lot.ts';
 export * from './organisation.ts';
 export * from './organisationName.ts';

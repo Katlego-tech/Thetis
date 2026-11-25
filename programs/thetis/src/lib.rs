@@ -6,11 +6,12 @@ pub mod instructions;
 pub mod intent;
 mod receipts;
 pub mod state;
-mod validate;
+pub mod validate;
 
 use instructions::documents::{self, *};
 use instructions::facility::{self, *};
 use instructions::issue::{self, *};
+use instructions::pledge::{self, *};
 use instructions::redeem::{self, *};
 use instructions::setup::{self, *};
 use instructions::split::{self, *};
@@ -206,5 +207,15 @@ pub mod thetis {
             valid_until,
             source_digest,
         )
+    }
+
+    pub fn pledge(
+        ctx: Context<Pledge>,
+        loan_index: u32,
+        quantity_kg: u64,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        pledge::pledge(ctx, loan_index, quantity_kg, expected_revision, valid_until)
     }
 }

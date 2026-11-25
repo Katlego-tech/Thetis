@@ -17,6 +17,7 @@ export * from './lotIssued.ts';
 export * from './lotSplit.ts';
 export * from './organisationAccredited.ts';
 export * from './pauseChanged.ts';
+export * from './pledged.ts';
 export * from './protocolInitialized.ts';
 export * from './relationshipDeclared.ts';
 export * from './unitsRedeemed.ts';

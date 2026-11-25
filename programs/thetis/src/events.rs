@@ -124,3 +124,14 @@ pub struct ValuationSet {
     pub source_digest: [u8; 32],
     pub set_at: i64,
 }
+
+#[event]
+pub struct Pledged {
+    pub loan: Pubkey,
+    pub lock: Pubkey,
+    pub position: Pubkey,
+    pub lot: Pubkey,
+    pub quantity_kg: u64,
+    pub position_revision: u64,
+    pub revision: u64,
+}
