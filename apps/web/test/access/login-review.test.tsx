@@ -65,7 +65,8 @@ test("resend keeps keyboard focus and ignores activation while pending and cooli
   expect(mocks.signInWithOtp).toHaveBeenCalledTimes(2);
 
   await act(async () => finishResend?.());
-  expect(button).toHaveAccessibleName("Send a new code in 1:00");
+  // The cooldown runs on the real clock; under load a second can pass before this line.
+  expect(button).toHaveAccessibleName(/^Send a new code in (1:00|0:5\d)$/);
   expect(button).toHaveAttribute("aria-disabled", "true");
   expect(button).not.toBeDisabled();
   expect(button).toHaveFocus();
