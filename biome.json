@@ -15,7 +15,9 @@
       "*.json",
       "!**/node_modules",
       "!**/dist",
-      "!**/.next"
+      "!**/.next",
+      "!packages/contracts/src/generated",
+      "!packages/contracts/idl"
     ]
   },
   "formatter": {
