@@ -1,0 +1,2776 @@
+{
+  "address": "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3",
+  "metadata": {
+    "name": "thetis",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Thetis custody and receipt program"
+  },
+  "instructions": [
+    {
+      "name": "accredit_custodian_class",
+      "discriminator": [
+        89,
+        108,
+        187,
+        57,
+        223,
+        76,
+        59,
+        227
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "relations": [
+            "custodian",
+            "class_policy"
+          ]
+        },
+        {
+          "name": "custodian"
+        },
+        {
+          "name": "class_policy"
+        },
+        {
+          "name": "custodian_class",
+          "writable": true
+        },
+        {
+          "name": "accreditor",
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "site_code",
+          "type": "string"
+        },
+        {
+          "name": "approved_capacity_kg",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "accredit_organisation",
+      "discriminator": [
+        93,
+        184,
+        222,
+        122,
+        153,
+        102,
+        192,
+        106
+      ],
+      "accounts": [
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "organisation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "arg",
+                "path": "org_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "organisation_name",
+          "writable": true
+        },
+        {
+          "name": "accreditor",
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "org_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "Role"
+            }
+          }
+        },
+        {
+          "name": "display_name",
+          "type": "string"
+        },
+        {
+          "name": "admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "attest_document",
+      "discriminator": [
+        138,
+        67,
+        39,
+        48,
+        201,
+        182,
+        109,
+        122
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "relations": [
+            "organisation",
+            "authority"
+          ]
+        },
+        {
+          "name": "organisation",
+          "relations": [
+            "authority"
+          ]
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "document",
+          "writable": true
+        },
+        {
+          "name": "wallet",
+          "signer": true,
+          "relations": [
+            "authority"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "kind",
+          "type": {
+            "defined": {
+              "name": "DocumentKind"
+            }
+          }
+        },
+        {
+          "name": "subject",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "version",
+          "type": "u32"
+        },
+        {
+          "name": "sha256",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "declare_relationship",
+      "discriminator": [
+        36,
+        114,
+        227,
+        212,
+        22,
+        206,
+        7,
+        82
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "relations": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "name": "a",
+          "writable": true
+        },
+        {
+          "name": "b",
+          "writable": true
+        },
+        {
+          "name": "accreditor",
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "delegate_authority",
+      "discriminator": [
+        228,
+        17,
+        85,
+        163,
+        65,
+        139,
+        36,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "relations": [
+            "organisation"
+          ]
+        },
+        {
+          "name": "organisation"
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "arg",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "organisation"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        },
+        {
+          "name": "scopes",
+          "type": "u16"
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_protocol",
+      "discriminator": [
+        188,
+        233,
+        252,
+        106,
+        134,
+        146,
+        202,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "instance_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "instance_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "settlement_mode",
+          "type": {
+            "defined": {
+              "name": "SettlementMode"
+            }
+          }
+        },
+        {
+          "name": "admin",
+          "type": "pubkey"
+        },
+        {
+          "name": "accreditor",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "issue_lot",
+      "discriminator": [
+        111,
+        135,
+        233,
+        181,
+        132,
+        0,
+        90,
+        138
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "custodian"
+        },
+        {
+          "name": "class_policy"
+        },
+        {
+          "name": "custodian_class",
+          "writable": true
+        },
+        {
+          "name": "origin",
+          "optional": true
+        },
+        {
+          "name": "origin_issuer",
+          "optional": true
+        },
+        {
+          "name": "intake",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  116,
+                  97,
+                  107,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "custodian"
+              },
+              {
+                "kind": "arg",
+                "path": "intake_digest"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "lot_id",
+          "type": "string"
+        },
+        {
+          "name": "grade",
+          "type": "string"
+        },
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "intake_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "writable": true
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "flags",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "redeem",
+      "discriminator": [
+        184,
+        12,
+        86,
+        149,
+        70,
+        196,
+        97,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "owner_authority"
+        },
+        {
+          "name": "custodian_authority"
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "custodian"
+        },
+        {
+          "name": "custodian_class",
+          "writable": true
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "root",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "intake",
+          "writable": true
+        },
+        {
+          "name": "mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "collection_ticket",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "register_class",
+      "discriminator": [
+        147,
+        116,
+        45,
+        15,
+        238,
+        153,
+        206,
+        60
+      ],
+      "accounts": [
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "class_policy",
+          "writable": true
+        },
+        {
+          "name": "accreditor",
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "class_code",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "u32"
+        },
+        {
+          "name": "grades",
+          "type": {
+            "vec": "string"
+          }
+        },
+        {
+          "name": "origin_required",
+          "type": "bool"
+        },
+        {
+          "name": "lot_validity_secs",
+          "type": "i64"
+        },
+        {
+          "name": "split_inherits_expiry",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "revoke_authority",
+      "discriminator": [
+        233,
+        254,
+        239,
+        15,
+        49,
+        183,
+        105,
+        21
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "relations": [
+            "organisation",
+            "authority"
+          ]
+        },
+        {
+          "name": "organisation",
+          "relations": [
+            "authority"
+          ]
+        },
+        {
+          "name": "authority",
+          "writable": true
+        },
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "revoke_document",
+      "discriminator": [
+        120,
+        144,
+        209,
+        186,
+        62,
+        51,
+        209,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "relations": [
+            "organisation",
+            "authority",
+            "document"
+          ]
+        },
+        {
+          "name": "organisation",
+          "relations": [
+            "authority"
+          ]
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "document",
+          "writable": true
+        },
+        {
+          "name": "wallet",
+          "signer": true,
+          "relations": [
+            "authority"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "split",
+      "discriminator": [
+        124,
+        189,
+        27,
+        43,
+        216,
+        40,
+        147,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "owner_authority"
+        },
+        {
+          "name": "custodian_authority"
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "root",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "class_policy"
+        },
+        {
+          "name": "custodian_class"
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "custodian"
+        },
+        {
+          "name": "mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "child_lot",
+          "writable": true
+        },
+        {
+          "name": "child_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "child_lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "child_mint_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "child_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "child_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "child_lot"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "child_vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "child_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "child_vault",
+          "writable": true
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "child_lot_id",
+          "type": "string"
+        },
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "transfer",
+      "discriminator": [
+        163,
+        52,
+        200,
+        231,
+        140,
+        3,
+        69,
+        186
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "mint",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "from_position",
+          "writable": true
+        },
+        {
+          "name": "from_vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "from_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "from_vault",
+          "writable": true
+        },
+        {
+          "name": "recipient"
+        },
+        {
+          "name": "to_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              },
+              {
+                "kind": "account",
+                "path": "recipient"
+              }
+            ]
+          }
+        },
+        {
+          "name": "to_vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "to_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "to_vault",
+          "writable": true
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "unpause",
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "protocol",
+          "writable": true
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "flags",
+          "type": "u16"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Authority",
+      "discriminator": [
+        36,
+        108,
+        254,
+        18,
+        167,
+        144,
+        27,
+        36
+      ]
+    },
+    {
+      "name": "ClassPolicy",
+      "discriminator": [
+        58,
+        63,
+        65,
+        210,
+        205,
+        198,
+        123,
+        201
+      ]
+    },
+    {
+      "name": "CustodianClass",
+      "discriminator": [
+        19,
+        176,
+        68,
+        11,
+        193,
+        8,
+        142,
+        91
+      ]
+    },
+    {
+      "name": "DocumentAttestation",
+      "discriminator": [
+        107,
+        51,
+        177,
+        140,
+        64,
+        13,
+        236,
+        248
+      ]
+    },
+    {
+      "name": "IntakeIdentity",
+      "discriminator": [
+        175,
+        141,
+        40,
+        48,
+        12,
+        190,
+        158,
+        74
+      ]
+    },
+    {
+      "name": "Lot",
+      "discriminator": [
+        2,
+        198,
+        93,
+        153,
+        205,
+        31,
+        101,
+        252
+      ]
+    },
+    {
+      "name": "Organisation",
+      "discriminator": [
+        100,
+        235,
+        183,
+        55,
+        240,
+        174,
+        86,
+        191
+      ]
+    },
+    {
+      "name": "OrganisationName",
+      "discriminator": [
+        44,
+        11,
+        225,
+        246,
+        52,
+        30,
+        26,
+        206
+      ]
+    },
+    {
+      "name": "Position",
+      "discriminator": [
+        170,
+        188,
+        143,
+        228,
+        122,
+        64,
+        247,
+        208
+      ]
+    },
+    {
+      "name": "Protocol",
+      "discriminator": [
+        45,
+        39,
+        101,
+        43,
+        115,
+        72,
+        131,
+        40
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityDelegated",
+      "discriminator": [
+        194,
+        240,
+        143,
+        77,
+        6,
+        217,
+        38,
+        143
+      ]
+    },
+    {
+      "name": "AuthorityRevoked",
+      "discriminator": [
+        119,
+        225,
+        57,
+        76,
+        236,
+        155,
+        29,
+        34
+      ]
+    },
+    {
+      "name": "ClassRegistered",
+      "discriminator": [
+        81,
+        197,
+        87,
+        102,
+        113,
+        252,
+        225,
+        152
+      ]
+    },
+    {
+      "name": "CustodianClassAccredited",
+      "discriminator": [
+        18,
+        153,
+        2,
+        214,
+        228,
+        201,
+        78,
+        252
+      ]
+    },
+    {
+      "name": "DocumentAttested",
+      "discriminator": [
+        133,
+        253,
+        90,
+        164,
+        146,
+        94,
+        136,
+        120
+      ]
+    },
+    {
+      "name": "DocumentRevoked",
+      "discriminator": [
+        240,
+        121,
+        35,
+        70,
+        117,
+        0,
+        11,
+        240
+      ]
+    },
+    {
+      "name": "LotIssued",
+      "discriminator": [
+        145,
+        144,
+        244,
+        146,
+        119,
+        101,
+        73,
+        204
+      ]
+    },
+    {
+      "name": "LotSplit",
+      "discriminator": [
+        9,
+        125,
+        25,
+        63,
+        170,
+        186,
+        154,
+        56
+      ]
+    },
+    {
+      "name": "OrganisationAccredited",
+      "discriminator": [
+        51,
+        213,
+        241,
+        54,
+        156,
+        117,
+        118,
+        68
+      ]
+    },
+    {
+      "name": "PauseChanged",
+      "discriminator": [
+        238,
+        188,
+        213,
+        78,
+        134,
+        209,
+        178,
+        218
+      ]
+    },
+    {
+      "name": "ProtocolInitialized",
+      "discriminator": [
+        173,
+        122,
+        168,
+        254,
+        9,
+        118,
+        76,
+        132
+      ]
+    },
+    {
+      "name": "RelationshipDeclared",
+      "discriminator": [
+        155,
+        28,
+        167,
+        95,
+        231,
+        158,
+        250,
+        108
+      ]
+    },
+    {
+      "name": "UnitsRedeemed",
+      "discriminator": [
+        174,
+        175,
+        35,
+        22,
+        193,
+        92,
+        93,
+        78
+      ]
+    },
+    {
+      "name": "UnitsTransferred",
+      "discriminator": [
+        213,
+        73,
+        215,
+        135,
+        222,
+        229,
+        254,
+        145
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NotTopLevel",
+      "msg": "Instruction must be invoked at the top level"
+    },
+    {
+      "code": 6001,
+      "name": "Paused",
+      "msg": "This action is paused"
+    },
+    {
+      "code": 6002,
+      "name": "Expired",
+      "msg": "The signed intent has expired"
+    },
+    {
+      "code": 6003,
+      "name": "WindowTooLong",
+      "msg": "The signed intent exceeds the allowed validity window"
+    },
+    {
+      "code": 6004,
+      "name": "AuthorityRevoked",
+      "msg": "The authority has been revoked"
+    },
+    {
+      "code": 6005,
+      "name": "AuthorityExpired",
+      "msg": "The authority has expired"
+    },
+    {
+      "code": 6006,
+      "name": "WrongOrganisation",
+      "msg": "The organisation does not match"
+    },
+    {
+      "code": 6007,
+      "name": "ScopeMissing",
+      "msg": "The authority lacks the required scope"
+    },
+    {
+      "code": 6008,
+      "name": "StaleRevision",
+      "msg": "The expected revision does not match"
+    },
+    {
+      "code": 6009,
+      "name": "MissingVerification",
+      "msg": "The preceding Ed25519 verification instruction is missing"
+    },
+    {
+      "code": 6010,
+      "name": "MalformedVerification",
+      "msg": "The Ed25519 verification instruction is malformed"
+    },
+    {
+      "code": 6011,
+      "name": "WrongSignatureCount",
+      "msg": "The number of signatures does not match"
+    },
+    {
+      "code": 6012,
+      "name": "CrossInstructionReference",
+      "msg": "Ed25519 offsets must reference the verification instruction itself"
+    },
+    {
+      "code": 6013,
+      "name": "WrongSigner",
+      "msg": "The signer does not match the expected authority wallet"
+    },
+    {
+      "code": 6014,
+      "name": "MessageMismatch",
+      "msg": "The verified message does not match the on-chain intent"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidField",
+      "msg": "A field violates its allowed values or bounds"
+    },
+    {
+      "code": 6016,
+      "name": "ZeroQuantity",
+      "msg": "Quantity must be greater than zero"
+    },
+    {
+      "code": 6017,
+      "name": "ArithmeticOverflow",
+      "msg": "Arithmetic overflow or underflow"
+    },
+    {
+      "code": 6018,
+      "name": "NotAdmin",
+      "msg": "The protocol admin must sign"
+    },
+    {
+      "code": 6019,
+      "name": "NotAccreditor",
+      "msg": "The protocol accreditor must sign"
+    },
+    {
+      "code": 6020,
+      "name": "NotOrganisationAdmin",
+      "msg": "The signer is not authorized to administer this organisation's authority"
+    },
+    {
+      "code": 6021,
+      "name": "ScopeNotAllowed",
+      "msg": "The requested scopes are not allowed for this role"
+    },
+    {
+      "code": 6022,
+      "name": "WrongRole",
+      "msg": "The organisation does not have the required role"
+    },
+    {
+      "code": 6023,
+      "name": "NotIssuer",
+      "msg": "Only the issuing organisation may revoke the document"
+    },
+    {
+      "code": 6024,
+      "name": "DocumentRevoked",
+      "msg": "The document has been revoked"
+    },
+    {
+      "code": 6025,
+      "name": "RelatedCustodian",
+      "msg": "The custodian and owner are related"
+    },
+    {
+      "code": 6026,
+      "name": "OriginInvalid",
+      "msg": "The origin attestation is invalid"
+    },
+    {
+      "code": 6027,
+      "name": "OverCapacity",
+      "msg": "Quantity exceeds approved capacity"
+    },
+    {
+      "code": 6028,
+      "name": "LotNotStored",
+      "msg": "The lot is not stored"
+    },
+    {
+      "code": 6029,
+      "name": "Restricted",
+      "msg": "The lot is restricted"
+    },
+    {
+      "code": 6030,
+      "name": "RecipientNotApproved",
+      "msg": "The recipient is not an approved holder"
+    },
+    {
+      "code": 6031,
+      "name": "InsufficientAvailable",
+      "msg": "Quantity exceeds the available position balance"
+    },
+    {
+      "code": 6032,
+      "name": "SplitNeedsReassay",
+      "msg": "The class policy requires reassay before splitting"
+    },
+    {
+      "code": 6033,
+      "name": "SplitWouldEmptyParent",
+      "msg": "The split would empty the parent lot"
+    },
+    {
+      "code": 6034,
+      "name": "BalanceMismatch",
+      "msg": "The vault balance differs from the position quantity"
+    },
+    {
+      "code": 6035,
+      "name": "RootMismatch",
+      "msg": "The root lot does not match"
+    }
+  ],
+  "types": [
+    {
+      "name": "Authority",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "organisation",
+            "type": "pubkey"
+          },
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "scopes",
+            "type": "u16"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "revoked_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityDelegated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "organisation",
+            "type": "pubkey"
+          },
+          {
+            "name": "scopes",
+            "type": "u16"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityRevoked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClassPolicy",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "class_code",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          },
+          {
+            "name": "unit",
+            "type": {
+              "defined": {
+                "name": "QuantityUnit"
+              }
+            }
+          },
+          {
+            "name": "grades",
+            "type": {
+              "vec": "string"
+            }
+          },
+          {
+            "name": "origin_required",
+            "type": "bool"
+          },
+          {
+            "name": "lot_validity_secs",
+            "type": "i64"
+          },
+          {
+            "name": "split_inherits_expiry",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClassRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "class_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CustodianClass",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "custodian",
+            "type": "pubkey"
+          },
+          {
+            "name": "class_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "site_code",
+            "type": "string"
+          },
+          {
+            "name": "approved_capacity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "occupied_kg",
+            "type": "u64"
+          },
+          {
+            "name": "reserved_inbound_kg",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CustodianClassAccredited",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "custodian_class",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved_capacity_kg",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DocumentAttestation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "DocumentKind"
+              }
+            }
+          },
+          {
+            "name": "subject",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          },
+          {
+            "name": "issuer",
+            "type": "pubkey"
+          },
+          {
+            "name": "sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "valid_until",
+            "type": "i64"
+          },
+          {
+            "name": "revoked_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DocumentAttested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "document",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "DocumentKind"
+              }
+            }
+          },
+          {
+            "name": "subject",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DocumentKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Origin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DocumentRevoked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "document",
+            "type": "pubkey"
+          },
+          {
+            "name": "at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IntakeIdentity",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "custodian",
+            "type": "pubkey"
+          },
+          {
+            "name": "intake_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "retired",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Lot",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot_id",
+            "type": "string"
+          },
+          {
+            "name": "class_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "class_version",
+            "type": "u32"
+          },
+          {
+            "name": "grade",
+            "type": "string"
+          },
+          {
+            "name": "custodian_class",
+            "type": "pubkey"
+          },
+          {
+            "name": "intake",
+            "type": "pubkey"
+          },
+          {
+            "name": "parent",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "root",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "supply_kg",
+            "type": "u64"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "LotState"
+              }
+            }
+          },
+          {
+            "name": "restriction",
+            "type": {
+              "defined": {
+                "name": "Restriction"
+              }
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          },
+          {
+            "name": "live_children",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LotIssued",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "intake",
+            "type": "pubkey"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LotSplit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "parent",
+            "type": "pubkey"
+          },
+          {
+            "name": "child",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "parent_revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LotState",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Stored"
+          },
+          {
+            "name": "Redeemed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Organisation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "org_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "Role"
+              }
+            }
+          },
+          {
+            "name": "display_name",
+            "type": "string"
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "related",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrganisationAccredited",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "organisation",
+            "type": "pubkey"
+          },
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "Role"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrganisationName",
+      "docs": [
+        "Marker for a display name taken in one protocol; its address carries the meaning."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": []
+      }
+    },
+    {
+      "name": "PauseChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "flags",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Position",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "locked_kg",
+            "type": "u64"
+          },
+          {
+            "name": "reserved_kg",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Protocol",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "instance_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "settlement_mode",
+            "type": {
+              "defined": {
+                "name": "SettlementMode"
+              }
+            }
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "accreditor",
+            "type": "pubkey"
+          },
+          {
+            "name": "pause_flags",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "QuantityUnit",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Kilogram"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RelationshipDeclared",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "a",
+            "type": "pubkey"
+          },
+          {
+            "name": "b",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Restriction",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Normal"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Role",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Exporter"
+          },
+          {
+            "name": "Buyer"
+          },
+          {
+            "name": "Custodian"
+          },
+          {
+            "name": "Transporter"
+          },
+          {
+            "name": "Terminal"
+          },
+          {
+            "name": "Lender"
+          },
+          {
+            "name": "Inspector"
+          },
+          {
+            "name": "DocumentIssuer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SettlementMode",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "FiatAttestationTest"
+          },
+          {
+            "name": "DevnetTokenSimulation"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnitsRedeemed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "collection_ticket",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          },
+          {
+            "name": "lot_redeemed",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnitsTransferred",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "from",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

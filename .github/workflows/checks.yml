@@ -149,6 +149,28 @@ jobs:
             anchor build
           ) 2>&1 | tee "$RUNNER_TEMP/logs/build-program.log"
 
+      - name: Check the program client matches the built IDL
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/logs"
+          (
+            set -eo pipefail
+            node -e '
+              const fs = require("node:fs");
+              const read = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
+              try {
+                const assert = require("node:assert/strict");
+                assert.deepEqual(read("packages/contracts/idl/thetis.json"), read("target/idl/thetis.json"));
+              } catch (error) {
+                console.error("packages/contracts/idl/thetis.json differs from target/idl/thetis.json: " + error.message);
+                console.error("Copy target/idl/thetis.json to packages/contracts/idl/thetis.json, then run pnpm --filter @thetis/contracts generate.");
+                process.exit(1);
+              }
+              console.log("packages/contracts/idl/thetis.json matches target/idl/thetis.json");
+            '
+          ) 2>&1 | tee "$RUNNER_TEMP/logs/idl-drift.log"
+
       - name: Program tests
         shell: bash
         run: |
@@ -218,7 +240,7 @@ jobs:
             files=()
             for file in "${tracked_files[@]}"; do
               case "/$file" in
-                */docs/*|*/legacy/*|*/fixtures/*|*/mocks/*|*/__mocks__/*|*/testdata/*|*/node_modules/*|*/vendor/*|*/dist/*|*/build/*|*/test/*|*/tests/*|*/__tests__/*|*/components/ui/*)
+                */docs/*|*/legacy/*|*/fixtures/*|*/mocks/*|*/__mocks__/*|*/testdata/*|*/node_modules/*|*/vendor/*|*/dist/*|*/build/*|*/test/*|*/tests/*|*/__tests__/*|*/components/ui/*|*/generated/*)
                   continue ;;
               esac
               case "${file##*/}" in
