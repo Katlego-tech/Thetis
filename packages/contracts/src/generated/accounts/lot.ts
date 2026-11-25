@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { addDecoderSizePrefix, addEncoderSizePrefix, assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getOptionDecoder, getOptionEncoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU64Decoder, getU64Encoder, getU8Decoder, getU8Encoder, getUtf8Decoder, getUtf8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type Codec, type Decoder, type EncodedAccount, type Encoder, type FetchAccountConfig, type FetchAccountsConfig, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type Option, type OptionOrNullable, type ReadonlyUint8Array } from '@solana/kit';
 import { getLotStateDecoder, getLotStateEncoder, getRestrictionDecoder, getRestrictionEncoder, type LotState, type LotStateArgs, type Restriction, type RestrictionArgs } from '../types/index.ts';
 
@@ -15,7 +17,7 @@ export function getLotDiscriminatorBytes(): ReadonlyUint8Array { return fixEncod
 
 export type Lot = { discriminator: ReadonlyUint8Array; protocol: Address; lotId: string; classPolicy: Address; classVersion: number; grade: string; custodianClass: Address; intake: Address; parent: Option<Address>; root: Address; mint: Address; supplyKg: bigint; state: LotState; restriction: Restriction; expiresAt: bigint; revision: bigint; liveChildren: number; bump: number;  };
 
-export type LotArgs = { protocol: Address | HasAddress; lotId: string; classPolicy: Address | HasAddress; classVersion: number; grade: string; custodianClass: Address | HasAddress; intake: Address | HasAddress; parent: OptionOrNullable<Address | HasAddress>; root: Address | HasAddress; mint: Address | HasAddress; supplyKg: number | bigint; state: LotStateArgs; restriction: RestrictionArgs; expiresAt: number | bigint; revision: number | bigint; liveChildren: number; bump: number;  };
+export type LotArgs = { protocol: Address | HasAddress; lotId: string; classPolicy: Address | HasAddress; classVersion: number; grade: string; custodianClass: Address | HasAddress; intake: Address | HasAddress; parent: OptionOrNullable<Address | HasAddress>; root: Address | HasAddress; mint: Address | HasAddress; supplyKg: bigint; state: LotStateArgs; restriction: RestrictionArgs; expiresAt: bigint; revision: bigint; liveChildren: number; bump: number;  };
 
 /** Gets the encoder for {@link LotArgs} account data. */
 export function getLotEncoder(): Encoder<LotArgs> {
@@ -35,7 +37,9 @@ export function getLotCodec(): Codec<LotArgs, Lot> {
 export function decodeLot<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<Lot, TAddress>;
 export function decodeLot<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<Lot, TAddress>;
 export function decodeLot<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<Lot, TAddress> | MaybeAccount<Lot, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getLotDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.Lot);
+  return decodeAccount(maybeAccount, getLotDecoder());
 }
 
 export async function fetchLot<TAddress extends string = string>(

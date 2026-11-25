@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, transformEncoder, type Account, type Address, type ClientWithRpc, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 
 export const ORGANISATION_NAME_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([44, 11, 225, 246, 52, 30, 26, 206]);
@@ -34,7 +36,9 @@ export function getOrganisationNameCodec(): FixedSizeCodec<OrganisationNameArgs,
 export function decodeOrganisationName<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<OrganisationName, TAddress>;
 export function decodeOrganisationName<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<OrganisationName, TAddress>;
 export function decodeOrganisationName<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<OrganisationName, TAddress> | MaybeAccount<OrganisationName, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getOrganisationNameDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.OrganisationName);
+  return decodeAccount(maybeAccount, getOrganisationNameDecoder());
 }
 
 export async function fetchOrganisationName<TAddress extends string = string>(

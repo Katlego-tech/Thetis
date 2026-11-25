@@ -19,7 +19,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type AccreditCustodianClassInstructionData = { discriminator: ReadonlyUint8Array; siteCode: string; approvedCapacityKg: bigint;  };
 
-export type AccreditCustodianClassInstructionDataArgs = { siteCode: string; approvedCapacityKg: number | bigint;  };
+export type AccreditCustodianClassInstructionDataArgs = { siteCode: string; approvedCapacityKg: bigint;  };
 
 export function getAccreditCustodianClassInstructionDataEncoder(): Encoder<AccreditCustodianClassInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['siteCode', addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())], ['approvedCapacityKg', getU64Encoder()]]), (value) => ({ ...value, discriminator: ACCREDIT_CUSTODIAN_CLASS_DISCRIMINATOR }));

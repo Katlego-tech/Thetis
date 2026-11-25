@@ -20,7 +20,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type RedeemInstructionData = { discriminator: ReadonlyUint8Array; quantityKg: bigint; collectionTicket: ReadonlyUint8Array; expectedRevision: bigint; validUntil: bigint;  };
 
-export type RedeemInstructionDataArgs = { quantityKg: number | bigint; collectionTicket: ReadonlyUint8Array; expectedRevision: number | bigint; validUntil: number | bigint;  };
+export type RedeemInstructionDataArgs = { quantityKg: bigint; collectionTicket: ReadonlyUint8Array; expectedRevision: bigint; validUntil: bigint;  };
 
 export function getRedeemInstructionDataEncoder(): FixedSizeEncoder<RedeemInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['quantityKg', getU64Encoder()], ['collectionTicket', fixEncoderSize(getBytesEncoder(), 32)], ['expectedRevision', getU64Encoder()], ['validUntil', getI64Encoder()]]), (value) => ({ ...value, discriminator: REDEEM_DISCRIMINATOR }));

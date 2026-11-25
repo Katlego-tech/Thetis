@@ -14,7 +14,7 @@ export function getCustodianClassAccreditedEventDiscriminatorBytes(): ReadonlyUi
 
 export type CustodianClassAccreditedEvent = { custodianClass: Address; approvedCapacityKg: bigint;  };
 
-export type CustodianClassAccreditedEventArgs = { custodianClass: Address | HasAddress; approvedCapacityKg: number | bigint;  };
+export type CustodianClassAccreditedEventArgs = { custodianClass: Address | HasAddress; approvedCapacityKg: bigint;  };
 
 /** Gets the encoder for {@link CustodianClassAccreditedEventArgs} event data. */
 export function getCustodianClassAccreditedEventEncoder(): FixedSizeEncoder<CustodianClassAccreditedEventArgs> {

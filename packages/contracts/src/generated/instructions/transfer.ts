@@ -20,7 +20,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type TransferInstructionData = { discriminator: ReadonlyUint8Array; quantityKg: bigint; expectedRevision: bigint; validUntil: bigint;  };
 
-export type TransferInstructionDataArgs = { quantityKg: number | bigint; expectedRevision: number | bigint; validUntil: number | bigint;  };
+export type TransferInstructionDataArgs = { quantityKg: bigint; expectedRevision: bigint; validUntil: bigint;  };
 
 export function getTransferInstructionDataEncoder(): FixedSizeEncoder<TransferInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['quantityKg', getU64Encoder()], ['expectedRevision', getU64Encoder()], ['validUntil', getI64Encoder()]]), (value) => ({ ...value, discriminator: TRANSFER_DISCRIMINATOR }));

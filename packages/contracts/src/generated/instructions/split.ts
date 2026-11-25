@@ -20,7 +20,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type SplitInstructionData = { discriminator: ReadonlyUint8Array; childLotId: string; quantityKg: bigint; expectedRevision: bigint; validUntil: bigint;  };
 
-export type SplitInstructionDataArgs = { childLotId: string; quantityKg: number | bigint; expectedRevision: number | bigint; validUntil: number | bigint;  };
+export type SplitInstructionDataArgs = { childLotId: string; quantityKg: bigint; expectedRevision: bigint; validUntil: bigint;  };
 
 export function getSplitInstructionDataEncoder(): Encoder<SplitInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['childLotId', addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())], ['quantityKg', getU64Encoder()], ['expectedRevision', getU64Encoder()], ['validUntil', getI64Encoder()]]), (value) => ({ ...value, discriminator: SPLIT_DISCRIMINATOR }));
