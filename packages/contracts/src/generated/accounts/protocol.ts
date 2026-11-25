@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU16Decoder, getU16Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 import { getSettlementModeDecoder, getSettlementModeEncoder, type SettlementMode, type SettlementModeArgs } from '../types/index.ts';
 
@@ -35,7 +37,9 @@ export function getProtocolCodec(): FixedSizeCodec<ProtocolArgs, Protocol> {
 export function decodeProtocol<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<Protocol, TAddress>;
 export function decodeProtocol<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<Protocol, TAddress>;
 export function decodeProtocol<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<Protocol, TAddress> | MaybeAccount<Protocol, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getProtocolDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.Protocol);
+  return decodeAccount(maybeAccount, getProtocolDecoder());
 }
 
 export async function fetchProtocol<TAddress extends string = string>(

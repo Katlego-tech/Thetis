@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getOptionDecoder, getOptionEncoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type Codec, type Decoder, type EncodedAccount, type Encoder, type FetchAccountConfig, type FetchAccountsConfig, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type Option, type OptionOrNullable, type ReadonlyUint8Array } from '@solana/kit';
 import { getDocumentKindDecoder, getDocumentKindEncoder, type DocumentKind, type DocumentKindArgs } from '../types/index.ts';
 
@@ -15,7 +17,7 @@ export function getDocumentAttestationDiscriminatorBytes(): ReadonlyUint8Array {
 
 export type DocumentAttestation = { discriminator: ReadonlyUint8Array; protocol: Address; kind: DocumentKind; subject: ReadonlyUint8Array; version: number; issuer: Address; sha256: ReadonlyUint8Array; validUntil: bigint; revokedAt: Option<bigint>; bump: number;  };
 
-export type DocumentAttestationArgs = { protocol: Address | HasAddress; kind: DocumentKindArgs; subject: ReadonlyUint8Array; version: number; issuer: Address | HasAddress; sha256: ReadonlyUint8Array; validUntil: number | bigint; revokedAt: OptionOrNullable<number | bigint>; bump: number;  };
+export type DocumentAttestationArgs = { protocol: Address | HasAddress; kind: DocumentKindArgs; subject: ReadonlyUint8Array; version: number; issuer: Address | HasAddress; sha256: ReadonlyUint8Array; validUntil: bigint; revokedAt: OptionOrNullable<bigint>; bump: number;  };
 
 /** Gets the encoder for {@link DocumentAttestationArgs} account data. */
 export function getDocumentAttestationEncoder(): Encoder<DocumentAttestationArgs> {
@@ -35,7 +37,9 @@ export function getDocumentAttestationCodec(): Codec<DocumentAttestationArgs, Do
 export function decodeDocumentAttestation<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<DocumentAttestation, TAddress>;
 export function decodeDocumentAttestation<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<DocumentAttestation, TAddress>;
 export function decodeDocumentAttestation<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<DocumentAttestation, TAddress> | MaybeAccount<DocumentAttestation, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getDocumentAttestationDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.DocumentAttestation);
+  return decodeAccount(maybeAccount, getDocumentAttestationDecoder());
 }
 
 export async function fetchDocumentAttestation<TAddress extends string = string>(

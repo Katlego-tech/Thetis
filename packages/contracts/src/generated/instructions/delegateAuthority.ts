@@ -20,7 +20,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type DelegateAuthorityInstructionData = { discriminator: ReadonlyUint8Array; wallet: Address; scopes: number; expiresAt: bigint;  };
 
-export type DelegateAuthorityInstructionDataArgs = { wallet: Address | HasAddress; scopes: number; expiresAt: number | bigint;  };
+export type DelegateAuthorityInstructionDataArgs = { wallet: Address | HasAddress; scopes: number; expiresAt: bigint;  };
 
 export function getDelegateAuthorityInstructionDataEncoder(): FixedSizeEncoder<DelegateAuthorityInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['wallet', getAddressEncoder()], ['scopes', getU16Encoder()], ['expiresAt', getI64Encoder()]]), (value) => ({ ...value, discriminator: DELEGATE_AUTHORITY_DISCRIMINATOR }));

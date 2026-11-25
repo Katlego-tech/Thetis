@@ -14,7 +14,7 @@ export function getAuthorityRevokedEventDiscriminatorBytes(): ReadonlyUint8Array
 
 export type AuthorityRevokedEvent = { authority: Address; at: bigint;  };
 
-export type AuthorityRevokedEventArgs = { authority: Address | HasAddress; at: number | bigint;  };
+export type AuthorityRevokedEventArgs = { authority: Address | HasAddress; at: bigint;  };
 
 /** Gets the encoder for {@link AuthorityRevokedEventArgs} event data. */
 export function getAuthorityRevokedEventEncoder(): FixedSizeEncoder<AuthorityRevokedEventArgs> {

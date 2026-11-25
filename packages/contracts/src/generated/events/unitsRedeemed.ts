@@ -14,7 +14,7 @@ export function getUnitsRedeemedEventDiscriminatorBytes(): ReadonlyUint8Array { 
 
 export type UnitsRedeemedEvent = { lot: Address; owner: Address; quantityKg: bigint; collectionTicket: ReadonlyUint8Array; revision: bigint; lotRedeemed: boolean;  };
 
-export type UnitsRedeemedEventArgs = { lot: Address | HasAddress; owner: Address | HasAddress; quantityKg: number | bigint; collectionTicket: ReadonlyUint8Array; revision: number | bigint; lotRedeemed: boolean;  };
+export type UnitsRedeemedEventArgs = { lot: Address | HasAddress; owner: Address | HasAddress; quantityKg: bigint; collectionTicket: ReadonlyUint8Array; revision: bigint; lotRedeemed: boolean;  };
 
 /** Gets the encoder for {@link UnitsRedeemedEventArgs} event data. */
 export function getUnitsRedeemedEventEncoder(): FixedSizeEncoder<UnitsRedeemedEventArgs> {

@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBooleanDecoder, getBooleanEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 
 export const INTAKE_IDENTITY_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([175, 141, 40, 48, 12, 190, 158, 74]);
@@ -34,7 +36,9 @@ export function getIntakeIdentityCodec(): FixedSizeCodec<IntakeIdentityArgs, Int
 export function decodeIntakeIdentity<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<IntakeIdentity, TAddress>;
 export function decodeIntakeIdentity<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<IntakeIdentity, TAddress>;
 export function decodeIntakeIdentity<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<IntakeIdentity, TAddress> | MaybeAccount<IntakeIdentity, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getIntakeIdentityDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.IntakeIdentity);
+  return decodeAccount(maybeAccount, getIntakeIdentityDecoder());
 }
 
 export async function fetchIntakeIdentity<TAddress extends string = string>(
