@@ -9,11 +9,13 @@ pub mod state;
 mod validate;
 
 use instructions::documents::{self, *};
+use instructions::facility::{self, *};
 use instructions::issue::{self, *};
 use instructions::redeem::{self, *};
 use instructions::setup::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
+use instructions::valuation::{self, *};
 use state::{DocumentKind, Role, SettlementMode};
 
 declare_id!("jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3");
@@ -159,6 +161,50 @@ pub mod thetis {
             collection_ticket,
             expected_revision,
             valid_until,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the arguments are the facility terms"
+    )]
+    pub fn open_facility(
+        ctx: Context<OpenFacility>,
+        facility_id: [u8; 16],
+        currency: [u8; 3],
+        currency_decimals: u8,
+        terms_version: u32,
+        rate_bps: u16,
+        max_ltv_bps: u16,
+        terms_digest: [u8; 32],
+    ) -> Result<()> {
+        facility::open_facility(
+            ctx,
+            facility_id,
+            currency,
+            currency_decimals,
+            terms_version,
+            rate_bps,
+            max_ltv_bps,
+            terms_digest,
+        )
+    }
+
+    pub fn set_valuation(
+        ctx: Context<SetValuation>,
+        grade: String,
+        value_per_kg: u64,
+        haircut_bps: u16,
+        valid_until: i64,
+        source_digest: [u8; 32],
+    ) -> Result<()> {
+        valuation::set_valuation(
+            ctx,
+            grade,
+            value_per_kg,
+            haircut_bps,
+            valid_until,
+            source_digest,
         )
     }
 }

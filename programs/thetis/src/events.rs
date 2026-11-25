@@ -100,3 +100,27 @@ pub struct UnitsRedeemed {
     pub revision: u64,
     pub lot_redeemed: bool,
 }
+
+#[event]
+pub struct FacilityOpened {
+    pub facility: Pubkey,
+    pub lender: Pubkey,
+    pub borrower: Pubkey,
+    pub currency: [u8; 3],
+    pub currency_decimals: u8,
+    pub terms_version: u32,
+    pub rate_bps: u16,
+    pub max_ltv_bps: u16,
+}
+
+#[event]
+pub struct ValuationSet {
+    pub valuation: Pubkey,
+    pub facility: Pubkey,
+    pub version: u32,
+    pub value_per_kg: u64,
+    pub haircut_bps: u16,
+    pub valid_until: i64,
+    pub source_digest: [u8; 32],
+    pub set_at: i64,
+}

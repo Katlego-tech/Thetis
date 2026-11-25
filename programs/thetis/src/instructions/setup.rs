@@ -229,14 +229,16 @@ pub fn delegate_authority(
     scopes: u16,
     expires_at: i64,
 ) -> Result<()> {
-    use scope::{ATTEST_ORIGIN, ISSUE, REDEEM, SPLIT, TRANSFER};
+    use scope::{ATTEST_ORIGIN, BUY, ISSUE, LEND, PLEDGE, POOL, REDEEM, SPLIT, TRANSFER};
 
     let organisation = &ctx.accounts.organisation;
     let allowed = match organisation.role {
-        Role::Exporter | Role::Buyer => TRANSFER | SPLIT | REDEEM,
+        Role::Exporter => TRANSFER | SPLIT | REDEEM | PLEDGE,
+        Role::Buyer => TRANSFER | SPLIT | REDEEM | BUY,
         Role::Custodian => ISSUE | REDEEM,
+        Role::Lender => LEND | POOL,
         Role::DocumentIssuer => ATTEST_ORIGIN,
-        Role::Transporter | Role::Terminal | Role::Lender | Role::Inspector => 0,
+        Role::Transporter | Role::Terminal | Role::Inspector => 0,
     };
     require!(scopes & !allowed == 0, ThetisError::ScopeNotAllowed);
     require!(scopes != 0, ThetisError::InvalidField);
