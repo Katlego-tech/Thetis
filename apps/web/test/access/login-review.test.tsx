@@ -53,7 +53,9 @@ test("resend keeps keyboard focus and ignores activation while pending and cooli
     }),
   );
   render(<LoginForm next={next} expired={false} />);
-  await openCodeStep();
+  const code = await openCodeStep();
+  // Let the step's own focus effect run first, or it can take focus back from the button.
+  await waitFor(() => expect(code).toHaveFocus());
   const button = screen.getByRole("button", { name: "Send a new code" });
   button.focus();
   fireEvent.click(button);
