@@ -674,6 +674,171 @@
       ]
     },
     {
+      "name": "open_facility",
+      "discriminator": [
+        3,
+        64,
+        248,
+        119,
+        95,
+        41,
+        149,
+        222
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "borrower_org"
+        },
+        {
+          "name": "facility",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  97,
+                  99,
+                  105,
+                  108,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender_org"
+              },
+              {
+                "kind": "arg",
+                "path": "facility_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "facility_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "currency",
+          "type": {
+            "array": [
+              "u8",
+              3
+            ]
+          }
+        },
+        {
+          "name": "currency_decimals",
+          "type": "u8"
+        },
+        {
+          "name": "terms_version",
+          "type": "u32"
+        },
+        {
+          "name": "rate_bps",
+          "type": "u16"
+        },
+        {
+          "name": "max_ltv_bps",
+          "type": "u16"
+        },
+        {
+          "name": "terms_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "pause",
       "discriminator": [
         211,
@@ -983,6 +1148,109 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_valuation",
+      "discriminator": [
+        201,
+        49,
+        221,
+        187,
+        246,
+        151,
+        253,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "class_policy"
+        },
+        {
+          "name": "custodian_class"
+        },
+        {
+          "name": "valuation",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "grade",
+          "type": "string"
+        },
+        {
+          "name": "value_per_kg",
+          "type": "u64"
+        },
+        {
+          "name": "haircut_bps",
+          "type": "u16"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        },
+        {
+          "name": "source_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "split",
@@ -1483,6 +1751,19 @@
       ]
     },
     {
+      "name": "Facility",
+      "discriminator": [
+        16,
+        190,
+        236,
+        249,
+        84,
+        151,
+        160,
+        37
+      ]
+    },
+    {
       "name": "IntakeIdentity",
       "discriminator": [
         175,
@@ -1558,6 +1839,32 @@
         72,
         131,
         40
+      ]
+    },
+    {
+      "name": "SimulationPool",
+      "discriminator": [
+        154,
+        245,
+        52,
+        255,
+        85,
+        104,
+        183,
+        19
+      ]
+    },
+    {
+      "name": "Valuation",
+      "discriminator": [
+        135,
+        24,
+        21,
+        188,
+        13,
+        181,
+        93,
+        143
       ]
     }
   ],
@@ -1638,6 +1945,19 @@
         0,
         11,
         240
+      ]
+    },
+    {
+      "name": "FacilityOpened",
+      "discriminator": [
+        202,
+        162,
+        204,
+        65,
+        87,
+        227,
+        180,
+        47
       ]
     },
     {
@@ -1742,6 +2062,19 @@
         229,
         254,
         145
+      ]
+    },
+    {
+      "name": "ValuationSet",
+      "discriminator": [
+        155,
+        166,
+        208,
+        205,
+        118,
+        99,
+        230,
+        218
       ]
     }
   ],
@@ -1925,6 +2258,121 @@
       "code": 6035,
       "name": "RootMismatch",
       "msg": "The root lot does not match"
+    },
+    {
+      "code": 6036,
+      "name": "WrongSettlementMode",
+      "msg": "This action is not available in the instance's settlement mode"
+    },
+    {
+      "code": 6037,
+      "name": "CurrencyMismatch",
+      "msg": "The currency does not match the facility or pool"
+    },
+    {
+      "code": 6038,
+      "name": "ValuationStale",
+      "msg": "The valuation has expired"
+    },
+    {
+      "code": 6039,
+      "name": "ValuationMismatch",
+      "msg": "The valuation does not match the facility, class, grade and site"
+    },
+    {
+      "code": 6040,
+      "name": "OverLimit",
+      "msg": "The debt would exceed the loan limit"
+    },
+    {
+      "code": 6041,
+      "name": "BorrowerNotEligible",
+      "msg": "The position owner is not the facility's borrower"
+    },
+    {
+      "code": 6042,
+      "name": "LotExpired",
+      "msg": "The lot has expired"
+    },
+    {
+      "code": 6043,
+      "name": "LoanNotActive",
+      "msg": "The loan is not active"
+    },
+    {
+      "code": 6044,
+      "name": "InsufficientLocked",
+      "msg": "Quantity exceeds the locked quantity"
+    },
+    {
+      "code": 6045,
+      "name": "PositionCommitted",
+      "msg": "The position has reserved units"
+    },
+    {
+      "code": 6046,
+      "name": "PaymentNotBound",
+      "msg": "The payment attestation is not bound to this action"
+    },
+    {
+      "code": 6047,
+      "name": "PaymentConsumed",
+      "msg": "The payment attestation has already been consumed or voided"
+    },
+    {
+      "code": 6048,
+      "name": "PaymentMissing",
+      "msg": "A payment attestation is required"
+    },
+    {
+      "code": 6049,
+      "name": "IntentExpired",
+      "msg": "The release intent has expired"
+    },
+    {
+      "code": 6050,
+      "name": "IntentNotOpen",
+      "msg": "The release intent is not open"
+    },
+    {
+      "code": 6051,
+      "name": "ResidualOverLimit",
+      "msg": "The remaining debt would exceed the limit on the remaining collateral"
+    },
+    {
+      "code": 6052,
+      "name": "LoanUnderException",
+      "msg": "The loan has an open payment exception"
+    },
+    {
+      "code": 6053,
+      "name": "LoanHealthy",
+      "msg": "The loan is within its limit"
+    },
+    {
+      "code": 6054,
+      "name": "DebtOutstanding",
+      "msg": "The loan still has debt outstanding"
+    },
+    {
+      "code": 6055,
+      "name": "LiveObligation",
+      "msg": "The loan cannot close while a payment exception is open"
+    },
+    {
+      "code": 6056,
+      "name": "InsufficientLiquidity",
+      "msg": "The pool does not hold enough free cash"
+    },
+    {
+      "code": 6057,
+      "name": "InsufficientShares",
+      "msg": "Amount exceeds the depositor's shares"
+    },
+    {
+      "code": 6058,
+      "name": "MintMismatch",
+      "msg": "The token mint or account does not match the pool"
     }
   ],
   "types": [
@@ -2244,6 +2692,122 @@
           {
             "name": "at",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Facility",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "lender",
+            "type": "pubkey"
+          },
+          {
+            "name": "borrower",
+            "type": "pubkey"
+          },
+          {
+            "name": "facility_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "currency_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "terms_version",
+            "type": "u32"
+          },
+          {
+            "name": "rate_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_ltv_bps",
+            "type": "u16"
+          },
+          {
+            "name": "terms_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "loan_count",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FacilityOpened",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "facility",
+            "type": "pubkey"
+          },
+          {
+            "name": "lender",
+            "type": "pubkey"
+          },
+          {
+            "name": "borrower",
+            "type": "pubkey"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "currency_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "terms_version",
+            "type": "u32"
+          },
+          {
+            "name": "rate_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_ltv_bps",
+            "type": "u16"
           }
         ]
       }
@@ -2708,6 +3272,63 @@
       }
     },
     {
+      "name": "SimulationPool",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "currency_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "cash_minor",
+            "type": "u64"
+          },
+          {
+            "name": "total_shares",
+            "type": "u64"
+          },
+          {
+            "name": "lent_minor",
+            "type": "u64"
+          },
+          {
+            "name": "income_minor",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "UnitsRedeemed",
       "type": {
         "kind": "struct",
@@ -2768,6 +3389,112 @@
           {
             "name": "revision",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Valuation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "facility",
+            "type": "pubkey"
+          },
+          {
+            "name": "class_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "grade",
+            "type": "string"
+          },
+          {
+            "name": "custodian_class",
+            "type": "pubkey"
+          },
+          {
+            "name": "value_per_kg",
+            "type": "u64"
+          },
+          {
+            "name": "haircut_bps",
+            "type": "u16"
+          },
+          {
+            "name": "valid_until",
+            "type": "i64"
+          },
+          {
+            "name": "source_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          },
+          {
+            "name": "set_at",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ValuationSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "valuation",
+            "type": "pubkey"
+          },
+          {
+            "name": "facility",
+            "type": "pubkey"
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          },
+          {
+            "name": "value_per_kg",
+            "type": "u64"
+          },
+          {
+            "name": "haircut_bps",
+            "type": "u16"
+          },
+          {
+            "name": "valid_until",
+            "type": "i64"
+          },
+          {
+            "name": "source_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "set_at",
+            "type": "i64"
           }
         ]
       }
