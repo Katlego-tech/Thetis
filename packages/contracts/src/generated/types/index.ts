@@ -7,6 +7,8 @@
  */
 
 export * from './documentKind.ts';
+export * from './loanStatus.ts';
+export * from './lockControl.ts';
 export * from './lotState.ts';
 export * from './quantityUnit.ts';
 export * from './restriction.ts';

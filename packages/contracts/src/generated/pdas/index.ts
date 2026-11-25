@@ -14,6 +14,8 @@ export * from './childVaultAuthority.ts';
 export * from './facility.ts';
 export * from './fromVaultAuthority.ts';
 export * from './intake.ts';
+export * from './loan.ts';
+export * from './lock.ts';
 export * from './mint.ts';
 export * from './mintAuthority.ts';
 export * from './openFacilityAuthority.ts';

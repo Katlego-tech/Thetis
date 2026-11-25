@@ -15,6 +15,7 @@ export * from './initializeProtocol.ts';
 export * from './issueLot.ts';
 export * from './openFacility.ts';
 export * from './pause.ts';
+export * from './pledge.ts';
 export * from './redeem.ts';
 export * from './registerClass.ts';
 export * from './revokeAuthority.ts';

@@ -1,6 +1,7 @@
 pub mod documents;
 pub mod facility;
 pub mod issue;
+pub mod pledge;
 pub mod redeem;
 pub mod setup;
 pub mod split;

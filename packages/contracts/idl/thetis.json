@@ -871,6 +871,124 @@
       ]
     },
     {
+      "name": "pledge",
+      "discriminator": [
+        235,
+        47,
+        156,
+        254,
+        0,
+        88,
+        212,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "borrower_org"
+        },
+        {
+          "name": "borrower_authority"
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "lender_authority"
+        },
+        {
+          "name": "facility",
+          "writable": true
+        },
+        {
+          "name": "loan",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  111,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "facility"
+              },
+              {
+                "kind": "arg",
+                "path": "loan_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "loan"
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "loan_index",
+          "type": "u32"
+        },
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "redeem",
       "discriminator": [
         184,
@@ -1777,6 +1895,32 @@
       ]
     },
     {
+      "name": "Loan",
+      "discriminator": [
+        20,
+        195,
+        70,
+        117,
+        165,
+        227,
+        182,
+        1
+      ]
+    },
+    {
+      "name": "LockAllocation",
+      "discriminator": [
+        17,
+        198,
+        226,
+        84,
+        231,
+        34,
+        26,
+        153
+      ]
+    },
+    {
       "name": "Lot",
       "discriminator": [
         2,
@@ -2010,6 +2154,19 @@
         209,
         178,
         218
+      ]
+    },
+    {
+      "name": "Pledged",
+      "discriminator": [
+        98,
+        154,
+        68,
+        227,
+        24,
+        48,
+        26,
+        16
       ]
     },
     {
@@ -2850,6 +3007,152 @@
       }
     },
     {
+      "name": "Loan",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "facility",
+            "type": "pubkey"
+          },
+          {
+            "name": "borrower",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "type": "u32"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "LoanStatus"
+              }
+            }
+          },
+          {
+            "name": "rate_bps",
+            "type": "u16"
+          },
+          {
+            "name": "terms_version",
+            "type": "u32"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "accrual_remainder",
+            "type": "u64"
+          },
+          {
+            "name": "accrued_at",
+            "type": "i64"
+          },
+          {
+            "name": "open_exceptions",
+            "type": "u16"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoanStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Recovery"
+          },
+          {
+            "name": "ExternalHandoff"
+          },
+          {
+            "name": "Closed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LockAllocation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "control",
+            "type": {
+              "defined": {
+                "name": "LockControl"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LockControl",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Pledged"
+          },
+          {
+            "name": "Recovery"
+          }
+        ]
+      }
+    },
+    {
       "name": "Lot",
       "type": {
         "kind": "struct",
@@ -3090,6 +3393,42 @@
           {
             "name": "flags",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Pledged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "lock",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "position_revision",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
           }
         ]
       }
