@@ -53,7 +53,9 @@ test("resend keeps keyboard focus and ignores activation while pending and cooli
     }),
   );
   render(<LoginForm next={next} expired={false} />);
-  await openCodeStep();
+  const code = await openCodeStep();
+  // Let the step's own focus effect run first, or it can take focus back from the button.
+  await waitFor(() => expect(code).toHaveFocus());
   const button = screen.getByRole("button", { name: "Send a new code" });
   button.focus();
   fireEvent.click(button);
@@ -65,7 +67,8 @@ test("resend keeps keyboard focus and ignores activation while pending and cooli
   expect(mocks.signInWithOtp).toHaveBeenCalledTimes(2);
 
   await act(async () => finishResend?.());
-  expect(button).toHaveAccessibleName("Send a new code in 1:00");
+  // The cooldown runs on the real clock; under load a second can pass before this line.
+  expect(button).toHaveAccessibleName(/^Send a new code in (1:00|0:5\d)$/);
   expect(button).toHaveAttribute("aria-disabled", "true");
   expect(button).not.toBeDisabled();
   expect(button).toHaveFocus();

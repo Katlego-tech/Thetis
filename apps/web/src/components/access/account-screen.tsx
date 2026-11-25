@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/thetis/page-header";
 import { accessMessages } from "@/lib/access-messages";
 import { formatDateTime } from "@/lib/format";
 import { supabaseBrowser } from "@/lib/supabase-browser";
+import { LinkPanel } from "./link-panel";
 import { isExpiredResponse, loginHref } from "./session-expired";
 
 const messages = accessMessages.account;
@@ -105,6 +106,8 @@ export function AccountScreen() {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [revokePending, setRevokePending] = useState(false);
   const [revokeAlert, setRevokeAlert] = useState("");
+  const [staleLinks, setStaleLinks] = useState(false);
+  const [staleMemberships, setStaleMemberships] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const keepButton = useRef<HTMLButtonElement>(null);
   const mounted = useRef(false);
@@ -187,17 +190,62 @@ export function AccountScreen() {
     replace(loginHref(accountPath, true));
   }
 
-  async function refreshLinks(userId: string) {
-    const result = await selectSignerLinks(userId);
-    if (!mounted.current) return;
-    if (isExpiredResponse(result)) {
-      redirectExpired();
-    } else if (!result.data || result.error) {
-      setLists({ phase: "failed" });
-    } else {
+  // Reads a list again. A failed read keeps the last loaded tables and marks that list stale
+  // (account.refreshFailed); only the first load can replace the page with account.loadFailed.
+  async function reloadLinks(): Promise<SignerLink[] | null> {
+    if (!session) return null;
+    try {
+      const result = await selectSignerLinks(session.user.id);
+      if (!mounted.current) return null;
+      if (isExpiredResponse(result)) {
+        redirectExpired();
+        return null;
+      }
+      if (!result.data || result.error) {
+        setStaleLinks(true);
+        return null;
+      }
       const links = result.data as SignerLink[];
       setLists((previous) => (previous.phase === "loaded" ? { ...previous, links } : previous));
+      setStaleLinks(false);
+      return links;
+    } catch {
+      if (mounted.current) setStaleLinks(true);
+      return null;
     }
+  }
+
+  async function reloadMemberships() {
+    if (!session) return;
+    try {
+      const result = await selectMemberships(session.user.id);
+      if (!mounted.current) return;
+      if (isExpiredResponse(result)) {
+        redirectExpired();
+      } else if (!result.data || result.error) {
+        setStaleMemberships(true);
+      } else {
+        const next = result.data as unknown as Membership[];
+        setLists((previous) =>
+          previous.phase === "loaded" ? { ...previous, memberships: next } : previous,
+        );
+        setStaleMemberships(false);
+      }
+    } catch {
+      if (mounted.current) setStaleMemberships(true);
+    }
+  }
+
+  async function refreshLists() {
+    await Promise.all([reloadLinks(), reloadMemberships()]);
+  }
+
+  // The token is read when each request is made: a session refreshed since mount is the one sent.
+  async function getAccessToken(): Promise<string | null> {
+    const { data, error } = await supabaseBrowser().auth.getSession();
+    if (error?.status === 401 || (!error && !data.session)) return null;
+    if (error || !data.session) throw error;
+    return data.session.access_token;
   }
 
   async function revoke(linkId: string) {
@@ -222,13 +270,19 @@ export function AccountScreen() {
           setRevokeAlert(messages.revokeNotAllowed);
           return;
         }
-        if (result.error.message === "LINK_INVALID") setRevokeAlert(messages.revokeAlready);
+        setRevokeAlert(
+          result.error.message === "LINK_INVALID" ? messages.revokeAlready : messages.revokeFailed,
+        );
+      } else if (!result || result.error) {
+        // The revoke may have committed: reload and let the list say, rather than claim either.
+        setRevokeAlert(messages.revokeFailed);
       }
-      await refreshLinks(session.user.id);
+      await reloadLinks();
     } catch {
       if (mounted.current) {
         setConfirmId(null);
-        setLists({ phase: "failed" });
+        setRevokeAlert(messages.revokeFailed);
+        setStaleLinks(true);
       }
     } finally {
       if (mounted.current) setRevokePending(false);
@@ -257,149 +311,182 @@ export function AccountScreen() {
           </div>
         }
       />
-      <div>
-        <section
-          className="access-stack"
-          aria-labelledby="access-wallets"
-          aria-busy={loading || undefined}
-        >
-          <h2 id="access-wallets" tabIndex={-1}>
-            Linked wallets
-          </h2>
-          {lists.phase === "failed" && revokeAlert && (
-            <div className="access-error" role="alert">
-              {revokeAlert}
-            </div>
-          )}
-          {lists.phase === "failed" ? (
-            <div className="access-error" role="alert">
-              {messages.loadFailed}
-            </div>
-          ) : (
-            <>
-              {revokeAlert && (
-                <div className="access-error" role="alert">
-                  {revokeAlert}
-                </div>
-              )}
-              {loading || links.length ? (
-                <AccountTable columns={walletColumns} loading={loading}>
-                  {links.map((link) => {
-                    const name = orgNames.get(link.organisation_id);
-                    const revoked = link.revoked_at;
-                    return (
-                      <tr key={link.id}>
-                        {confirmId === link.id ? (
-                          <td colSpan={3}>
-                            <div className="access-stack access-revoke-confirm">
-                              <p className="access-wallet-address">{link.wallet}</p>
-                              <p>
-                                Revoke this link? Thetis stops treating this wallet as yours for{" "}
-                                {name ? <strong>{name}</strong> : "its organisation"}. You can link
-                                it again later.
-                              </p>
-                              <div className="access-actions">
-                                <button
-                                  type="button"
-                                  className="access-primary access-account-button"
-                                  disabled={revokePending}
-                                  aria-busy={revokePending || undefined}
-                                  onClick={() => void revoke(link.id)}
-                                >
-                                  Revoke link
-                                </button>
-                                <button
-                                  type="button"
-                                  className="access-account-button access-outline"
-                                  ref={keepButton}
-                                  disabled={revokePending}
-                                  onClick={() => setConfirmId(null)}
-                                >
-                                  Keep link
-                                </button>
-                              </div>
-                            </div>
-                          </td>
-                        ) : (
-                          <>
-                            <td data-label="Wallet">
-                              <span className="access-wallet-address">{link.wallet}</span>
-                              <span className="access-wallet-basis">
-                                {name && `For ${name}. `}Linked {formatDateTime(link.linked_at)}
-                              </span>
-                            </td>
-                            <td data-label="State">
-                              <span className="access-link-state">
-                                <span>Link</span>{" "}
-                                {revoked
-                                  ? `Revoked ${formatDateTime(revoked).split(",")[0]}`
-                                  : "Active"}
-                              </span>
-                            </td>
-                            <td className="access-table-action" data-label="Action">
-                              {!revoked && (
-                                <button
-                                  type="button"
-                                  className="access-account-button access-outline"
-                                  data-revoke={link.id}
-                                  disabled={revokePending}
-                                  onClick={() => {
-                                    setRevokeAlert("");
-                                    setConfirmId(link.id);
-                                  }}
-                                >
-                                  Revoke
-                                </button>
-                              )}
-                            </td>
-                          </>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </AccountTable>
-              ) : (
-                <p className="access-intro">{messages.noWallets}</p>
-              )}
-              {!loading && (
-                <p className="access-help">
-                  A link records the wallet as yours in Thetis. It is not on chain and gives no
-                  signing authority by itself.
-                </p>
-              )}
-            </>
-          )}
-        </section>
-        {lists.phase !== "failed" && (
+      <div className="access-cols">
+        <div>
           <section
             className="access-stack"
-            aria-labelledby="access-organisations"
+            aria-labelledby="access-wallets"
             aria-busy={loading || undefined}
           >
-            <h2 id="access-organisations">Organisations</h2>
-            {loading || memberships.length ? (
-              <AccountTable columns={organisationColumns} loading={loading}>
-                {memberships.map(
-                  ({ id, member_role, created_at, organisations: org }) =>
-                    org && (
-                      <tr key={id}>
-                        <td data-label="Organisation">{org.name}</td>
-                        <td data-label="Kind">
-                          {org.kind.charAt(0).toUpperCase() + org.kind.slice(1)}
-                          {org.synthetic && ", synthetic"}
-                        </td>
-                        <td data-label="Role">{member_role === "admin" ? "Admin" : "Member"}</td>
-                        <td data-label="Member since">
-                          {formatDateTime(created_at).split(",")[0]}
-                        </td>
-                      </tr>
-                    ),
-                )}
-              </AccountTable>
+            <h2 id="access-wallets" tabIndex={-1}>
+              Linked wallets
+            </h2>
+            {lists.phase === "failed" && revokeAlert && (
+              <div className="access-error" role="alert">
+                {revokeAlert}
+              </div>
+            )}
+            {lists.phase === "failed" ? (
+              <div className="access-error" role="alert">
+                {messages.loadFailed}
+              </div>
             ) : (
-              <p className="access-intro">{messages.noMembership}</p>
+              <>
+                {revokeAlert && (
+                  <div className="access-error" role="alert">
+                    {revokeAlert}
+                  </div>
+                )}
+                {(staleLinks || staleMemberships) && (
+                  <div className="access-stack">
+                    <div className="access-error" role="alert">
+                      {messages.refreshFailed}
+                    </div>
+                    <div className="access-actions">
+                      <button
+                        type="button"
+                        className="access-account-button access-outline"
+                        onClick={() => void refreshLists()}
+                      >
+                        Refresh list
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {loading || links.length ? (
+                  <AccountTable columns={walletColumns} loading={loading}>
+                    {links.map((link) => {
+                      const name = orgNames.get(link.organisation_id);
+                      const revoked = link.revoked_at;
+                      return (
+                        <tr key={link.id}>
+                          {confirmId === link.id ? (
+                            <td colSpan={3}>
+                              <div className="access-stack access-revoke-confirm">
+                                <p className="access-wallet-address">{link.wallet}</p>
+                                <p>
+                                  Revoke this link? Thetis stops treating this wallet as yours for{" "}
+                                  {name ? <strong>{name}</strong> : "its organisation"}. You can
+                                  link it again later.
+                                </p>
+                                <div className="access-actions">
+                                  <button
+                                    type="button"
+                                    className="access-primary access-account-button"
+                                    disabled={revokePending}
+                                    aria-busy={revokePending || undefined}
+                                    onClick={() => void revoke(link.id)}
+                                  >
+                                    Revoke link
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="access-account-button access-outline"
+                                    ref={keepButton}
+                                    disabled={revokePending}
+                                    onClick={() => setConfirmId(null)}
+                                  >
+                                    Keep link
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          ) : (
+                            <>
+                              <td data-label="Wallet">
+                                <span className="access-wallet-address">{link.wallet}</span>
+                                <span className="access-wallet-basis">
+                                  {name && `For ${name}. `}Linked {formatDateTime(link.linked_at)}
+                                </span>
+                              </td>
+                              <td data-label="State">
+                                <span className="access-link-state">
+                                  <span>Link</span>{" "}
+                                  {revoked
+                                    ? `Revoked ${formatDateTime(revoked).split(",")[0]}`
+                                    : "Active"}
+                                </span>
+                              </td>
+                              <td className="access-table-action" data-label="Action">
+                                {!revoked && (
+                                  <button
+                                    type="button"
+                                    className="access-account-button access-outline"
+                                    data-revoke={link.id}
+                                    disabled={revokePending}
+                                    onClick={() => {
+                                      setRevokeAlert("");
+                                      setConfirmId(link.id);
+                                    }}
+                                  >
+                                    Revoke
+                                  </button>
+                                )}
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </AccountTable>
+                ) : (
+                  <p className="access-intro">{messages.noWallets}</p>
+                )}
+                {!loading && (
+                  <p className="access-help">
+                    A link records the wallet as yours in Thetis. It is not on chain and gives no
+                    signing authority by itself.
+                  </p>
+                )}
+              </>
             )}
           </section>
+          {lists.phase !== "failed" && (
+            <section
+              className="access-stack"
+              aria-labelledby="access-organisations"
+              aria-busy={loading || undefined}
+            >
+              <h2 id="access-organisations">Organisations</h2>
+              {loading || memberships.length ? (
+                <AccountTable columns={organisationColumns} loading={loading}>
+                  {memberships.map(
+                    ({ id, member_role, created_at, organisations: org }) =>
+                      org && (
+                        <tr key={id}>
+                          <td data-label="Organisation">{org.name}</td>
+                          <td data-label="Kind">
+                            {org.kind.charAt(0).toUpperCase() + org.kind.slice(1)}
+                            {org.synthetic && ", synthetic"}
+                          </td>
+                          <td data-label="Role">{member_role === "admin" ? "Admin" : "Member"}</td>
+                          <td data-label="Member since">
+                            {formatDateTime(created_at).split(",")[0]}
+                          </td>
+                        </tr>
+                      ),
+                  )}
+                </AccountTable>
+              ) : (
+                <p className="access-intro">{messages.noMembership}</p>
+              )}
+            </section>
+          )}
+        </div>
+        {lists.phase !== "failed" && session && (
+          <LinkPanel
+            getAccessToken={getAccessToken}
+            memberships={
+              lists.phase === "loaded"
+                ? lists.memberships.flatMap(({ organisations: org }) =>
+                    org ? [{ id: org.id, name: org.name }] : [],
+                  )
+                : null
+            }
+            reloadLinks={reloadLinks}
+            reloadMemberships={() => void reloadMemberships()}
+            onSessionExpired={redirectExpired}
+          />
         )}
       </div>
     </div>
