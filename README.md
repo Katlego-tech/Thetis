@@ -64,6 +64,55 @@ The infra tests that CI runs do synthesize each stack in memory. Accepted adviso
 
 Production-path behavior means lender-attested bank records; it does **not** mean permission to deploy with live assets. Both settlement adapters will first run in isolated test environments. The devnet token pool is labelled simulation. The open production lending pool remains a longer-term business hypothesis.
 
+## Deployments
+
+| Cluster | Program | Address |
+|---|---|---|
+| Devnet | `programs/thetis` | [`jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3`](https://explorer.solana.com/address/jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3?cluster=devnet) |
+
+Devnet only. Both scripts refuse any other cluster, and the machine's default Solana config is never used.
+Keys live outside the repository in `THETIS_KEYS_DIR` (default `~/.config/thetis/devnet`); the scripts refuse a
+directory inside the repository. Create and fund the upgrade authority and fee payer once:
+
+```bash
+mkdir -p ~/.config/thetis/devnet && chmod 700 ~/.config/thetis/devnet
+solana-keygen new --no-bip39-passphrase -o ~/.config/thetis/devnet/deployer.json
+solana-keygen pubkey ~/.config/thetis/devnet/deployer.json   # fund this address from the devnet faucet
+```
+
+Funding: `scripts/deploy-devnet.sh` prints the build-dependent minimum before it deploys, and stops with the
+shortfall if the deployer holds less. A fresh deploy of the current build needs about 9 SOL. A single faucet
+request may not be enough, so repeat the request or use another faucet until the balance covers it. An
+upgrade of an already deployed program needs less: one buffer plus any growth of the program data.
+
+```bash
+bash scripts/deploy-devnet.sh   # checks the program id, backs up the keypairs, builds, deploys or upgrades
+pnpm seed:devnet                # initializes the protocol, registers CHROME v1, accredits the seven organisations
+```
+
+`target/deploy/thetis-keypair.json` must be the program's own keypair (the script stops if its address is not
+the one above). Running the deploy again upgrades the same program id. Running the seed again sends nothing
+that already exists, and stops with the difference if an account holds other values. The seed writes every
+transaction link, with the protocol address, to `seed-log.json` in the keys directory. Each transaction is logged
+as `pending` before it is sent and `confirmed` after; a rerun settles any `pending` entry first.
+
+### Seed transactions
+
+Deployed 25 Nov 2026 in devnet slot 526242298 ([deploy transaction](https://explorer.solana.com/tx/vtK8h43bEg8zDn5w7u319t6VfNztCKB87nYBJ7LN6bsgFmMR2cFKA2iVLKgve8spmhri9mQJbSk28amZthbVviE?cluster=devnet)).
+Protocol instance `fiat-attestation`: [`G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3`](https://explorer.solana.com/address/G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3?cluster=devnet).
+
+| Step | Transaction |
+|---|---|
+| initialize_protocol | [`rgv5YvKhLUviW6AD…`](https://explorer.solana.com/tx/rgv5YvKhLUviW6ADZMNv9yfHufTR5CxnRcV39G5XTyeBA3Zudc1dsSLgGXVtP6fh78x5Y4s7ku2UDFvkst6KFJs?cluster=devnet) |
+| register_class CHROME v1 | [`5MkYcvm7PWDUwmxv…`](https://explorer.solana.com/tx/5MkYcvm7PWDUwmxv9VUYq2dKDARFfRDKmQUjfPKsPDz2qfoCp4F3Q6EKwBATNK236ZryiBQ9KeY8yceaLYWXSUYK?cluster=devnet) |
+| accredit_organisation khunou | [`5DQeU9wvhkWPwFzc…`](https://explorer.solana.com/tx/5DQeU9wvhkWPwFzcq6YahCeSSvzu3f9jXHrsQ8gRDXCi7k6FguEibwXPzkHBk8x9s5qLkR5sZxyop8ih9oogFjhi?cluster=devnet) |
+| accredit_organisation kopano | [`PNGDPksmPvFsuUkQ…`](https://explorer.solana.com/tx/PNGDPksmPvFsuUkQBmVGVRhojdduLFBdJ1RvhtdfuHUQLHEp5GDs1UkoaVM8qg29sYghNdrJLWbNGwCBYtRBiM5?cluster=devnet) |
+| accredit_organisation mosela | [`2LyJv477yxaGzToH…`](https://explorer.solana.com/tx/2LyJv477yxaGzToHG5sLCEA5BFJXQTLYJGFqzFvYzud7YNstyoae4j3LsfRefthRq91WxqVNk3gAMrg9iFeqxk2B?cluster=devnet) |
+| accredit_organisation port-t1 | [`5SG7ENRBg6C8muR5…`](https://explorer.solana.com/tx/5SG7ENRBg6C8muR5RKqiaB8aJnxo693UnsuU8UktQMUVdNKZnWeTm5urTwhTsWySo3PqhQP9FMmqc8tKJp8ERn3G?cluster=devnet) |
+| accredit_organisation lender-one | [`MhDFt1EeZrSvTrUi…`](https://explorer.solana.com/tx/MhDFt1EeZrSvTrUiNwTtQsz4a7qmispwZAs39vMXrZ4c9FgRpPyN2dXeEDCDKCsofVzsH8RAVw3f5nGG68L9ip9?cluster=devnet) |
+| accredit_organisation lender-two | [`2T2uHiARneHHwgvu…`](https://explorer.solana.com/tx/2T2uHiARneHHwgvu1Pt8RTnmEKc8wo6SVENLTJvpQtpCmY5TZXDWa1k3htifs2GxrL3MgrDk5FGwDn215RxKfwzM?cluster=devnet) |
+| accredit_organisation buyer-smelter | [`xuCcAnPWMEFouMrr…`](https://explorer.solana.com/tx/xuCcAnPWMEFouMrrcF4gENgiWEjZygjxPf72WF73o7GK37qiixb1gD51AnNeuHhFEGz9VDocVXBN1MWDFAAQs4B?cluster=devnet) |
+
 ## Built before vs. during the event
 
 Everything in this repository today was built **before** the Dev3Pack build window (27–29
