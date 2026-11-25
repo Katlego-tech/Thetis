@@ -14,7 +14,7 @@ export function getAuthorityDelegatedEventDiscriminatorBytes(): ReadonlyUint8Arr
 
 export type AuthorityDelegatedEvent = { authority: Address; organisation: Address; scopes: number; expiresAt: bigint;  };
 
-export type AuthorityDelegatedEventArgs = { authority: Address | HasAddress; organisation: Address | HasAddress; scopes: number; expiresAt: number | bigint;  };
+export type AuthorityDelegatedEventArgs = { authority: Address | HasAddress; organisation: Address | HasAddress; scopes: number; expiresAt: bigint;  };
 
 /** Gets the encoder for {@link AuthorityDelegatedEventArgs} event data. */
 export function getAuthorityDelegatedEventEncoder(): FixedSizeEncoder<AuthorityDelegatedEventArgs> {

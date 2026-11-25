@@ -19,7 +19,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type RegisterClassInstructionData = { discriminator: ReadonlyUint8Array; classCode: string; version: number; grades: Array<string>; originRequired: boolean; lotValiditySecs: bigint; splitInheritsExpiry: boolean;  };
 
-export type RegisterClassInstructionDataArgs = { classCode: string; version: number; grades: Array<string>; originRequired: boolean; lotValiditySecs: number | bigint; splitInheritsExpiry: boolean;  };
+export type RegisterClassInstructionDataArgs = { classCode: string; version: number; grades: Array<string>; originRequired: boolean; lotValiditySecs: bigint; splitInheritsExpiry: boolean;  };
 
 export function getRegisterClassInstructionDataEncoder(): Encoder<RegisterClassInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['classCode', addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())], ['version', getU32Encoder()], ['grades', getArrayEncoder(addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()))], ['originRequired', getBooleanEncoder()], ['lotValiditySecs', getI64Encoder()], ['splitInheritsExpiry', getBooleanEncoder()]]), (value) => ({ ...value, discriminator: REGISTER_CLASS_DISCRIMINATOR }));

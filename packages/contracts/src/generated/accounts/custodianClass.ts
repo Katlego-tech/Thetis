@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { addDecoderSizePrefix, addEncoderSizePrefix, assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU64Decoder, getU64Encoder, getU8Decoder, getU8Encoder, getUtf8Decoder, getUtf8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type Codec, type Decoder, type EncodedAccount, type Encoder, type FetchAccountConfig, type FetchAccountsConfig, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 
 export const CUSTODIAN_CLASS_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([19, 176, 68, 11, 193, 8, 142, 91]);
@@ -14,7 +16,7 @@ export function getCustodianClassDiscriminatorBytes(): ReadonlyUint8Array { retu
 
 export type CustodianClass = { discriminator: ReadonlyUint8Array; protocol: Address; custodian: Address; classPolicy: Address; siteCode: string; approvedCapacityKg: bigint; occupiedKg: bigint; reservedInboundKg: bigint; bump: number;  };
 
-export type CustodianClassArgs = { protocol: Address | HasAddress; custodian: Address | HasAddress; classPolicy: Address | HasAddress; siteCode: string; approvedCapacityKg: number | bigint; occupiedKg: number | bigint; reservedInboundKg: number | bigint; bump: number;  };
+export type CustodianClassArgs = { protocol: Address | HasAddress; custodian: Address | HasAddress; classPolicy: Address | HasAddress; siteCode: string; approvedCapacityKg: bigint; occupiedKg: bigint; reservedInboundKg: bigint; bump: number;  };
 
 /** Gets the encoder for {@link CustodianClassArgs} account data. */
 export function getCustodianClassEncoder(): Encoder<CustodianClassArgs> {
@@ -34,7 +36,9 @@ export function getCustodianClassCodec(): Codec<CustodianClassArgs, CustodianCla
 export function decodeCustodianClass<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<CustodianClass, TAddress>;
 export function decodeCustodianClass<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<CustodianClass, TAddress>;
 export function decodeCustodianClass<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<CustodianClass, TAddress> | MaybeAccount<CustodianClass, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getCustodianClassDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.CustodianClass);
+  return decodeAccount(maybeAccount, getCustodianClassDecoder());
 }
 
 export async function fetchCustodianClass<TAddress extends string = string>(

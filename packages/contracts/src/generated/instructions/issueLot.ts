@@ -20,7 +20,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type IssueLotInstructionData = { discriminator: ReadonlyUint8Array; lotId: string; grade: string; quantityKg: bigint; intakeDigest: ReadonlyUint8Array; validUntil: bigint;  };
 
-export type IssueLotInstructionDataArgs = { lotId: string; grade: string; quantityKg: number | bigint; intakeDigest: ReadonlyUint8Array; validUntil: number | bigint;  };
+export type IssueLotInstructionDataArgs = { lotId: string; grade: string; quantityKg: bigint; intakeDigest: ReadonlyUint8Array; validUntil: bigint;  };
 
 export function getIssueLotInstructionDataEncoder(): Encoder<IssueLotInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['lotId', addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())], ['grade', addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())], ['quantityKg', getU64Encoder()], ['intakeDigest', fixEncoderSize(getBytesEncoder(), 32)], ['validUntil', getI64Encoder()]]), (value) => ({ ...value, discriminator: ISSUE_LOT_DISCRIMINATOR }));

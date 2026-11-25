@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { addDecoderSizePrefix, addEncoderSizePrefix, assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getArrayDecoder, getArrayEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU8Decoder, getU8Encoder, getUtf8Decoder, getUtf8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type Codec, type Decoder, type EncodedAccount, type Encoder, type FetchAccountConfig, type FetchAccountsConfig, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 import { getRoleDecoder, getRoleEncoder, type Role, type RoleArgs } from '../types/index.ts';
 
@@ -35,7 +37,9 @@ export function getOrganisationCodec(): Codec<OrganisationArgs, Organisation> {
 export function decodeOrganisation<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<Organisation, TAddress>;
 export function decodeOrganisation<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<Organisation, TAddress>;
 export function decodeOrganisation<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<Organisation, TAddress> | MaybeAccount<Organisation, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getOrganisationDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.Organisation);
+  return decodeAccount(maybeAccount, getOrganisationDecoder());
 }
 
 export async function fetchOrganisation<TAddress extends string = string>(

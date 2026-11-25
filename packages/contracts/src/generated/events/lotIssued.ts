@@ -14,7 +14,7 @@ export function getLotIssuedEventDiscriminatorBytes(): ReadonlyUint8Array { retu
 
 export type LotIssuedEvent = { lot: Address; owner: Address; quantityKg: bigint; intake: Address; revision: bigint;  };
 
-export type LotIssuedEventArgs = { lot: Address | HasAddress; owner: Address | HasAddress; quantityKg: number | bigint; intake: Address | HasAddress; revision: number | bigint;  };
+export type LotIssuedEventArgs = { lot: Address | HasAddress; owner: Address | HasAddress; quantityKg: bigint; intake: Address | HasAddress; revision: bigint;  };
 
 /** Gets the encoder for {@link LotIssuedEventArgs} event data. */
 export function getLotIssuedEventEncoder(): FixedSizeEncoder<LotIssuedEventArgs> {

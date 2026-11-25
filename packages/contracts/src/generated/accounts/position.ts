@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU64Decoder, getU64Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 
 export const POSITION_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([170, 188, 143, 228, 122, 64, 247, 208]);
@@ -14,7 +16,7 @@ export function getPositionDiscriminatorBytes(): ReadonlyUint8Array { return fix
 
 export type Position = { discriminator: ReadonlyUint8Array; protocol: Address; lot: Address; owner: Address; quantityKg: bigint; lockedKg: bigint; reservedKg: bigint; revision: bigint; bump: number;  };
 
-export type PositionArgs = { protocol: Address | HasAddress; lot: Address | HasAddress; owner: Address | HasAddress; quantityKg: number | bigint; lockedKg: number | bigint; reservedKg: number | bigint; revision: number | bigint; bump: number;  };
+export type PositionArgs = { protocol: Address | HasAddress; lot: Address | HasAddress; owner: Address | HasAddress; quantityKg: bigint; lockedKg: bigint; reservedKg: bigint; revision: bigint; bump: number;  };
 
 /** Gets the encoder for {@link PositionArgs} account data. */
 export function getPositionEncoder(): FixedSizeEncoder<PositionArgs> {
@@ -34,7 +36,9 @@ export function getPositionCodec(): FixedSizeCodec<PositionArgs, Position> {
 export function decodePosition<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<Position, TAddress>;
 export function decodePosition<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<Position, TAddress>;
 export function decodePosition<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<Position, TAddress> | MaybeAccount<Position, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getPositionDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.Position);
+  return decodeAccount(maybeAccount, getPositionDecoder());
 }
 
 export async function fetchPosition<TAddress extends string = string>(

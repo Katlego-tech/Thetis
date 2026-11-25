@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { addDecoderSizePrefix, addEncoderSizePrefix, assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getArrayDecoder, getArrayEncoder, getBooleanDecoder, getBooleanEncoder, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU8Decoder, getU8Encoder, getUtf8Decoder, getUtf8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type Codec, type Decoder, type EncodedAccount, type Encoder, type FetchAccountConfig, type FetchAccountsConfig, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 import { getQuantityUnitDecoder, getQuantityUnitEncoder, type QuantityUnit, type QuantityUnitArgs } from '../types/index.ts';
 
@@ -15,7 +17,7 @@ export function getClassPolicyDiscriminatorBytes(): ReadonlyUint8Array { return 
 
 export type ClassPolicy = { discriminator: ReadonlyUint8Array; protocol: Address; classCode: string; version: number; unit: QuantityUnit; grades: Array<string>; originRequired: boolean; lotValiditySecs: bigint; splitInheritsExpiry: boolean; bump: number;  };
 
-export type ClassPolicyArgs = { protocol: Address | HasAddress; classCode: string; version: number; unit: QuantityUnitArgs; grades: Array<string>; originRequired: boolean; lotValiditySecs: number | bigint; splitInheritsExpiry: boolean; bump: number;  };
+export type ClassPolicyArgs = { protocol: Address | HasAddress; classCode: string; version: number; unit: QuantityUnitArgs; grades: Array<string>; originRequired: boolean; lotValiditySecs: bigint; splitInheritsExpiry: boolean; bump: number;  };
 
 /** Gets the encoder for {@link ClassPolicyArgs} account data. */
 export function getClassPolicyEncoder(): Encoder<ClassPolicyArgs> {
@@ -35,7 +37,9 @@ export function getClassPolicyCodec(): Codec<ClassPolicyArgs, ClassPolicy> {
 export function decodeClassPolicy<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<ClassPolicy, TAddress>;
 export function decodeClassPolicy<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<ClassPolicy, TAddress>;
 export function decodeClassPolicy<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<ClassPolicy, TAddress> | MaybeAccount<ClassPolicy, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getClassPolicyDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.ClassPolicy);
+  return decodeAccount(maybeAccount, getClassPolicyDecoder());
 }
 
 export async function fetchClassPolicy<TAddress extends string = string>(

@@ -6,6 +6,8 @@
  * @see https://github.com/codama-idl/codama
  */
 
+import { assertThetisAccount } from '../shared/checks.ts';
+import { ThetisAccount } from '../programs/thetis.ts';
 import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getOptionDecoder, getOptionEncoder, getStructDecoder, getStructEncoder, getU16Decoder, getU16Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type ClientWithRpc, type Codec, type Decoder, type EncodedAccount, type Encoder, type FetchAccountConfig, type FetchAccountsConfig, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type Option, type OptionOrNullable, type ReadonlyUint8Array } from '@solana/kit';
 
 export const AUTHORITY_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([36, 108, 254, 18, 167, 144, 27, 36]);
@@ -14,7 +16,7 @@ export function getAuthorityDiscriminatorBytes(): ReadonlyUint8Array { return fi
 
 export type Authority = { discriminator: ReadonlyUint8Array; protocol: Address; organisation: Address; wallet: Address; scopes: number; expiresAt: bigint; revokedAt: Option<bigint>; bump: number;  };
 
-export type AuthorityArgs = { protocol: Address | HasAddress; organisation: Address | HasAddress; wallet: Address | HasAddress; scopes: number; expiresAt: number | bigint; revokedAt: OptionOrNullable<number | bigint>; bump: number;  };
+export type AuthorityArgs = { protocol: Address | HasAddress; organisation: Address | HasAddress; wallet: Address | HasAddress; scopes: number; expiresAt: bigint; revokedAt: OptionOrNullable<bigint>; bump: number;  };
 
 /** Gets the encoder for {@link AuthorityArgs} account data. */
 export function getAuthorityEncoder(): Encoder<AuthorityArgs> {
@@ -34,7 +36,9 @@ export function getAuthorityCodec(): Codec<AuthorityArgs, Authority> {
 export function decodeAuthority<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress>): Account<Authority, TAddress>;
 export function decodeAuthority<TAddress extends string = string>(encodedAccount: MaybeEncodedAccount<TAddress>): MaybeAccount<Authority, TAddress>;
 export function decodeAuthority<TAddress extends string = string>(encodedAccount: EncodedAccount<TAddress> | MaybeEncodedAccount<TAddress>): Account<Authority, TAddress> | MaybeAccount<Authority, TAddress> {
-  return decodeAccount(encodedAccount as MaybeEncodedAccount<TAddress>, getAuthorityDecoder());
+  const maybeAccount = encodedAccount as MaybeEncodedAccount<TAddress>;
+  if (!('exists' in maybeAccount) || maybeAccount.exists) assertThetisAccount(encodedAccount as EncodedAccount<TAddress>, ThetisAccount.Authority);
+  return decodeAccount(maybeAccount, getAuthorityDecoder());
 }
 
 export async function fetchAuthority<TAddress extends string = string>(

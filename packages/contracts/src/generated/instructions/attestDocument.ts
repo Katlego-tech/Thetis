@@ -20,7 +20,7 @@ Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWit
 
 export type AttestDocumentInstructionData = { discriminator: ReadonlyUint8Array; kind: DocumentKind; subject: ReadonlyUint8Array; version: number; sha256: ReadonlyUint8Array; validUntil: bigint;  };
 
-export type AttestDocumentInstructionDataArgs = { kind: DocumentKindArgs; subject: ReadonlyUint8Array; version: number; sha256: ReadonlyUint8Array; validUntil: number | bigint;  };
+export type AttestDocumentInstructionDataArgs = { kind: DocumentKindArgs; subject: ReadonlyUint8Array; version: number; sha256: ReadonlyUint8Array; validUntil: bigint;  };
 
 export function getAttestDocumentInstructionDataEncoder(): FixedSizeEncoder<AttestDocumentInstructionDataArgs> {
     return transformEncoder(getStructEncoder([['discriminator', fixEncoderSize(getBytesEncoder(), 8)], ['kind', getDocumentKindEncoder()], ['subject', fixEncoderSize(getBytesEncoder(), 32)], ['version', getU32Encoder()], ['sha256', fixEncoderSize(getBytesEncoder(), 32)], ['validUntil', getI64Encoder()]]), (value) => ({ ...value, discriminator: ATTEST_DOCUMENT_DISCRIMINATOR }));

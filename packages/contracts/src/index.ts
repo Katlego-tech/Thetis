@@ -1,3 +1,4 @@
+export { assertThetisAccount, ThetisAccountError } from "./checks.ts";
 export * from "./generated/index.ts";
 export {
   fromI64String,

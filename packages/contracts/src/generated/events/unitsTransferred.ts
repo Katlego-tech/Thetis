@@ -14,7 +14,7 @@ export function getUnitsTransferredEventDiscriminatorBytes(): ReadonlyUint8Array
 
 export type UnitsTransferredEvent = { lot: Address; from: Address; to: Address; quantityKg: bigint; revision: bigint;  };
 
-export type UnitsTransferredEventArgs = { lot: Address | HasAddress; from: Address | HasAddress; to: Address | HasAddress; quantityKg: number | bigint; revision: number | bigint;  };
+export type UnitsTransferredEventArgs = { lot: Address | HasAddress; from: Address | HasAddress; to: Address | HasAddress; quantityKg: bigint; revision: bigint;  };
 
 /** Gets the encoder for {@link UnitsTransferredEventArgs} event data. */
 export function getUnitsTransferredEventEncoder(): FixedSizeEncoder<UnitsTransferredEventArgs> {

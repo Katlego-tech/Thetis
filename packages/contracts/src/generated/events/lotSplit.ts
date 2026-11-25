@@ -14,7 +14,7 @@ export function getLotSplitEventDiscriminatorBytes(): ReadonlyUint8Array { retur
 
 export type LotSplitEvent = { parent: Address; child: Address; owner: Address; quantityKg: bigint; parentRevision: bigint;  };
 
-export type LotSplitEventArgs = { parent: Address | HasAddress; child: Address | HasAddress; owner: Address | HasAddress; quantityKg: number | bigint; parentRevision: number | bigint;  };
+export type LotSplitEventArgs = { parent: Address | HasAddress; child: Address | HasAddress; owner: Address | HasAddress; quantityKg: bigint; parentRevision: bigint;  };
 
 /** Gets the encoder for {@link LotSplitEventArgs} event data. */
 export function getLotSplitEventEncoder(): FixedSizeEncoder<LotSplitEventArgs> {

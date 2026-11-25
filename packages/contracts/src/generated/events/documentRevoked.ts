@@ -14,7 +14,7 @@ export function getDocumentRevokedEventDiscriminatorBytes(): ReadonlyUint8Array 
 
 export type DocumentRevokedEvent = { document: Address; at: bigint;  };
 
-export type DocumentRevokedEventArgs = { document: Address | HasAddress; at: number | bigint;  };
+export type DocumentRevokedEventArgs = { document: Address | HasAddress; at: bigint;  };
 
 /** Gets the encoder for {@link DocumentRevokedEventArgs} event data. */
 export function getDocumentRevokedEventEncoder(): FixedSizeEncoder<DocumentRevokedEventArgs> {
