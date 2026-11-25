@@ -6,6 +6,7 @@
  * @see https://github.com/codama-idl/codama
  */
 
+export * from './advanceRecorded.ts';
 export * from './authorityDelegated.ts';
 export * from './authorityRevoked.ts';
 export * from './classRegistered.ts';

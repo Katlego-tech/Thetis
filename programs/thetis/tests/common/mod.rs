@@ -651,6 +651,84 @@ impl Fixture {
         self.svm.send_transaction(tx)
     }
 
+    /// A legacy transaction of `instructions` that the sponsor pays for and `actor` also signs.
+    fn signed_transaction(
+        &mut self,
+        instructions: &[Instruction],
+        actor: Actor,
+    ) -> VersionedTransaction {
+        self.svm.expire_blockhash();
+        let message = Message::new_with_blockhash(
+            instructions,
+            Some(&self.payer.pubkey()),
+            &self.svm.latest_blockhash(),
+        );
+        VersionedTransaction::try_new(
+            VersionedMessage::Legacy(message),
+            &[&self.payer, self.signer(actor)],
+        )
+        .unwrap()
+    }
+
+    /// Sends `instructions` signed by the sponsor (fee payer) and `actor`, and expects success:
+    /// the shape of a TX instruction that also carries an Ed25519 entry.
+    pub fn signed_ok(&mut self, instructions: &[Instruction], actor: Actor) -> TransactionMetadata {
+        let tx = self.signed_transaction(instructions, actor);
+        self.svm.send_transaction(tx).unwrap_or_else(|failure| {
+            panic!(
+                "signed transaction failed: {:?}\n{}",
+                failure.err,
+                failure.meta.pretty_logs()
+            )
+        })
+    }
+
+    /// As `signed_ok`, but instruction `index` must fail with `expected`, with no state change
+    /// and no event.
+    pub fn signed_refused(
+        &mut self,
+        instructions: &[Instruction],
+        actor: Actor,
+        index: u8,
+        expected: ThetisError,
+    ) {
+        let code: u32 = expected.into();
+        let mut keys = touched_keys(instructions);
+        if !keys.contains(&self.payer.pubkey()) {
+            keys.push(self.payer.pubkey());
+        }
+        let tx = self.signed_transaction(instructions, actor);
+        let failure = self.failure_without_effect(&keys, tx);
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(index, InstructionError::Custom(code)),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+    }
+
+    /// A signed v0 transaction that the sponsor pays for and `actor` also signs.
+    pub fn signed_v0(
+        &mut self,
+        instructions: &[Instruction],
+        tables: &[AddressLookupTableAccount],
+        actor: Actor,
+    ) -> VersionedTransaction {
+        self.svm.expire_blockhash();
+        let message = v0::Message::try_compile(
+            &self.payer.pubkey(),
+            instructions,
+            tables,
+            self.svm.latest_blockhash(),
+        )
+        .unwrap();
+        VersionedTransaction::try_new(
+            VersionedMessage::V0(message),
+            &[&self.payer, self.signer(actor)],
+        )
+        .unwrap()
+    }
+
     pub fn ok(&mut self, instruction: Instruction, actor: Actor) -> TransactionMetadata {
         let tx = self.transaction(&instruction, actor);
         self.svm.send_transaction(tx).unwrap()

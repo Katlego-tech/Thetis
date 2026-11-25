@@ -989,6 +989,109 @@
       ]
     },
     {
+      "name": "record_advance",
+      "discriminator": [
+        241,
+        72,
+        100,
+        239,
+        180,
+        170,
+        104,
+        238
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "lender_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan",
+          "writable": true
+        },
+        {
+          "name": "lock"
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "valuation"
+        },
+        {
+          "name": "borrower_org"
+        },
+        {
+          "name": "borrower_authority"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "currency",
+          "type": {
+            "array": [
+              "u8",
+              3
+            ]
+          }
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "redeem",
       "discriminator": [
         184,
@@ -2014,6 +2117,19 @@
   ],
   "events": [
     {
+      "name": "AdvanceRecorded",
+      "discriminator": [
+        100,
+        140,
+        167,
+        213,
+        80,
+        13,
+        48,
+        243
+      ]
+    },
+    {
       "name": "AuthorityDelegated",
       "discriminator": [
         194,
@@ -2533,6 +2649,34 @@
     }
   ],
   "types": [
+    {
+      "name": "AdvanceRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "Authority",
       "type": {

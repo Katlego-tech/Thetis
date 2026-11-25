@@ -135,3 +135,12 @@ pub struct Pledged {
     pub position_revision: u64,
     pub revision: u64,
 }
+
+#[event]
+pub struct AdvanceRecorded {
+    pub loan: Pubkey,
+    pub amount: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub revision: u64,
+}

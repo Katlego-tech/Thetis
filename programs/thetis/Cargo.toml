@@ -28,6 +28,7 @@ solana-sha256-hasher = "3.1.0"
 
 [dev-dependencies]
 litesvm = { version = "0.15.0", features = ["precompiles"] }
+serde_json = "1.0.151"
 solana-clock = "3"
 solana-keypair = "3"
 solana-message = "4"
