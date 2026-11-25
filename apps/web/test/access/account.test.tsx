@@ -439,3 +439,55 @@ test("account: a link for an organisation not in memberships shows no org name",
   expect(byContent(`Linked ${formatDateTime(LINKED_AT)}`)).toBeVisible();
   expect(screen.queryByText(/^For /)).not.toBeInTheDocument();
 });
+
+test("account: a rejected revoke rpc says it is not confirmed, closes the row and reloads", async () => {
+  mocks.rpc.mockRejectedValue(new TypeError("fetch failed"));
+  const confirm = await openConfirm();
+  fireEvent.click(confirm);
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(accessMessages.account.revokeFailed);
+  await waitFor(() => expect(selectCount("signer_links")).toBe(2));
+  expect(screen.queryByRole("button", { name: "Revoke link" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Keep link" })).not.toBeInTheDocument();
+  expect(screen.getByText(WALLET_ACTIVE)).toBeVisible();
+  expect(screen.queryByText(accessMessages.account.loadFailed)).not.toBeInTheDocument();
+});
+
+test("account: a non-P0001 revoke error says it is not confirmed, closes the row and reloads", async () => {
+  mocks.rpc.mockResolvedValue({
+    data: null,
+    error: { code: "XX000", message: "boom" },
+    status: 500,
+  });
+  const confirm = await openConfirm();
+  fireEvent.click(confirm);
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(accessMessages.account.revokeFailed);
+  await waitFor(() => expect(selectCount("signer_links")).toBe(2));
+  expect(screen.queryByRole("button", { name: "Revoke link" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Keep link" })).not.toBeInTheDocument();
+});
+
+test("account: revoke followed by a failed reload keeps the tables and shows refreshFailed", async () => {
+  setTable("signer_links", ok(LINKS), reply(SELECT_ERROR));
+  const confirm = await openConfirm();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(selectCount("signer_links")).toBe(2));
+  expect(await screen.findByText(accessMessages.account.refreshFailed)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Refresh list" })).toBeVisible();
+  expect(screen.queryByText(accessMessages.account.loadFailed)).not.toBeInTheDocument();
+  expect(screen.getByText(WALLET_ACTIVE)).toBeVisible();
+  expect(screen.getByText(WALLET_REVOKED)).toBeVisible();
+  expect(screen.getByText("Lender, synthetic")).toBeVisible();
+});
+
+test("account: an unconfirmed revoke whose reload also fails keeps the tables", async () => {
+  mocks.rpc.mockRejectedValue(new TypeError("fetch failed"));
+  setTable("signer_links", ok(LINKS), rejects());
+  const confirm = await openConfirm();
+  fireEvent.click(confirm);
+  expect(await screen.findByText(accessMessages.account.revokeFailed)).toBeVisible();
+  expect(await screen.findByText(accessMessages.account.refreshFailed)).toBeVisible();
+  expect(screen.getByText(WALLET_ACTIVE)).toBeVisible();
+  expect(screen.queryByText(accessMessages.account.loadFailed)).not.toBeInTheDocument();
+});

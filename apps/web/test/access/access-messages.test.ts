@@ -56,6 +56,17 @@ test("accessMessages matches the web.md 8.10 table verbatim", () => {
     "You can't revoke this link. Only its owner or an admin of its organisation can.",
   );
 
+  expect(accessMessages.account.revokeFailed).toBe(
+    "Thetis could not confirm the revoke. The list below shows each link's current state; if the link is still active, try again.",
+  );
+
+  expect(accessMessages.account.refreshFailed).toBe(
+    "Thetis could not refresh this list, so it may be out of date. Refresh it to try again.",
+  );
+  expect(accessMessages.link.unconfirmed({ wallet })).toBe(
+    "Thetis could not confirm whether Solflare was linked. Check again before you sign a new message.",
+  );
+
   expect(accessMessages.link.noWallet).toBe(
     "No browser wallet that can sign messages was found. Install Solflare for this browser, then reload the page.",
   );
