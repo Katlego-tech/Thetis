@@ -4,10 +4,12 @@ pub mod error;
 pub mod events;
 pub mod instructions;
 pub mod intent;
+pub mod lending_math;
 mod receipts;
 pub mod state;
 pub mod validate;
 
+use instructions::advance::{self, *};
 use instructions::documents::{self, *};
 use instructions::facility::{self, *};
 use instructions::issue::{self, *};
@@ -217,5 +219,15 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         pledge::pledge(ctx, loan_index, quantity_kg, expected_revision, valid_until)
+    }
+
+    pub fn record_advance(
+        ctx: Context<RecordAdvance>,
+        amount: u64,
+        currency: [u8; 3],
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        advance::record_advance(ctx, amount, currency, expected_revision, valid_until)
     }
 }
