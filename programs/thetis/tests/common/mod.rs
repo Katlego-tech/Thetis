@@ -64,6 +64,12 @@ pub enum Actor {
     Outsider,
     Owner,
     Buyer,
+    /// A wallet of the first lender organisation.
+    Lender,
+    /// A wallet of a second, unrelated lender organisation.
+    Lender2,
+    /// A second wallet of the first lender organisation, for scopes other than lending.
+    LenderTreasury,
 }
 
 use Actor::*;
@@ -93,6 +99,9 @@ pub struct Fixture {
     outsider: Keypair,
     owner: Keypair,
     buyer: Keypair,
+    lender: Keypair,
+    lender2: Keypair,
+    lender_treasury: Keypair,
     pub protocol: Pubkey,
 }
 
@@ -125,6 +134,9 @@ impl Fixture {
             outsider: Keypair::new(),
             owner: Keypair::new(),
             buyer: Keypair::new(),
+            lender: Keypair::new(),
+            lender2: Keypair::new(),
+            lender_treasury: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
     }
@@ -150,6 +162,9 @@ impl Fixture {
             Outsider => &self.outsider,
             Owner => &self.owner,
             Buyer => &self.buyer,
+            Lender => &self.lender,
+            Lender2 => &self.lender2,
+            LenderTreasury => &self.lender_treasury,
         }
     }
 
@@ -642,6 +657,23 @@ impl Fixture {
     }
 
     pub fn refused(&mut self, instruction: Instruction, actor: Actor, expected: ThetisError) {
+        let code: u32 = expected.into();
+        let failure = self.refusal(instruction, actor);
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(0, InstructionError::Custom(code)),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+    }
+
+    /// As `refused`, for a fault Anchor's account checks catch before the handler runs.
+    pub fn refused_anchor(
+        &mut self,
+        instruction: Instruction,
+        actor: Actor,
+        expected: anchor_lang::error::ErrorCode,
+    ) {
         let code: u32 = expected.into();
         let failure = self.refusal(instruction, actor);
         assert_eq!(

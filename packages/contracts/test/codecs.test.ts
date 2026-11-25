@@ -22,10 +22,17 @@ function codecRoundTrip(
 }
 
 describe("IDL sanity", () => {
-  it("lists the Phase 1 instructions and accounts", () => {
-    expect(idl.instructions.length).toBe(15);
-    expect(idl.accounts.length).toBe(10);
-    expect(idl.instructions.map((i) => i.name)).toContain("redeem");
+  it("lists the Phase 1 instructions and accounts and the lending setup ones", () => {
+    expect(idl.instructions.length).toBe(17);
+    expect(idl.accounts.length).toBe(13);
+    const instructions = idl.instructions.map((i) => i.name);
+    expect(instructions).toContain("redeem");
+    expect(instructions).toContain("open_facility");
+    expect(instructions).toContain("set_valuation");
+    const accounts = idl.accounts.map((a) => a.name);
+    for (const name of ["Facility", "Valuation", "SimulationPool"]) {
+      expect(accounts).toContain(name);
+    }
   });
 
   it("takes the program address from the IDL", () => {

@@ -142,6 +142,137 @@ pub struct Position {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct Facility {
+    pub protocol: Pubkey,
+    pub lender: Pubkey,
+    pub borrower: Pubkey,
+    pub facility_id: [u8; 16],
+    pub currency: [u8; 3],
+    pub currency_decimals: u8,
+    pub terms_version: u32,
+    pub rate_bps: u16,
+    pub max_ltv_bps: u16,
+    pub terms_digest: [u8; 32],
+    pub loan_count: u32,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Valuation {
+    pub protocol: Pubkey,
+    pub facility: Pubkey,
+    pub class_policy: Pubkey,
+    #[max_len(MAX_GRADE)]
+    pub grade: String,
+    pub custodian_class: Pubkey,
+    pub value_per_kg: u64,
+    pub haircut_bps: u16,
+    pub valid_until: i64,
+    pub source_digest: [u8; 32],
+    pub version: u32,
+    pub set_at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Loan {
+    pub protocol: Pubkey,
+    pub facility: Pubkey,
+    pub borrower: Pubkey,
+    pub lot: Pubkey,
+    pub position: Pubkey,
+    pub index: u32,
+    pub status: LoanStatus,
+    pub rate_bps: u16,
+    pub terms_version: u32,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub accrual_remainder: u64,
+    pub accrued_at: i64,
+    pub open_exceptions: u16,
+    pub revision: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct LockAllocation {
+    pub protocol: Pubkey,
+    pub loan: Pubkey,
+    pub position: Pubkey,
+    pub quantity_kg: u64,
+    pub control: LockControl,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct PaymentAttestation {
+    pub protocol: Pubkey,
+    pub lender: Pubkey,
+    pub loan: Pubkey,
+    pub payment_id: [u8; 32],
+    pub purpose: PaymentPurpose,
+    pub subject: Pubkey,
+    pub amount: u64,
+    pub currency: [u8; 3],
+    pub evidence_digest: [u8; 32],
+    pub observed_at: i64,
+    pub status: PaymentStatus,
+    pub applied: u64,
+    pub surplus: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ReleaseIntent {
+    pub protocol: Pubkey,
+    pub loan: Pubkey,
+    pub lot: Pubkey,
+    pub position: Pubkey,
+    pub seller: Pubkey,
+    pub buyer: Pubkey,
+    pub nonce: u64,
+    pub quantity_kg: u64,
+    pub price: u64,
+    pub top_up: u64,
+    pub currency: [u8; 3],
+    pub expires_at: i64,
+    pub position_revision: u64,
+    pub status: IntentStatus,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct SimulationPool {
+    pub protocol: Pubkey,
+    pub mint: Pubkey,
+    pub vault: Pubkey,
+    pub currency: [u8; 3],
+    pub currency_decimals: u8,
+    pub cash_minor: u64,
+    pub total_shares: u64,
+    pub lent_minor: u64,
+    pub income_minor: u64,
+    pub revision: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct PoolShare {
+    pub pool: Pubkey,
+    pub wallet: Pubkey,
+    pub shares: u64,
+    pub bump: u8,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettlementMode {
     FiatAttestationTest,
@@ -181,12 +312,50 @@ pub enum Restriction {
     Normal,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoanStatus {
+    Active,
+    Recovery,
+    ExternalHandoff,
+    Closed,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LockControl {
+    Pledged,
+    Recovery,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaymentPurpose {
+    Repayment,
+    Release,
+    Correction,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaymentStatus {
+    Unconsumed,
+    Consumed,
+    Voided,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntentStatus {
+    Open,
+    Executed,
+}
+
 pub mod scope {
     pub const ISSUE: u16 = 1 << 0;
     pub const TRANSFER: u16 = 1 << 1;
     pub const SPLIT: u16 = 1 << 2;
     pub const REDEEM: u16 = 1 << 3;
     pub const ATTEST_ORIGIN: u16 = 1 << 4;
+    pub const PLEDGE: u16 = 1 << 5;
+    pub const BUY: u16 = 1 << 6;
+    pub const LEND: u16 = 1 << 7;
+    pub const POOL: u16 = 1 << 8;
 }
 
 pub mod pause {
@@ -194,5 +363,11 @@ pub mod pause {
     pub const TRANSFER: u16 = 1 << 1;
     pub const SPLIT: u16 = 1 << 2;
     pub const REDEEM: u16 = 1 << 3;
-    pub const ALL: u16 = ISSUE | TRANSFER | SPLIT | REDEEM;
+    pub const PLEDGE: u16 = 1 << 4;
+    pub const ADVANCE: u16 = 1 << 5;
+    pub const RELEASE: u16 = 1 << 6;
+    pub const LIQUIDATE: u16 = 1 << 7;
+    pub const POOL: u16 = 1 << 8;
+    pub const ALL: u16 =
+        ISSUE | TRANSFER | SPLIT | REDEEM | PLEDGE | ADVANCE | RELEASE | LIQUIDATE | POOL;
 }

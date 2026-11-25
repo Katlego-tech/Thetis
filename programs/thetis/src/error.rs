@@ -74,4 +74,50 @@ pub enum ThetisError {
     BalanceMismatch,
     #[msg("The root lot does not match")]
     RootMismatch,
+    #[msg("This action is not available in the instance's settlement mode")]
+    WrongSettlementMode,
+    #[msg("The currency does not match the facility or pool")]
+    CurrencyMismatch,
+    #[msg("The valuation has expired")]
+    ValuationStale,
+    #[msg("The valuation does not match the facility, class, grade and site")]
+    ValuationMismatch,
+    #[msg("The debt would exceed the loan limit")]
+    OverLimit,
+    #[msg("The position owner is not the facility's borrower")]
+    BorrowerNotEligible,
+    #[msg("The lot has expired")]
+    LotExpired,
+    #[msg("The loan is not active")]
+    LoanNotActive,
+    #[msg("Quantity exceeds the locked quantity")]
+    InsufficientLocked,
+    #[msg("The position has reserved units")]
+    PositionCommitted,
+    #[msg("The payment attestation is not bound to this action")]
+    PaymentNotBound,
+    #[msg("The payment attestation has already been consumed or voided")]
+    PaymentConsumed,
+    #[msg("A payment attestation is required")]
+    PaymentMissing,
+    #[msg("The release intent has expired")]
+    IntentExpired,
+    #[msg("The release intent is not open")]
+    IntentNotOpen,
+    #[msg("The remaining debt would exceed the limit on the remaining collateral")]
+    ResidualOverLimit,
+    #[msg("The loan has an open payment exception")]
+    LoanUnderException,
+    #[msg("The loan is within its limit")]
+    LoanHealthy,
+    #[msg("The loan still has debt outstanding")]
+    DebtOutstanding,
+    #[msg("The loan cannot close while a payment exception is open")]
+    LiveObligation,
+    #[msg("The pool does not hold enough free cash")]
+    InsufficientLiquidity,
+    #[msg("Amount exceeds the depositor's shares")]
+    InsufficientShares,
+    #[msg("The token mint or account does not match the pool")]
+    MintMismatch,
 }

@@ -303,12 +303,12 @@ fn delegate_rejects_zero_scopes() {
 fn delegation_enforces_the_complete_role_scope_table() {
     let mut f = Fixture::initialized();
     for (index, (role, mask)) in [
-        (Role::Exporter, 0b0_1110),
-        (Role::Buyer, 0b0_1110),
-        (Role::Custodian, 0b0_1001),
+        (Role::Exporter, 0b00_0010_1110),
+        (Role::Buyer, 0b00_0100_1110),
+        (Role::Custodian, 0b00_0000_1001),
         (Role::Transporter, 0),
         (Role::Terminal, 0),
-        (Role::Lender, 0),
+        (Role::Lender, 0b01_1000_0000),
         (Role::Inspector, 0),
         (Role::DocumentIssuer, 0b1_0000),
     ]
@@ -316,7 +316,9 @@ fn delegation_enforces_the_complete_role_scope_table() {
     .enumerate()
     {
         let org = f.add_org(index as u8, role);
-        for scopes in (0..=31).chain([0x20, 0x8000, 0xffff]) {
+        for scopes in (0..=31).chain([
+            0x20, 0x2e, 0x40, 0x4e, 0x80, 0x100, 0x180, 0x200, 0x8000, 0xffff,
+        ]) {
             let wallet = Pubkey::new_unique();
             let ix = f.delegate(OrgAdmin, org, wallet, scopes, NOW + 1);
             if scopes == 0 {
@@ -424,7 +426,7 @@ fn pause_and_unpause_check_admin_and_preserve_unselected_bits() {
     let mut f = Fixture::initialized();
     for paused in [true, false] {
         f.refused(f.change_pause(Accreditor, 1, paused), Accreditor, NotAdmin);
-        for flags in [0x10, 0x11, 0x8000, 0xffff] {
+        for flags in [0x200, 0x201, 0x8000, 0xffff] {
             f.refused(f.change_pause(Admin, flags, paused), Admin, InvalidField);
         }
     }
