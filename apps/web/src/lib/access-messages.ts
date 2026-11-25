@@ -27,6 +27,10 @@ export const accessMessages = {
     revokeAlready: "This link was already revoked. The list now shows its current state.",
     revokeNotAllowed:
       "You can't revoke this link. Only its owner or an admin of its organisation can.",
+    revokeFailed:
+      "Thetis could not confirm the revoke. The list below shows each link's current state; if the link is still active, try again.",
+    refreshFailed:
+      "Thetis could not refresh this list, so it may be out of date. Refresh it to try again.",
   },
   link: {
     noWallet:
@@ -50,5 +54,7 @@ export const accessMessages = {
     walletInvalid: ({ wallet }: { wallet: string }) =>
       `${wallet} offered an account that is not a Solana wallet address. Choose a Solana account in ${wallet} and connect again.`,
     failed: "Thetis could not complete the link. Nothing was linked. Try again.",
+    unconfirmed: ({ wallet }: { wallet: string }) =>
+      `Thetis could not confirm whether ${wallet} was linked. Check again before you sign a new message.`,
   },
 };

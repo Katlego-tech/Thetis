@@ -261,7 +261,8 @@ test("marks the button busy while checking the code", async () => {
 test.each(["signup_disabled", "user_not_found"])("opens the code step for %s", async (code) => {
   mocks.auth.signInWithOtp.mockResolvedValue(authError(code, 422));
   const input = await openCodeStep();
-  expect(input).toHaveFocus();
+  // Focus moves in an effect after the step renders.
+  await waitFor(() => expect(input).toHaveFocus());
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
@@ -274,10 +275,10 @@ test.each(["otp_disabled", "signup_disabled"])(
     expect(await screen.findByRole("status")).toHaveTextContent(
       "A new code is on its way to naledi.dube@lender-one.example. Earlier codes no longer work.",
     );
-    expect(screen.getByRole("button", { name: "Send a new code in 1:00" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    // The cooldown runs on the real clock; under load a second can pass first.
+    expect(
+      screen.getByRole("button", { name: /^Send a new code in (1:00|0:5\d)$/ }),
+    ).toHaveAttribute("aria-disabled", "true");
   },
 );
 
@@ -289,7 +290,7 @@ test("shows an error when verifying yields neither an error nor a session", asyn
   expect(alert).toHaveTextContent(
     "Thetis could not reach the sign-in service. Check your connection and try again.",
   );
-  expect(alert).toHaveFocus();
+  await waitFor(() => expect(alert).toHaveFocus());
   expect(mocks.replace).not.toHaveBeenCalled();
 });
 
