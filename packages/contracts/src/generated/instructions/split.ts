@@ -223,7 +223,7 @@ const getNextAccount = () => {
 }
 const getNextOptionalAccount = () => {
   const accountMeta = getNextAccount();
-  return accountMeta.address === THETIS_PROGRAM_ADDRESS ? undefined : accountMeta;
+  return accountMeta.address === instruction.programAddress ? undefined : accountMeta;
 };
   return { programAddress: instruction.programAddress, accounts: { sponsor: getNextAccount(), protocol: getNextAccount(), ownerAuthority: getNextAccount(), custodianAuthority: getNextAccount(), lot: getNextAccount(), root: getNextOptionalAccount(), classPolicy: getNextAccount(), custodianClass: getNextAccount(), owner: getNextAccount(), custodian: getNextAccount(), mint: getNextAccount(), position: getNextAccount(), vaultAuthority: getNextAccount(), vault: getNextAccount(), childLot: getNextAccount(), childMint: getNextAccount(), childMintAuthority: getNextAccount(), childPosition: getNextAccount(), childVaultAuthority: getNextAccount(), childVault: getNextAccount(), instructions: getNextAccount(), tokenProgram: getNextAccount(), associatedTokenProgram: getNextAccount(), systemProgram: getNextAccount() }, data: getSplitInstructionDataDecoder().decode(instruction.data) };
 }

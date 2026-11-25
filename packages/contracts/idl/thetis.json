@@ -242,6 +242,164 @@
       ]
     },
     {
+      "name": "confirm_payment",
+      "discriminator": [
+        221,
+        23,
+        112,
+        126,
+        29,
+        23,
+        159,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan",
+          "writable": true
+        },
+        {
+          "name": "subject",
+          "docs": [
+            "purpose."
+          ]
+        },
+        {
+          "name": "target",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "payment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender_org"
+              },
+              {
+                "kind": "arg",
+                "path": "payment_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "payment_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "purpose",
+          "type": {
+            "defined": {
+              "name": "PaymentPurpose"
+            }
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "currency",
+          "type": {
+            "array": [
+              "u8",
+              3
+            ]
+          }
+        },
+        {
+          "name": "evidence_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "observed_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "declare_relationship",
       "discriminator": [
         36,
@@ -1290,6 +1448,108 @@
       ]
     },
     {
+      "name": "repay",
+      "discriminator": [
+        234,
+        103,
+        67,
+        82,
+        208,
+        234,
+        219,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org",
+          "optional": true
+        },
+        {
+          "name": "payment",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "pool_authority",
+          "optional": true
+        },
+        {
+          "name": "pool_vault",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "payer_token",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "mint",
+          "optional": true
+        },
+        {
+          "name": "token_program",
+          "optional": true,
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "revoke_authority",
       "discriminator": [
         233,
@@ -2063,6 +2323,19 @@
       ]
     },
     {
+      "name": "PaymentAttestation",
+      "discriminator": [
+        82,
+        165,
+        47,
+        246,
+        54,
+        8,
+        149,
+        173
+      ]
+    },
+    {
       "name": "Position",
       "discriminator": [
         170,
@@ -2273,6 +2546,32 @@
       ]
     },
     {
+      "name": "PaymentConfirmed",
+      "discriminator": [
+        196,
+        8,
+        147,
+        26,
+        213,
+        102,
+        158,
+        183
+      ]
+    },
+    {
+      "name": "PaymentCorrected",
+      "discriminator": [
+        87,
+        33,
+        204,
+        179,
+        54,
+        214,
+        255,
+        137
+      ]
+    },
+    {
       "name": "Pledged",
       "discriminator": [
         98,
@@ -2309,6 +2608,19 @@
         158,
         250,
         108
+      ]
+    },
+    {
+      "name": "Repaid",
+      "discriminator": [
+        38,
+        248,
+        231,
+        7,
+        150,
+        164,
+        172,
+        23
       ]
     },
     {
@@ -3542,6 +3854,200 @@
       }
     },
     {
+      "name": "PaymentAttestation",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "lender",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "payment_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "purpose",
+            "type": {
+              "defined": {
+                "name": "PaymentPurpose"
+              }
+            }
+          },
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "evidence_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "PaymentStatus"
+              }
+            }
+          },
+          {
+            "name": "applied",
+            "type": "u64"
+          },
+          {
+            "name": "surplus",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentConfirmed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payment",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "purpose",
+            "type": {
+              "defined": {
+                "name": "PaymentPurpose"
+              }
+            }
+          },
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentCorrected",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payment",
+            "type": "pubkey"
+          },
+          {
+            "name": "target",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "voided",
+            "type": "bool"
+          },
+          {
+            "name": "open_exceptions",
+            "type": "u16"
+          },
+          {
+            "name": "loan_revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentPurpose",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Repayment"
+          },
+          {
+            "name": "Release"
+          },
+          {
+            "name": "Correction"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Unconsumed"
+          },
+          {
+            "name": "Consumed"
+          },
+          {
+            "name": "Voided"
+          }
+        ]
+      }
+    },
+    {
       "name": "Pledged",
       "type": {
         "kind": "struct",
@@ -3693,6 +4199,64 @@
           {
             "name": "b",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Repaid",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "payment",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "pool",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "pool_revision",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "applied",
+            "type": "u64"
+          },
+          {
+            "name": "from_interest",
+            "type": "u64"
+          },
+          {
+            "name": "from_principal",
+            "type": "u64"
+          },
+          {
+            "name": "surplus",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
           }
         ]
       }

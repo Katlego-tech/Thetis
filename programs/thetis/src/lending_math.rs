@@ -139,6 +139,43 @@ pub fn release_preview(
     })
 }
 
+/// What a received payment does to a loan's debt: interest is paid first, then principal, and
+/// anything beyond the debt is surplus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaymentApplication {
+    pub applied: u64,
+    pub from_interest: u64,
+    pub from_principal: u64,
+    pub surplus: u64,
+    /// The principal after the payment.
+    pub principal: u64,
+    /// The booked interest after the payment.
+    pub booked_interest: u64,
+}
+
+/// Applies `received` to `principal` and `interest_now` (the booked interest with accrual
+/// brought up to date). A debt that does not fit `u64` is `ArithmeticOverflow`.
+pub fn apply_payment(
+    principal: u64,
+    interest_now: u64,
+    received: u64,
+) -> Result<PaymentApplication> {
+    let debt = u64::try_from(u128::from(principal) + u128::from(interest_now))
+        .map_err(|_| error!(ThetisError::ArithmeticOverflow))?;
+    let applied = debt.min(received);
+    let from_interest = applied.min(interest_now);
+    // `applied <= debt`, so the principal share is at most the principal.
+    let from_principal = applied - from_interest;
+    Ok(PaymentApplication {
+        applied,
+        from_interest,
+        from_principal,
+        surplus: received - applied,
+        principal: principal - from_principal,
+        booked_interest: interest_now - from_interest,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

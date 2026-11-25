@@ -3,13 +3,101 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rootNodeFromAnchor } from "@codama/nodes-from-anchor";
 import { renderVisitor } from "@codama/renderers-js";
-import { createFromRoot } from "codama";
+import { getBase58Encoder } from "@solana/kit";
+import { bottomUpTransformerVisitor, createFromRoot } from "codama";
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const idl = JSON.parse(readFileSync(resolve(packageDir, "idl/thetis.json"), "utf8"));
 const outDir = resolve(process.argv[2] ?? resolve(packageDir, "src/generated"));
 
 const codama = createFromRoot(rootNodeFromAnchor(idl));
+
+// Two rules the program's account layouts need, applied to the node tree before rendering.
+//
+// 1. One authority PDA. Every instruction derives its signer's Authority from the same seeds,
+//    ["authority", protocol, wallet], but the IDL names the third seed after each instruction's
+//    own signer account (lender, signer, wallet), and the converter then renames the colliding
+//    PDAs per instruction. Collapse them into the single `authority` PDA with seeds
+//    { protocol, wallet }, and point every default at it.
+// 2. No defaults on optional accounts. An omitted optional account must stay absent, which the
+//    program encodes as its own address, so a default (a PDA, or the SPL Token program) would
+//    silently fill a slot the caller left out.
+const AUTHORITY_SEED = "authority";
+const isAuthorityPda = (pda) => {
+  const [constant, protocol, signer] = pda.seeds;
+  return (
+    pda.seeds.length === 3 &&
+    constant?.kind === "constantPdaSeedNode" &&
+    constant.value.kind === "bytesValueNode" &&
+    constant.value.encoding === "base58" &&
+    new TextDecoder().decode(getBase58Encoder().encode(constant.value.data)) === AUTHORITY_SEED &&
+    protocol?.kind === "variablePdaSeedNode" &&
+    protocol.name === "protocol" &&
+    signer?.kind === "variablePdaSeedNode"
+  );
+};
+const rewriteAuthority = bottomUpTransformerVisitor([
+  {
+    select: "[programNode]",
+    transform: (program) => {
+      const authorityPdas = program.pdas.filter(isAuthorityPda);
+      if (authorityPdas.length === 0) throw new Error("no authority PDA found in the IDL");
+      const names = new Set(authorityPdas.map((pda) => pda.name));
+      if (!names.has("authority")) throw new Error("expected a PDA named authority");
+      const [first] = authorityPdas;
+      const canonical = {
+        ...first,
+        name: "authority",
+        seeds: first.seeds.map((seed, index) => (index === 2 ? { ...seed, name: "wallet" } : seed)),
+      };
+      for (const pda of authorityPdas) {
+        if (JSON.stringify(pda.seeds.slice(0, 2)) !== JSON.stringify(canonical.seeds.slice(0, 2)))
+          throw new Error(`${pda.name}: authority PDAs must share their first two seeds`);
+        if (JSON.stringify(pda.seeds[2].type) !== JSON.stringify(canonical.seeds[2].type))
+          throw new Error(`${pda.name}: authority PDAs must share their wallet seed type`);
+      }
+      let repointed = 0;
+      const instructions = program.instructions.map((instruction) => ({
+        ...instruction,
+        accounts: instruction.accounts.map((account) => {
+          const value = account.defaultValue;
+          if (account.isOptional && value !== undefined) {
+            const { defaultValue: _dropped, ...rest } = account;
+            return rest;
+          }
+          if (value?.kind === "pdaValueNode" && names.has(value.pda.name)) {
+            const seeds = value.seeds.map((seed, index) =>
+              index === 1 ? { ...seed, name: "wallet" } : seed,
+            );
+            if (seeds.length !== 2 || seeds[0].name !== "protocol")
+              throw new Error(`${instruction.name}.${account.name}: unexpected authority seeds`);
+            repointed += 1;
+            return {
+              ...account,
+              defaultValue: { ...value, pda: { ...value.pda, name: "authority" }, seeds },
+            };
+          }
+          return account;
+        }),
+      }));
+      if (repointed === 0) throw new Error("no authority default was repointed");
+      const others = program.pdas.filter((pda) => !names.has(pda.name));
+      return { ...program, pdas: [canonical, ...others], instructions };
+    },
+  },
+]);
+codama.update(rewriteAuthority);
+{
+  const { program } = codama.getRoot();
+  const optional = program.instructions.flatMap((i) => i.accounts).filter((a) => a.isOptional);
+  if (optional.length === 0) throw new Error("expected optional accounts in the IDL");
+  if (optional.some((a) => a.defaultValue !== undefined))
+    throw new Error("an optional account kept a default value");
+  const authorityPdas = program.pdas.filter(isAuthorityPda);
+  if (authorityPdas.length !== 1 || authorityPdas[0].name !== "authority")
+    throw new Error("expected exactly one authority PDA, named authority");
+}
+
 await codama.accept(
   renderVisitor(outDir, {
     deleteFolderBeforeRendering: true,
@@ -218,3 +306,29 @@ for (const entry of readdirSync(outDir, { recursive: true, withFileTypes: true }
   narrowed += count;
 }
 if (narrowed === 0) throw new Error("no 64-bit input types were narrowed to bigint");
+
+// The parsers read an omitted optional account as the program's own address. Compare with the
+// instruction's own programAddress (which a caller may override), not the default program.
+const OPTIONAL_DEFAULT =
+  "accountMeta.address === THETIS_PROGRAM_ADDRESS ? undefined : accountMeta;";
+const OPTIONAL_OWN =
+  "accountMeta.address === instruction.programAddress ? undefined : accountMeta;";
+const withOptional = idl.instructions.filter((instruction) =>
+  instruction.accounts.some((account) => account.optional),
+).length;
+let optionalParsers = 0;
+for (const name of readdirSync(instructionsDir)) {
+  if (name === "index.ts") continue;
+  const file = join(instructionsDir, name);
+  const source = readFileSync(file, "utf8");
+  const count = source.split(OPTIONAL_DEFAULT).length - 1;
+  if (source.includes("THETIS_PROGRAM_ADDRESS ? undefined")) {
+    if (count !== 1) throw new Error(`${name}: expected exactly one optional-account comparison`);
+    writeFileSync(file, source.replace(OPTIONAL_DEFAULT, OPTIONAL_OWN));
+    optionalParsers += 1;
+  }
+}
+if (optionalParsers !== withOptional)
+  throw new Error(
+    `rewrote ${optionalParsers} optional-account parsers, the IDL has ${withOptional}`,
+  );

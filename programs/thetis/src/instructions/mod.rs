@@ -2,6 +2,7 @@ pub mod advance;
 pub mod documents;
 pub mod facility;
 pub mod issue;
+pub mod payment;
 pub mod pledge;
 pub mod redeem;
 pub mod setup;

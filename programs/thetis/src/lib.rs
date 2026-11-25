@@ -13,13 +13,14 @@ use instructions::advance::{self, *};
 use instructions::documents::{self, *};
 use instructions::facility::{self, *};
 use instructions::issue::{self, *};
+use instructions::payment::{self, *};
 use instructions::pledge::{self, *};
 use instructions::redeem::{self, *};
 use instructions::setup::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
 use instructions::valuation::{self, *};
-use state::{DocumentKind, Role, SettlementMode};
+use state::{DocumentKind, PaymentPurpose, Role, SettlementMode};
 
 declare_id!("jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3");
 
@@ -229,5 +230,29 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         advance::record_advance(ctx, amount, currency, expected_revision, valid_until)
+    }
+
+    pub fn confirm_payment(
+        ctx: Context<ConfirmPayment>,
+        payment_id: [u8; 32],
+        purpose: PaymentPurpose,
+        amount: u64,
+        currency: [u8; 3],
+        evidence_digest: [u8; 32],
+        observed_at: i64,
+    ) -> Result<()> {
+        payment::confirm_payment(
+            ctx,
+            payment_id,
+            purpose,
+            amount,
+            currency,
+            evidence_digest,
+            observed_at,
+        )
+    }
+
+    pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
+        payment::repay(ctx, amount)
     }
 }

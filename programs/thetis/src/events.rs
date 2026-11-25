@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::state::{DocumentKind, Role};
+use crate::state::{DocumentKind, PaymentPurpose, Role};
 
 #[event]
 pub struct ProtocolInitialized {
@@ -140,6 +140,41 @@ pub struct Pledged {
 pub struct AdvanceRecorded {
     pub loan: Pubkey,
     pub amount: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub revision: u64,
+}
+
+#[event]
+pub struct PaymentConfirmed {
+    pub payment: Pubkey,
+    pub loan: Pubkey,
+    pub purpose: PaymentPurpose,
+    pub subject: Pubkey,
+    pub amount: u64,
+    pub currency: [u8; 3],
+}
+
+#[event]
+pub struct PaymentCorrected {
+    pub payment: Pubkey,
+    pub target: Pubkey,
+    pub loan: Pubkey,
+    pub voided: bool,
+    pub open_exceptions: u16,
+    pub loan_revision: u64,
+}
+
+#[event]
+pub struct Repaid {
+    pub loan: Pubkey,
+    pub payment: Option<Pubkey>,
+    pub pool: Option<Pubkey>,
+    pub pool_revision: Option<u64>,
+    pub applied: u64,
+    pub from_interest: u64,
+    pub from_principal: u64,
+    pub surplus: u64,
     pub principal: u64,
     pub booked_interest: u64,
     pub revision: u64,

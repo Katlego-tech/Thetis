@@ -8,7 +8,7 @@
 
 import { combineCodec, fixDecoderSize, fixEncoderSize, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getStructDecoder, getStructEncoder, getU64Decoder, getU64Encoder, SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS, SolanaError, transformEncoder, type AccountMeta, type AccountSignerMeta, type Address, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type Instruction, type InstructionWithAccounts, type InstructionWithData, type ReadonlyAccount, type ReadonlySignerAccount, type ReadonlyUint8Array, type WritableAccount } from '@solana/kit';
 import { getAccountMetaFactory, getAddressFromResolvedInstructionAccount, type InstructionAccountInput, type InstructionAccountInputAddress, type InstructionSignerInput, type ResolvedInstructionAccount, type ResolvedInstructionAccountMeta } from '@solana/program-client-core';
-import { findOpenFacilityAuthorityPda } from '../pdas/index.ts';
+import { findAuthorityPda } from '../pdas/index.ts';
 import { THETIS_PROGRAM_ADDRESS } from '../programs/index.ts';
 
 export const RECORD_ADVANCE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([241, 72, 100, 239, 180, 170, 104, 238]);
@@ -72,7 +72,7 @@ const args = { ...input,  };
 
 // Resolve default values.
 if (!accounts.lenderAuthority.value) {
-accounts.lenderAuthority.value = await findOpenFacilityAuthorityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), lender: getAddressFromResolvedInstructionAccount("lender", accounts.lender.value) }, { programAddress });
+accounts.lenderAuthority.value = await findAuthorityPda({ protocol: getAddressFromResolvedInstructionAccount("protocol", accounts.protocol.value), wallet: getAddressFromResolvedInstructionAccount("lender", accounts.lender.value) }, { programAddress });
 }
 if (!accounts.instructions.value) {
 accounts.instructions.value = "Sysvar1nstructions1111111111111111111111111" as Address<"Sysvar1nstructions1111111111111111111111111">;

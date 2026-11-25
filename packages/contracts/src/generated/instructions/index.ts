@@ -9,6 +9,7 @@
 export * from './accreditCustodianClass.ts';
 export * from './accreditOrganisation.ts';
 export * from './attestDocument.ts';
+export * from './confirmPayment.ts';
 export * from './declareRelationship.ts';
 export * from './delegateAuthority.ts';
 export * from './initializeProtocol.ts';
@@ -19,6 +20,7 @@ export * from './pledge.ts';
 export * from './recordAdvance.ts';
 export * from './redeem.ts';
 export * from './registerClass.ts';
+export * from './repay.ts';
 export * from './revokeAuthority.ts';
 export * from './revokeDocument.ts';
 export * from './setValuation.ts';
