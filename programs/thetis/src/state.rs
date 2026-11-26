@@ -268,8 +268,9 @@ pub struct SimulationPool {
 #[derive(InitSpace)]
 pub struct PoolShare {
     pub pool: Pubkey,
-    pub wallet: Pubkey,
+    pub organisation: Pubkey,
     pub shares: u64,
+    pub lent_minor: u64,
     pub bump: u8,
 }
 

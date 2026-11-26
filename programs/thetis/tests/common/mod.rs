@@ -582,6 +582,18 @@ impl Fixture {
         self.svm.set_account(address, account).unwrap();
     }
 
+    /// Writes an account owned by another program (a token mint, say) with `data`, rent exempt.
+    /// Reaches inputs no instruction here can create: the native mint, or a mint the test wants
+    /// at a fixed address.
+    pub fn set_foreign_account(&mut self, address: Pubkey, owner: Pubkey, data: Vec<u8>) {
+        // Reuse the payer's account as a template: solana-account is not a dev-dependency.
+        let mut account = self.svm.get_account(&self.payer.pubkey()).unwrap();
+        account.lamports = self.svm.minimum_balance_for_rent_exemption(data.len());
+        account.data = data;
+        account.owner = owner;
+        self.svm.set_account(address, account).unwrap();
+    }
+
     pub fn account_exists(&self, address: Pubkey) -> bool {
         self.svm.get_account(&address).is_some()
     }
@@ -997,6 +1009,24 @@ fn touched_keys(instructions: &[Instruction]) -> Vec<Pubkey> {
         }
     }
     keys
+}
+
+/// The 82-byte base layout of an initialised SPL Token (or Token-2022) mint with no freeze
+/// authority: what `InitializeMint2` writes.
+pub fn mint_data(mint_authority: Option<Pubkey>, supply: u64, decimals: u8) -> Vec<u8> {
+    let mut data = Vec::with_capacity(82);
+    match mint_authority {
+        Some(authority) => {
+            data.extend_from_slice(&1_u32.to_le_bytes());
+            data.extend_from_slice(authority.as_ref());
+        }
+        None => data.extend_from_slice(&[0; 36]),
+    }
+    data.extend_from_slice(&supply.to_le_bytes());
+    data.push(decimals);
+    data.push(1);
+    data.extend_from_slice(&[0; 36]);
+    data
 }
 
 /// The serialised size of a signed transaction, as the network counts it against the

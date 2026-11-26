@@ -18,6 +18,7 @@ export * from './lot.ts';
 export * from './organisation.ts';
 export * from './organisationName.ts';
 export * from './paymentAttestation.ts';
+export * from './poolShare.ts';
 export * from './position.ts';
 export * from './protocol.ts';
 export * from './releaseIntent.ts';

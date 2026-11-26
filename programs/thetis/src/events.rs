@@ -225,3 +225,42 @@ pub struct LoanClosed {
     pub released_kg: u64,
     pub revision: u64,
 }
+
+#[event]
+pub struct PoolOpened {
+    pub pool: Pubkey,
+    pub mint: Pubkey,
+    pub currency: [u8; 3],
+    pub currency_decimals: u8,
+}
+
+#[event]
+pub struct Deposited {
+    pub pool: Pubkey,
+    pub organisation: Pubkey,
+    pub wallet: Pubkey,
+    pub amount: u64,
+    pub shares: u64,
+    pub pool_revision: u64,
+}
+
+#[event]
+pub struct Withdrawn {
+    pub pool: Pubkey,
+    pub organisation: Pubkey,
+    pub wallet: Pubkey,
+    pub amount: u64,
+    pub shares: u64,
+    pub pool_revision: u64,
+}
+
+#[event]
+pub struct Borrowed {
+    pub loan: Pubkey,
+    pub pool: Pubkey,
+    pub amount: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub revision: u64,
+    pub pool_revision: u64,
+}

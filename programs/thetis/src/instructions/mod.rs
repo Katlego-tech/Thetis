@@ -8,6 +8,7 @@ pub mod recovery;
 pub mod redeem;
 pub mod release;
 pub mod setup;
+pub mod simulation;
 pub mod split;
 pub mod transfer;
 pub mod valuation;

@@ -1765,9 +1765,10 @@ fn repay_rejects_missing_attestation() {
 fn repay_rejects_simulation_mode() {
     let mut w = World::demo();
     let (payment, _) = w.confirm_ok(&w.repayment(1, THIRTY_K));
-    // A valid fiat repayment; the harness rewrites only the settlement mode.
+    // A valid fiat repayment; the harness rewrites only the settlement mode. `repay` runs in
+    // both modes, and the simulation slot matrix refuses the fiat layout.
     w.set_settlement_mode(SettlementMode::DevnetTokenSimulation);
-    w.repay_refused(&w.repay_args(payment, THIRTY_K), WrongSettlementMode);
+    w.repay_refused(&w.repay_args(payment, THIRTY_K), InvalidField);
     assert_eq!(
         w.f.read::<PaymentAttestation>(payment).status,
         PaymentStatus::Unconsumed
