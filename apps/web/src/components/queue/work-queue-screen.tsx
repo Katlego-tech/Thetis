@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/thetis/page-header";
 import { RegistryMark } from "@/components/thetis/registry-mark";
+import type { ScreenReader } from "@/data/live/types";
 import type { ThetisReader } from "@/data/reader";
 import { formatBpsPercent, formatDateTime, formatMoney, formatTonnes } from "@/lib/format";
 import { lotIdClass, QueueAction, QueueTable } from "./queue-table";
@@ -15,7 +16,7 @@ export const workQueueColumns = [
   { key: "action", label: "Action" },
 ] as const;
 
-export function getQueueData(reader: ThetisReader, organisationId: string) {
+function referenceItems(reader: ThetisReader, organisationId: string) {
   const { currencyMinorDigits, facilityCurrency } = reader.scenario;
   const money = (value: bigint) => formatMoney(value, facilityCurrency, currencyMinorDigits);
   const items = reader.workQueue(organisationId).map((item) => {
@@ -66,7 +67,16 @@ export function getQueueData(reader: ThetisReader, organisationId: string) {
     };
   });
 
-  return { scenario: reader.scenario, items };
+  return items;
+}
+
+export function getQueueData(
+  reader: ScreenReader,
+  organisationId: string,
+): { scenario: ScreenReader["scenario"]; items: ReturnType<typeof referenceItems> } {
+  // Phase 1 chain state creates no work, so a live queue has nothing to format.
+  if (reader.mode === "live") return { scenario: reader.scenario, items: [] };
+  return { scenario: reader.scenario, items: referenceItems(reader, organisationId) };
 }
 
 const chipClass = "rounded-sm border border-(--rule) bg-(--sheet) px-2.5 py-[5px] text-[13px]";
@@ -99,7 +109,11 @@ export function WorkQueueScreen({
               <div className="font-mono font-medium">
                 {data.scenario.settlementMode} · {data.scenario.network}
               </div>
-              <div>Facility currency {data.scenario.facilityCurrency}</div>
+              <div>
+                {data.scenario.facilityCurrency === null
+                  ? "No facility on chain"
+                  : `Facility currency ${data.scenario.facilityCurrency}`}
+              </div>
             </div>
           )
         }

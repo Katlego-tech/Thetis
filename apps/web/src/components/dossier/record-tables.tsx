@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { RegistryMark } from "@/components/thetis/registry-mark";
 import { ResultTable } from "@/components/thetis/result-table";
+import type { LiveLotView } from "@/data/live/types";
 import type { LotView, PaymentStatus } from "@/data/types";
 import { formatBpsPercent, formatDateTime, formatTonnes } from "@/lib/format";
 
@@ -12,15 +13,72 @@ const resultColumns = [
   { key: "registry", label: "Registry" },
 ] as const;
 
-export function FinancialResults({
+/** A reference lot always has a formatter; a live Phase 1 lot has no loan and no money to format. */
+export type FinancialRecord =
+  | { lot: LotView; money: (minor: bigint) => string }
+  | { lot: LiveLotView & { loan: null }; money: null };
+
+const notAttested = "Not attested yet";
+
+function UnfinancedResults({
   lot,
-  money,
-  includeQuantity = false,
+  includeQuantity,
 }: {
-  lot: LotView;
-  money: (minor: bigint) => string;
-  includeQuantity?: boolean;
+  lot: LiveLotView;
+  includeQuantity: boolean;
 }) {
+  const notOnChain = <RegistryMark status="not_submitted" />;
+  const rows = [
+    ...(includeQuantity
+      ? [
+          {
+            result: "Lot quantity",
+            value: formatTonnes(lot.quantityKg),
+            basis: "Supply on chain, kg atomic unit",
+            attestor: notAttested,
+            registry: <RegistryMark status={lot.registry.status} />,
+          },
+        ]
+      : []),
+    {
+      result: "Recorded debt",
+      value: "None recorded",
+      basis: "No loan on chain for this lot",
+      attestor: notAttested,
+      registry: notOnChain,
+    },
+    {
+      result: "Valuation",
+      value: "None recorded",
+      basis: "No valuation on chain for this lot's class, grade and site",
+      attestor: notAttested,
+      registry: notOnChain,
+    },
+    {
+      result: "Eligible value",
+      value: "Not computed",
+      basis: "Needs a valuation",
+      attestor: notAttested,
+      registry: notOnChain,
+    },
+    {
+      result: "Loan to value",
+      value: "Not computed",
+      basis: "Needs a loan and a valuation",
+      attestor: notAttested,
+      registry: notOnChain,
+    },
+  ];
+  return <ResultTable columns={[...resultColumns]} rows={rows} totalRowIndex={rows.length - 1} />;
+}
+
+export function FinancialResults({
+  includeQuantity = false,
+  ...record
+}: FinancialRecord & { includeQuantity?: boolean }) {
+  if (record.money === null)
+    return <UnfinancedResults lot={record.lot} includeQuantity={includeQuantity} />;
+  const { lot, money } = record;
   const { loan, valuation } = lot;
   const quantity = formatTonnes(lot.quantityKg);
   const price = `${money(valuation.valuePerKgMinor * 1000n)}/t`;
@@ -97,7 +155,13 @@ export function FinancialResults({
   return <ResultTable columns={[...resultColumns]} rows={rows} totalRowIndex={rows.length - 1} />;
 }
 
-export function EvidenceTable({ evidence }: { evidence: LotView["evidence"] }) {
+export function EvidenceTable({
+  evidence,
+  source = "reference",
+}: {
+  evidence: LotView["evidence"];
+  source?: "reference" | "live";
+}) {
   if (!evidence.length) return <p className="text-(--ink-2)">No evidence for this lot.</p>;
 
   return (
@@ -112,7 +176,7 @@ export function EvidenceTable({ evidence }: { evidence: LotView["evidence"] }) {
         document: kind,
         issuer: issuer.name,
         status: <span className="thetis-mark border border-dashed border-(--ink-2)">{status}</span>,
-        file: "No file in the reference scenario",
+        file: source === "live" ? "Digest on chain" : "No file in the reference scenario",
       }))}
     />
   );

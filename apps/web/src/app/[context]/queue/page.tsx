@@ -1,5 +1,12 @@
+import { notFound, unstable_rethrow } from "next/navigation";
 import { getQueueData, WorkQueueScreen } from "@/components/queue/work-queue-screen";
-import { getReader } from "@/data/get-reader";
+import { LiveFailurePage } from "@/components/shell/live-read-failed";
+import { LiveShell } from "@/components/shell/live-shell";
+import { LiveDataError, type LiveReader } from "@/data/live/types";
+import { requireReader } from "@/data/load-reader";
+import type { Context } from "@/data/types";
+
+export const dynamic = "force-dynamic";
 
 export default async function WorkQueuePage({
   params,
@@ -9,20 +16,36 @@ export default async function WorkQueuePage({
   searchParams: Promise<{ filter?: string | string[] }>;
 }) {
   const [{ context }, { filter }] = await Promise.all([params, searchParams]);
+  const query = typeof filter === "string" ? `?${new URLSearchParams({ filter })}` : "";
   let data: ReturnType<typeof getQueueData> | null;
+  let live: { reader: LiveReader; current: Context } | null = null;
   try {
-    data = getQueueData(getReader(), context);
+    const reader = await requireReader(`/${encodeURIComponent(context)}/queue${query}`);
+    if (reader.mode === "live") {
+      const current = reader.context(context);
+      if (!current) notFound();
+      live = { reader, current };
+    }
+    data = getQueueData(reader, context);
   } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof LiveDataError) return <LiveFailurePage error={error} />;
     console.error("Could not load the work queue", error);
     data = null;
   }
 
-  return (
+  const screen = (
     <WorkQueueScreen
       organisationId={context}
       data={data}
       filter={typeof filter === "string" ? filter : undefined}
       now={Date.now()}
     />
+  );
+  if (!live) return screen;
+  return (
+    <LiveShell reader={live.reader} current={live.current} segment="queue">
+      {screen}
+    </LiveShell>
   );
 }

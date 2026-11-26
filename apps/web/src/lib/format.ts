@@ -49,3 +49,7 @@ export function formatDateTime(iso: string): string {
 export function formatClockTime(iso: string): string {
   return `${johannesburgClock.format(new Date(iso))} SAST`;
 }
+
+export function formatSlot(slot: bigint): string {
+  return wholeNumber.format(slot);
+}

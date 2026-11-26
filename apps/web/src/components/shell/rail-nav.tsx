@@ -17,8 +17,10 @@ export interface RailItem {
   href: string | null;
 }
 
-export function RailNav({ items }: { items: RailItem[] }) {
-  const activeSegment = useSelectedLayoutSegment();
+export function RailNav({ items, segment }: { items: RailItem[]; segment?: string | undefined }) {
+  // A page passes its own segment: the layout segment is not visible from inside a page.
+  const layoutSegment = useSelectedLayoutSegment();
+  const activeSegment = segment ?? layoutSegment;
 
   return (
     <>

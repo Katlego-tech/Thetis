@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { QuantityBar } from "@/components/thetis/quantity-bar";
-import type { LotView, WorkItemView } from "@/data/types";
+import type { LiveLotView } from "@/data/live/types";
+import type { WorkItemView } from "@/data/types";
 import { formatTonnes } from "@/lib/format";
 
 export const overviewColumns =
@@ -8,7 +9,15 @@ export const overviewColumns =
 const panel = "grid gap-3 rounded border border-(--rule) bg-(--sheet) p-4";
 const panelHeading = "text-base leading-[1.2] font-semibold [font-variation-settings:'wdth'_110]";
 
-export function QuantityPanel({ lot }: { lot: LotView }) {
+export function QuantityPanel({
+  lot,
+  source = "reference",
+}: {
+  lot: LiveLotView;
+  source?: "reference" | "live";
+}) {
+  // Live, the bar is the shown position, so the bar and the legend share one basis.
+  const totalKg = source === "live" ? lot.position.positionQuantityKg : lot.quantityKg;
   const pledged = lot.position.activeLockedQuantityKg;
   const pending = lot.releases.reduce((total, { payment, registry, soldLockedQuantityKg }) => {
     if (
@@ -28,7 +37,12 @@ export function QuantityPanel({ lot }: { lot: LotView }) {
     { label: "Available", kg: lot.position.availableKg },
     { label: "Discrepancy", kg: lot.discrepancyKg },
   ];
-  const total = formatTonnes(lot.quantityKg);
+  const total = formatTonnes(totalKg);
+  const holding =
+    source === "live" && totalKg > 0n && totalKg !== lot.quantityKg
+      ? `${lot.owner.name} holds ${total} of this lot's ${formatTonnes(lot.quantityKg)}.`
+      : null;
+  const showBar = source === "reference" || totalKg > 0n;
   const barLabel = [
     "Quantity",
     `Total ${total}`,
@@ -38,12 +52,13 @@ export function QuantityPanel({ lot }: { lot: LotView }) {
   return (
     <section className={panel}>
       <h2 className={`${panelHeading} !mb-0`}>Quantity</h2>
-      {pending <= pledged && pledged <= lot.quantityKg ? (
+      {holding && <p className="text-[13px]">{holding}</p>}
+      {!showBar ? null : pending <= pledged && pledged <= totalKg ? (
         // Use the reader's available quantity in the accessible figure, including reservations.
         <div role="img" aria-label={`${barLabel}.`}>
           <div aria-hidden="true">
             <QuantityBar
-              totalKg={lot.quantityKg}
+              totalKg={totalKg}
               pledgedKg={pledged}
               pendingKg={pending}
               label="Quantity"
