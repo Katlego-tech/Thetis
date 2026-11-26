@@ -1,4 +1,5 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createBrowserClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 let client: SupabaseClient | undefined;
 
@@ -11,6 +12,7 @@ export function supabaseBrowser(): SupabaseClient {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!anonKey) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not set");
 
-  client = createClient(url, anonKey, { auth: { persistSession: true } });
+  // The session lives in cookies, so server renders read Supabase as the same person.
+  client = createBrowserClient(url, anonKey);
   return client;
 }

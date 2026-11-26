@@ -15,10 +15,12 @@ export function ContextSwitcher({
   current,
   contexts,
   items,
+  segment,
 }: {
   current: Context;
   contexts: Context[];
   items: RailItem[];
+  segment?: string | undefined;
 }) {
   return (
     <>
@@ -48,7 +50,7 @@ export function ContextSwitcher({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <RailNav items={items} />
+      <RailNav items={items} segment={segment} />
     </>
   );
 }
