@@ -17,39 +17,66 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateKeyPairSigner, getAddressEncoder } from "@solana/kit";
+import { AccountRole, type Address, generateKeyPairSigner, getAddressEncoder } from "@solana/kit";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  type AccountReader,
   assertDevnetOnly,
   assertKeysDirOutsideRepo,
   assertNoPending,
   buildAccreditOrganisation,
+  buildCreateTestMint,
   buildInitializeProtocol,
+  buildOpenPool,
   buildRegisterClass,
+  DEFAULT_INSTANCE,
+  decideOpenPool,
+  decideSimulationSteps,
+  decideTestMint,
+  derivePoolAddresses,
   diffClass,
+  diffMint,
   diffOrganisation,
+  diffPool,
   diffProtocol,
   enumName,
   explorerUrl,
+  findAssociatedTokenAddress,
   findClassPolicyPda,
   findOrganisationNamePda,
+  INSTANCES,
+  type InstanceLog,
+  instanceByName,
   instanceIdBytes,
   type LoggedTransaction,
   loadOrCreateKey,
+  MINT_ACCOUNT_SIZE,
+  main,
+  mergeSeedLog,
+  ownTransactions,
+  parseInstance,
   parseSeedOrganisations,
+  readSeedLog,
   reconcilePending,
+  renderSeedLog,
   SEED,
   SeedError,
+  SIMULATION,
+  SIMULATION_INSTANCE,
   submitLogged,
+  TOKEN_PROGRAM_ADDRESS,
   uuidToBytes,
   wantedClass,
 } from "../../../scripts/seed-demo.ts";
 import {
   findOrganisationPda,
+  findPoolPda,
   findProtocolPda,
   getAccreditOrganisationInstructionDataDecoder,
   getInitializeProtocolInstructionDataDecoder,
+  getOpenPoolInstructionDataDecoder,
   getRegisterClassInstructionDataDecoder,
+  getSimulationPoolEncoder,
   Role,
   SettlementMode,
   THETIS_PROGRAM_ADDRESS,
@@ -651,5 +678,769 @@ esac`,
     const result = runIt();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("solana-keygen new");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The token-simulation instance
+// ---------------------------------------------------------------------------------------------
+
+const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const decodeAscii = (bytes: ArrayLike<number>) => new TextDecoder().decode(Uint8Array.from(bytes));
+
+describe("instance selection", () => {
+  it("defaults to the fiat-attestation instance and leaves its values as they were", () => {
+    expect(parseInstance([])).toBe(DEFAULT_INSTANCE);
+    expect(parseInstance(["--url", "devnet"])).toBe(DEFAULT_INSTANCE);
+    expect(DEFAULT_INSTANCE).toEqual({
+      instanceId: "fiat-attestation",
+      settlementMode: "FiatAttestationTest",
+    });
+    expect(SEED).toMatchObject({
+      instanceId: "fiat-attestation",
+      settlementMode: "FiatAttestationTest",
+      classCode: "CHROME",
+      classVersion: 1,
+      grades: ["G1"],
+      originRequired: false,
+      lotValiditySecs: 7_776_000n,
+      splitInheritsExpiry: true,
+    });
+    expect(Array.from(instanceIdBytes())).toEqual(Array.from(instanceIdBytes(DEFAULT_INSTANCE)));
+    expect(decodeAscii(instanceIdBytes())).toBe("fiat-attestation");
+  });
+
+  it("selects token-simulation: the 16 ASCII bytes of its name and DevnetTokenSimulation", () => {
+    for (const argv of [["--instance", "token-simulation"], ["--instance=token-simulation"]]) {
+      expect(parseInstance(argv)).toBe(SIMULATION_INSTANCE);
+      expect(() => assertDevnetOnly(argv, {})).not.toThrow();
+    }
+    expect(SIMULATION_INSTANCE).toEqual({
+      instanceId: "token-simulation",
+      settlementMode: "DevnetTokenSimulation",
+    });
+    const bytes = instanceIdBytes(SIMULATION_INSTANCE);
+    expect(bytes).toHaveLength(16);
+    expect(decodeAscii(bytes)).toBe("token-simulation");
+    expect(Array.from(bytes)).toEqual([
+      0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x2d, 0x73, 0x69, 0x6d, 0x75, 0x6c, 0x61, 0x74, 0x69, 0x6f,
+      0x6e,
+    ]);
+    expect(Object.keys(INSTANCES)).toEqual(["fiat-attestation", "token-simulation"]);
+    expect(instanceByName("fiat-attestation")).toBe(DEFAULT_INSTANCE);
+  });
+
+  it("refuses an unknown or missing instance, a repeated flag, and still any unknown argument", () => {
+    expect(() => assertDevnetOnly(["--instance", "mainnet"], {})).toThrow(/not an instance/);
+    expect(() => assertDevnetOnly(["--instance"], {})).toThrow(/\(missing\)/);
+    expect(() => assertDevnetOnly(["--instance", "toString"], {})).toThrow(/not an instance/);
+    expect(() =>
+      assertDevnetOnly(["--instance", "token-simulation", "--instance=fiat-attestation"], {}),
+    ).toThrow(/more than once/);
+    expect(() => assertDevnetOnly(["--keypair", "x"], {})).toThrow(/unknown argument/);
+  });
+
+  it("keeps the devnet guard when an instance is chosen", () => {
+    expect(() =>
+      assertDevnetOnly(["--instance", "token-simulation", "--url", "mainnet-beta"], {}),
+    ).toThrow(/not devnet/);
+    expect(() =>
+      assertDevnetOnly(["--instance", "token-simulation"], { CLUSTER: "mainnet-beta" }),
+    ).toThrow(/CLUSTER=mainnet-beta/);
+    expect(() =>
+      assertDevnetOnly(["--url", "devnet", "--instance", "token-simulation"], {
+        CLUSTER: "devnet",
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("simulation instance transactions", () => {
+  async function signers() {
+    const [deployer, admin, accreditor] = await Promise.all([
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+    ]);
+    return { deployer, admin, accreditor };
+  }
+
+  it("builds the default instance's instructions as before, and the simulation's under its own protocol", async () => {
+    const keys = await signers();
+    const [fiatProtocol] = await findProtocolPda({ instanceId: instanceIdBytes() });
+    const [simProtocol] = await findProtocolPda({
+      instanceId: instanceIdBytes(SIMULATION_INSTANCE),
+    });
+    expect(simProtocol).not.toBe(fiatProtocol);
+
+    const defaultInit = await buildInitializeProtocol(keys);
+    expect(defaultInit).toEqual(await buildInitializeProtocol(keys, DEFAULT_INSTANCE));
+    expect(defaultInit.accounts?.map((account) => account.address)).toContain(fiatProtocol);
+    expect(await buildRegisterClass(keys)).toEqual(
+      await buildRegisterClass(keys, DEFAULT_INSTANCE),
+    );
+
+    const init = await buildInitializeProtocol(keys, SIMULATION_INSTANCE);
+    const data = getInitializeProtocolInstructionDataDecoder().decode(init.data as Uint8Array);
+    expect(decodeAscii(data.instanceId)).toBe("token-simulation");
+    expect(enumName(SettlementMode, data.settlementMode)).toBe("DevnetTokenSimulation");
+    expect(data.admin).toBe(keys.admin.address);
+    expect(data.accreditor).toBe(keys.accreditor.address);
+    expect(init.accounts?.map((account) => account.address)).toContain(simProtocol);
+
+    const register = await buildRegisterClass(keys, SIMULATION_INSTANCE);
+    expect(
+      getRegisterClassInstructionDataDecoder().decode(register.data as Uint8Array),
+    ).toMatchObject({
+      classCode: "CHROME",
+      version: 1,
+      grades: ["G1"],
+      originRequired: false,
+      lotValiditySecs: 7_776_000n,
+      splitInheritsExpiry: true,
+    });
+    const classAddress = await findClassPolicyPda(simProtocol, "CHROME", 1);
+    expect(register.accounts?.map((account) => account.address)).toContain(classAddress);
+    expect(classAddress).not.toBe(await findClassPolicyPda(fiatProtocol, "CHROME", 1));
+  });
+
+  it("accredits the same seven organisations, with the same ids and keys, under the simulation protocol", async () => {
+    const keys = await signers();
+    const [fiatProtocol] = await findProtocolPda({ instanceId: instanceIdBytes() });
+    const [simProtocol] = await findProtocolPda({
+      instanceId: instanceIdBytes(SIMULATION_INSTANCE),
+    });
+    const organisations = parseSeedOrganisations(seedSql);
+    expect(organisations).toHaveLength(7);
+    for (const organisation of organisations) {
+      const orgAdmin = (await generateKeyPairSigner()).address;
+      const fiat = await buildAccreditOrganisation(keys, organisation, orgAdmin);
+      const sim = await buildAccreditOrganisation(
+        keys,
+        organisation,
+        orgAdmin,
+        SIMULATION_INSTANCE,
+      );
+      // The instruction arguments are identical; only the protocol-derived accounts differ.
+      expect(sim.data).toEqual(fiat.data);
+      const decoded = getAccreditOrganisationInstructionDataDecoder().decode(
+        sim.data as Uint8Array,
+      );
+      expect(Array.from(decoded.orgId)).toEqual(Array.from(uuidToBytes(organisation.id)));
+      expect(decoded.admin).toBe(orgAdmin);
+      const [organisationAddress] = await findOrganisationPda({
+        protocol: simProtocol,
+        orgId: organisation.orgId,
+      });
+      const addresses = sim.accounts?.map((account) => account.address);
+      expect(addresses).toContain(simProtocol);
+      expect(addresses).toContain(organisationAddress);
+      expect(addresses).toContain(await findOrganisationNamePda(simProtocol, organisation.name));
+      expect(addresses).not.toContain(fiatProtocol);
+    }
+  });
+
+  it("creates the test mint and initialises it in one transaction, with no freeze authority", async () => {
+    const [payer, mint, authority] = await Promise.all([
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+    ]);
+    const [create, init] = buildCreateTestMint({
+      payer,
+      mint,
+      mintAuthority: authority.address,
+      lamports: 1_461_600n,
+    });
+    expect(create?.programAddress).toBe("11111111111111111111111111111111");
+    expect(create?.accounts?.map((account) => [account.address, account.role])).toEqual([
+      [payer.address, AccountRole.WRITABLE_SIGNER],
+      [mint.address, AccountRole.WRITABLE_SIGNER],
+    ]);
+    const createBytes = Uint8Array.from(create?.data as Uint8Array);
+    const createData = new DataView(createBytes.buffer);
+    expect(createData.getUint32(0, true)).toBe(0);
+    expect(createData.getBigUint64(4, true)).toBe(1_461_600n);
+    expect(createData.getBigUint64(12, true)).toBe(BigInt(MINT_ACCOUNT_SIZE));
+    expect(MINT_ACCOUNT_SIZE).toBe(82);
+    expect(Array.from(createBytes.slice(20))).toEqual(
+      Array.from(getAddressEncoder().encode(TOKEN_PROGRAM_ADDRESS)),
+    );
+
+    expect(init?.programAddress).toBe(TOKEN_PROGRAM_ADDRESS);
+    expect(TOKEN_PROGRAM_ADDRESS).toBe("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    expect(init?.accounts).toEqual([{ address: mint.address, role: AccountRole.WRITABLE }]);
+    const initData = init?.data as Uint8Array;
+    expect(initData).toHaveLength(35);
+    expect(initData[0]).toBe(20); // InitializeMint2
+    expect(initData[1]).toBe(2); // decimals: USD cents
+    expect(Array.from(initData.slice(2, 34))).toEqual(
+      Array.from(getAddressEncoder().encode(authority.address)),
+    );
+    expect(initData[34]).toBe(0); // no freeze authority
+  });
+
+  it("opens the USD pool as the admin, on the test mint, at the addresses the program derives", async () => {
+    const keys = await signers();
+    const mint = (await generateKeyPairSigner()).address;
+    const [protocol] = await findProtocolPda({ instanceId: instanceIdBytes(SIMULATION_INSTANCE) });
+    const { pool, poolAuthority, vault } = await derivePoolAddresses(protocol, mint);
+    expect(pool).toBe((await findPoolPda({ protocol }))[0]);
+    expect(vault).toBe(await findAssociatedTokenAddress(poolAuthority, mint));
+
+    const instruction = await buildOpenPool(keys, mint);
+    expect(
+      getOpenPoolInstructionDataDecoder().decode(instruction.data as Uint8Array).currency,
+    ).toEqual(new TextEncoder().encode("USD"));
+    const [admin, payer, protocolMeta, poolMeta, authorityMeta, mintMeta, vaultMeta] =
+      instruction.accounts ?? [];
+    expect(admin).toMatchObject({ address: keys.admin.address, role: AccountRole.READONLY_SIGNER });
+    expect(payer).toMatchObject({
+      address: keys.deployer.address,
+      role: AccountRole.WRITABLE_SIGNER,
+    });
+    expect(
+      [protocolMeta, poolMeta, authorityMeta, mintMeta, vaultMeta].map((meta) => meta?.address),
+    ).toEqual([protocol, pool, poolAuthority, mint, vault]);
+    expect(await buildOpenPool(keys, mint, SIMULATION_INSTANCE)).toEqual(instruction);
+  });
+});
+
+// A classic SPL Token mint account, 82 bytes: a COption authority, supply, decimals, an
+// initialised flag, and a COption freeze authority.
+function mintBytes(options: {
+  authority?: Address | null;
+  freeze?: Address | null;
+  decimals?: number;
+  supply?: bigint;
+  initialised?: boolean;
+}): Uint8Array {
+  const bytes = new Uint8Array(MINT_ACCOUNT_SIZE);
+  const view = new DataView(bytes.buffer);
+  const address = getAddressEncoder();
+  if (options.authority) {
+    view.setUint32(0, 1, true);
+    bytes.set(address.encode(options.authority), 4);
+  }
+  view.setBigUint64(36, options.supply ?? 0n, true);
+  bytes[44] = options.decimals ?? 2;
+  bytes[45] = options.initialised === false ? 0 : 1;
+  if (options.freeze) {
+    view.setUint32(46, 1, true);
+    bytes.set(address.encode(options.freeze), 50);
+  }
+  return bytes;
+}
+
+describe("test mint rules", () => {
+  it("accepts the wanted mint whatever its supply, and names every field that is wrong", async () => {
+    const [authority, other] = await Promise.all([
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+    ]);
+    const wanted = { mintAuthority: authority.address };
+    const account = (data: Uint8Array, programAddress: string = TOKEN_PROGRAM_ADDRESS) => ({
+      programAddress,
+      data,
+    });
+
+    expect(diffMint(account(mintBytes({ authority: authority.address })), wanted)).toEqual([]);
+    expect(
+      diffMint(account(mintBytes({ authority: authority.address, supply: 5_000_000n })), wanted),
+    ).toEqual([]);
+
+    expect(
+      diffMint(account(mintBytes({ authority: authority.address, decimals: 6 })), wanted),
+    ).toEqual(["decimals: found 6, wanted 2"]);
+    expect(
+      diffMint(account(mintBytes({ authority: authority.address, freeze: other.address })), wanted),
+    ).toEqual([`freezeAuthority: found ${other.address}, wanted none`]);
+    expect(diffMint(account(mintBytes({ authority: other.address })), wanted)).toEqual([
+      `mintAuthority: found ${other.address}, wanted ${authority.address}`,
+    ]);
+    expect(diffMint(account(mintBytes({ authority: null })), wanted)).toEqual([
+      `mintAuthority: found none, wanted ${authority.address}`,
+    ]);
+    expect(
+      diffMint(account(mintBytes({ authority: authority.address, initialised: false })), wanted),
+    ).toEqual(["mint is not initialised"]);
+    // Every difference is reported together.
+    expect(
+      diffMint(
+        account(mintBytes({ authority: other.address, freeze: other.address, decimals: 9 })),
+        wanted,
+      ),
+    ).toHaveLength(3);
+  });
+
+  it("refuses a Token-2022 mint, a wrong size and a malformed option", async () => {
+    const authority = (await generateKeyPairSigner()).address;
+    const good = mintBytes({ authority });
+    expect(
+      diffMint({ programAddress: TOKEN_2022_PROGRAM, data: good }, { mintAuthority: authority }),
+    ).toEqual([`owner: found ${TOKEN_2022_PROGRAM}, wanted ${TOKEN_PROGRAM_ADDRESS}`]);
+    expect(
+      diffMint(
+        { programAddress: TOKEN_PROGRAM_ADDRESS, data: good.slice(0, 81) },
+        { mintAuthority: authority },
+      ),
+    ).toEqual(["data length: found 81, wanted 82"]);
+    const malformed = mintBytes({ authority });
+    new DataView(malformed.buffer).setUint32(46, 2, true);
+    expect(
+      diffMint(
+        { programAddress: TOKEN_PROGRAM_ADDRESS, data: malformed },
+        { mintAuthority: authority },
+      ),
+    ).toEqual(["freezeAuthority: found malformed, wanted none"]);
+  });
+});
+
+type FakeAccount = { owner: string; data: Uint8Array };
+
+// A fake RPC holding accounts by address; it records every address that is read.
+function fakeAccountRpc(accounts: Record<string, FakeAccount>) {
+  const reads: string[] = [];
+  const rpc = {
+    getAccountInfo: (address: string, config: { encoding: string }) => {
+      expect(config.encoding).toBe("base64");
+      reads.push(address);
+      const account = accounts[address];
+      return {
+        send: async () => ({
+          context: { slot: 1n },
+          value:
+            account === undefined
+              ? null
+              : {
+                  data: [Buffer.from(account.data).toString("base64"), "base64"],
+                  executable: false,
+                  lamports: 1_000_000n,
+                  owner: account.owner,
+                  space: BigInt(account.data.length),
+                },
+        }),
+      };
+    },
+  };
+  return { reads, rpc: rpc as unknown as AccountReader };
+}
+
+describe("simulation step decisions against a fake RPC", () => {
+  async function setup() {
+    const [authority, mint] = await Promise.all([generateKeyPairSigner(), generateKeyPairSigner()]);
+    const [protocol] = await findProtocolPda({ instanceId: instanceIdBytes(SIMULATION_INSTANCE) });
+    const addresses = await derivePoolAddresses(protocol, mint.address);
+    return { authority, mint, protocol, ...addresses };
+  }
+
+  const poolAccount = (fields: {
+    protocol: Address;
+    mint: Address;
+    vault: Address;
+    currency?: string;
+    decimals?: number;
+    cash?: bigint;
+  }): FakeAccount => ({
+    owner: THETIS_PROGRAM_ADDRESS,
+    data: Uint8Array.from(
+      getSimulationPoolEncoder().encode({
+        protocol: fields.protocol,
+        mint: fields.mint,
+        vault: fields.vault,
+        currency: new TextEncoder().encode(fields.currency ?? "USD"),
+        currencyDecimals: fields.decimals ?? 2,
+        cashMinor: fields.cash ?? 0n,
+        totalShares: fields.cash ?? 0n,
+        lentMinor: 0n,
+        incomeMinor: 0n,
+        revision: 0n,
+        bump: 255,
+      }),
+    ),
+  });
+
+  it("creates the mint when it is missing, skips it when it holds the wanted values, stops otherwise", async () => {
+    const { authority, mint } = await setup();
+    const wantedMint = {
+      owner: TOKEN_PROGRAM_ADDRESS,
+      data: mintBytes({ authority: authority.address }),
+    };
+
+    const missing = fakeAccountRpc({});
+    expect(await decideTestMint(missing.rpc, mint.address, authority.address)).toBe("create");
+    expect(missing.reads).toEqual([mint.address]);
+
+    const present = fakeAccountRpc({ [mint.address]: wantedMint });
+    expect(await decideTestMint(present.rpc, mint.address, authority.address)).toBe("skip");
+
+    // Supply moves after test tokens are minted; that is not a difference.
+    const minted = fakeAccountRpc({
+      [mint.address]: {
+        ...wantedMint,
+        data: mintBytes({ authority: authority.address, supply: 90_000_000n }),
+      },
+    });
+    expect(await decideTestMint(minted.rpc, mint.address, authority.address)).toBe("skip");
+
+    const wrongDecimals = fakeAccountRpc({
+      [mint.address]: {
+        ...wantedMint,
+        data: mintBytes({ authority: authority.address, decimals: 6 }),
+      },
+    });
+    await expect(
+      decideTestMint(wrongDecimals.rpc, mint.address, authority.address),
+    ).rejects.toThrow(
+      /already exists with different values; nothing sent for it:\n {2}decimals: found 6, wanted 2/,
+    );
+    const frozen = fakeAccountRpc({
+      [mint.address]: {
+        ...wantedMint,
+        data: mintBytes({ authority: authority.address, freeze: authority.address }),
+      },
+    });
+    await expect(decideTestMint(frozen.rpc, mint.address, authority.address)).rejects.toThrow(
+      /freezeAuthority/,
+    );
+    const otherAuthority = (await generateKeyPairSigner()).address;
+    const stranger = fakeAccountRpc({ [mint.address]: wantedMint });
+    await expect(decideTestMint(stranger.rpc, mint.address, otherAuthority)).rejects.toThrow(
+      new RegExp(`mintAuthority: found ${authority.address}, wanted ${otherAuthority}`),
+    );
+    const token2022 = fakeAccountRpc({
+      [mint.address]: { ...wantedMint, owner: TOKEN_2022_PROGRAM },
+    });
+    await expect(decideTestMint(token2022.rpc, mint.address, authority.address)).rejects.toThrow(
+      SeedError,
+    );
+  });
+
+  it("opens the pool when it is missing, skips it when it holds the wanted values, stops otherwise", async () => {
+    const { mint, protocol, pool, vault } = await setup();
+    const wanted = {
+      pool,
+      protocol,
+      mint: mint.address,
+      vault,
+      currency: new TextEncoder().encode(SIMULATION.currency),
+      currencyDecimals: SIMULATION.mintDecimals,
+    };
+    const fields = { protocol, mint: mint.address, vault };
+
+    const missing = fakeAccountRpc({});
+    expect(await decideOpenPool(missing.rpc, wanted)).toBe("open");
+    expect(missing.reads).toEqual([pool]);
+
+    expect(await decideOpenPool(fakeAccountRpc({ [pool]: poolAccount(fields) }).rpc, wanted)).toBe(
+      "skip",
+    );
+    // Deposits move the counters; that is not a difference.
+    expect(
+      await decideOpenPool(
+        fakeAccountRpc({ [pool]: poolAccount({ ...fields, cash: 40_000_000n }) }).rpc,
+        wanted,
+      ),
+    ).toBe("skip");
+
+    const otherMint = (await generateKeyPairSigner()).address;
+    await expect(
+      decideOpenPool(
+        fakeAccountRpc({ [pool]: poolAccount({ ...fields, mint: otherMint }) }).rpc,
+        wanted,
+      ),
+    ).rejects.toThrow(new RegExp(`mint: found ${otherMint}, wanted ${mint.address}`));
+    await expect(
+      decideOpenPool(
+        fakeAccountRpc({ [pool]: poolAccount({ ...fields, currency: "EUR" }) }).rpc,
+        wanted,
+      ),
+    ).rejects.toThrow(/currency: found EUR, wanted USD/);
+    await expect(
+      decideOpenPool(
+        fakeAccountRpc({ [pool]: poolAccount({ ...fields, decimals: 6 }) }).rpc,
+        wanted,
+      ),
+    ).rejects.toThrow(/currencyDecimals: found 6, wanted 2/);
+  });
+
+  it("reads the pool before the mint, and stops on a pool left on another mint before any mint is made", async () => {
+    const { authority, mint, protocol, pool, vault } = await setup();
+    const wantedPool = {
+      pool,
+      protocol,
+      mint: mint.address,
+      vault,
+      currency: new TextEncoder().encode(SIMULATION.currency),
+      currencyDecimals: SIMULATION.mintDecimals,
+    };
+    const wanted = { mintAuthority: authority.address, pool: wantedPool };
+    const wantedMint = {
+      owner: TOKEN_PROGRAM_ADDRESS,
+      data: mintBytes({ authority: authority.address }),
+    };
+    const fields = { protocol, mint: mint.address, vault };
+
+    // Nothing exists yet: both steps are needed, and the pool is read first.
+    const empty = fakeAccountRpc({});
+    expect(await decideSimulationSteps(empty.rpc, wanted)).toEqual({
+      pool: "open",
+      mint: "create",
+    });
+    expect(empty.reads).toEqual([pool, mint.address]);
+
+    // Both exist with the wanted values: nothing to send.
+    const done = fakeAccountRpc({
+      [pool]: poolAccount(fields),
+      [mint.address]: wantedMint,
+    });
+    expect(await decideSimulationSteps(done.rpc, wanted)).toEqual({ pool: "skip", mint: "skip" });
+
+    // sim-mint.json was lost: a new mint address, the old pool. The run stops on the pool and never
+    // reads (so never creates) the new mint.
+    const oldMint = (await generateKeyPairSigner()).address;
+    const lost = fakeAccountRpc({ [pool]: poolAccount({ ...fields, mint: oldMint }) });
+    await expect(decideSimulationSteps(lost.rpc, wanted)).rejects.toThrow(
+      new RegExp(`mint: found ${oldMint}, wanted ${mint.address}`),
+    );
+    expect(lost.reads).toEqual([pool]);
+  });
+
+  it("compares only the pool's fixed fields", () => {
+    const base = {
+      protocol: "P",
+      mint: "M",
+      vault: "V",
+      currency: new TextEncoder().encode("USD"),
+      currencyDecimals: 2,
+    };
+    expect(diffPool(base, { ...base })).toEqual([]);
+    expect(diffPool({ ...base, protocol: "Q", vault: "W" }, base)).toEqual([
+      "protocol: found Q, wanted P",
+      "vault: found W, wanted V",
+    ]);
+  });
+
+  it("stops when the protocol under the simulation id holds the fiat settlement mode", () => {
+    const found = {
+      instanceId: instanceIdBytes(SIMULATION_INSTANCE),
+      settlementMode: "FiatAttestationTest",
+      admin: "A",
+      accreditor: "B",
+    };
+    expect(diffProtocol(found, { ...found, settlementMode: "DevnetTokenSimulation" })).toEqual([
+      "settlementMode: found FiatAttestationTest, wanted DevnetTokenSimulation",
+    ]);
+    expect(diffProtocol(found, { ...found, instanceId: instanceIdBytes() })).toEqual([
+      "instanceId differs",
+    ]);
+  });
+});
+
+describe("seed-log.json keeps the instances apart", () => {
+  const tx = (
+    step: string,
+    signature: string,
+    status: LoggedTransaction["status"] = "confirmed",
+  ) => ({
+    step,
+    signature,
+    url: explorerUrl(signature),
+    status,
+    lastValidBlockHeight: "100",
+  });
+  const fiatLog = () => ({
+    cluster: "devnet" as const,
+    program: THETIS_PROGRAM_ADDRESS,
+    protocol: "FiatProtocol",
+    transactions: [tx("initialize_protocol", "sigFiat")],
+  });
+  const simLog = (): InstanceLog => ({
+    protocol: "SimProtocol",
+    mint: "SimMint",
+    pool: "SimPool",
+    vault: "SimVault",
+    transactions: [tx("create_test_mint", "sigMint", "pending"), tx("open_pool USD", "sigPool")],
+  });
+
+  it("renders a default-instance log exactly as before: no instances key", () => {
+    expect(renderSeedLog(fiatLog())).toBe(`${JSON.stringify(fiatLog(), null, 2)}\n`);
+    expect(Object.keys(JSON.parse(renderSeedLog(fiatLog())))).toEqual([
+      "cluster",
+      "program",
+      "protocol",
+      "transactions",
+    ]);
+    expect(renderSeedLog({ ...fiatLog(), instances: {} })).toBe(renderSeedLog(fiatLog()));
+  });
+
+  it("writes the simulation's addresses and transactions under its instance id, after the fiat ones", () => {
+    const text = renderSeedLog({ ...fiatLog(), instances: { "token-simulation": simLog() } });
+    const parsed = JSON.parse(text);
+    expect(Object.keys(parsed)).toEqual([
+      "cluster",
+      "program",
+      "protocol",
+      "transactions",
+      "instances",
+    ]);
+    expect(parsed.transactions).toEqual(fiatLog().transactions);
+    expect(parsed.instances["token-simulation"]).toEqual(simLog());
+    expect(Object.keys(parsed.instances["token-simulation"])).toEqual([
+      "protocol",
+      "mint",
+      "pool",
+      "vault",
+      "transactions",
+    ]);
+  });
+
+  it("reads back what it wrote, and a simulation-only log has no fiat part", () => {
+    const dir = tempDir();
+    const path = join(dir, "seed-log.json");
+    expect(readSeedLog(path)).toBeUndefined();
+
+    writeFileSync(
+      path,
+      renderSeedLog({
+        cluster: "devnet",
+        program: "P",
+        instances: { "token-simulation": simLog() },
+      }),
+    );
+    const simOnly = readSeedLog(path);
+    expect(simOnly?.transactions).toBeUndefined();
+    expect(simOnly?.protocol).toBeUndefined();
+    expect(simOnly?.instances?.["token-simulation"]).toEqual(simLog());
+
+    writeFileSync(
+      path,
+      renderSeedLog({ ...fiatLog(), instances: { "token-simulation": simLog() } }),
+    );
+    const both = readSeedLog(path);
+    expect(both?.transactions).toEqual(fiatLog().transactions);
+    expect(
+      both?.instances?.["token-simulation"]?.transactions.map((entry) => entry.status),
+    ).toEqual(["pending", "confirmed"]);
+  });
+
+  it("reads an older fiat-only log unchanged", () => {
+    const path = join(tempDir(), "seed-log.json");
+    writeFileSync(path, `${JSON.stringify(fiatLog(), null, 2)}\n`);
+    const log = readSeedLog(path);
+    expect(log?.transactions).toEqual(fiatLog().transactions);
+    expect(log?.instances).toBeUndefined();
+    expect(renderSeedLog(log as NonNullable<typeof log>)).toBe(readFileSync(path, "utf8"));
+  });
+
+  it("refuses a log it did not write", () => {
+    const path = join(tempDir(), "seed-log.json");
+    const attempts = [
+      { ...fiatLog(), transactions: [{ step: 1 }] },
+      { ...fiatLog(), instances: [] },
+      { ...fiatLog(), instances: { "token-simulation": { protocol: "P" } } },
+      { ...fiatLog(), instances: { "token-simulation": { ...simLog(), mint: 7 } } },
+      {
+        ...fiatLog(),
+        instances: { "token-simulation": { ...simLog(), transactions: [{ step: "x" }] } },
+      },
+    ];
+    for (const content of attempts) {
+      writeFileSync(path, JSON.stringify(content));
+      expect(() => readSeedLog(path)).toThrow(/not a seed log this script wrote/);
+    }
+  });
+
+  it("takes each instance's own transactions from its own part of the log", () => {
+    const log = { ...fiatLog(), instances: { "token-simulation": simLog() } };
+    expect(ownTransactions(log, DEFAULT_INSTANCE)).toEqual(fiatLog().transactions);
+    expect(ownTransactions(log, SIMULATION_INSTANCE)).toEqual(simLog().transactions);
+    expect(ownTransactions(undefined, DEFAULT_INSTANCE)).toEqual([]);
+    expect(ownTransactions(fiatLog(), SIMULATION_INSTANCE)).toEqual([]);
+  });
+
+  it("writes one instance's part and keeps the other's exactly as the file now has it", () => {
+    // The simulation run writes while the fiat part on disk has moved on (a new pending entry).
+    const fiatNow = {
+      ...fiatLog(),
+      transactions: [
+        ...fiatLog().transactions,
+        tx("register_class CHROME v1", "sigClass", "pending"),
+      ],
+    };
+    const simWrite = mergeSeedLog(fiatNow, THETIS_PROGRAM_ADDRESS, SIMULATION_INSTANCE, simLog());
+    expect(simWrite.protocol).toBe("FiatProtocol");
+    expect(simWrite.transactions).toEqual(fiatNow.transactions);
+    expect(simWrite.instances?.["token-simulation"]).toEqual(simLog());
+
+    // The fiat run writes while the simulation part is on disk: it keeps that part untouched.
+    const withSim = { ...fiatLog(), instances: { "token-simulation": simLog() } };
+    const ownFiat = {
+      protocol: "FiatProtocol",
+      transactions: [tx("initialize_protocol", "sigFiat2")],
+    };
+    const fiatWrite = mergeSeedLog(withSim, THETIS_PROGRAM_ADDRESS, DEFAULT_INSTANCE, ownFiat);
+    expect(fiatWrite.transactions).toEqual(ownFiat.transactions);
+    expect(fiatWrite.instances?.["token-simulation"]).toEqual(simLog());
+
+    // First write of either instance into an empty file.
+    expect(mergeSeedLog(undefined, THETIS_PROGRAM_ADDRESS, SIMULATION_INSTANCE, simLog())).toEqual({
+      cluster: "devnet",
+      program: THETIS_PROGRAM_ADDRESS,
+      protocol: undefined,
+      transactions: undefined,
+      instances: { "token-simulation": simLog() },
+    });
+    expect(
+      Object.keys(
+        JSON.parse(
+          renderSeedLog(mergeSeedLog(undefined, THETIS_PROGRAM_ADDRESS, DEFAULT_INSTANCE, ownFiat)),
+        ),
+      ),
+    ).toEqual(["cluster", "program", "protocol", "transactions"]);
+  });
+
+  it("keeps a step's pending entry apart: another instance's pending step does not block this one", () => {
+    const sim = [tx("initialize_protocol", "sigSimInit", "pending")];
+    expect(() => assertNoPending(sim, "initialize_protocol")).toThrow(/still pending/);
+    expect(() => assertNoPending(fiatLog().transactions, "initialize_protocol")).not.toThrow();
+  });
+});
+
+describe("simulation keys and run", () => {
+  it("creates the mint and the mint authority as two distinct mode-600 files, once", async () => {
+    const dir = tempDir();
+    const mint = await loadOrCreateKey(dir, "sim-mint");
+    const authority = await loadOrCreateKey(dir, "sim-mint-authority");
+    expect(mint.address).not.toBe(authority.address);
+    for (const name of ["sim-mint.json", "sim-mint-authority.json"]) {
+      expect(statSync(join(dir, name)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(join(dir, name), "utf8"))).toHaveLength(64);
+    }
+    expect((await loadOrCreateKey(dir, "sim-mint")).address).toBe(mint.address);
+    expect((await loadOrCreateKey(dir, "sim-mint-authority")).address).toBe(authority.address);
+  });
+
+  it("stops for a missing deployer before creating any key, in either mode", async () => {
+    for (const argv of [[], ["--instance", "token-simulation"]]) {
+      const dir = tempDir();
+      await expect(main(argv, { THETIS_KEYS_DIR: dir })).rejects.toThrow(
+        /deployer\.json is missing/,
+      );
+      expect(existsSync(join(dir, "sim-mint.json"))).toBe(false);
+      expect(existsSync(join(dir, "admin.json"))).toBe(false);
+    }
+  });
+
+  it("refuses a non-devnet override or a keys directory in the repository before touching anything", async () => {
+    await expect(
+      main(["--instance", "token-simulation", "--url", "mainnet-beta"], {
+        THETIS_KEYS_DIR: tempDir(),
+      }),
+    ).rejects.toThrow(/not devnet/);
+    await expect(
+      main(["--instance", "token-simulation"], { THETIS_KEYS_DIR: join(repoRoot, "keys") }),
+    ).rejects.toThrow(/inside the repository/);
+    expect(existsSync(join(repoRoot, "keys"))).toBe(false);
   });
 });

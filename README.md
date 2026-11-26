@@ -113,6 +113,63 @@ Protocol instance `fiat-attestation`: [`G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbH
 | accredit_organisation lender-two | [`2T2uHiARneHHwgvu…`](https://explorer.solana.com/tx/2T2uHiARneHHwgvu1Pt8RTnmEKc8wo6SVENLTJvpQtpCmY5TZXDWa1k3htifs2GxrL3MgrDk5FGwDn215RxKfwzM?cluster=devnet) |
 | accredit_organisation buyer-smelter | [`xuCcAnPWMEFouMrr…`](https://explorer.solana.com/tx/xuCcAnPWMEFouMrrcF4gENgiWEjZygjxPf72WF73o7GK37qiixb1gD51AnNeuHhFEGz9VDocVXBN1MWDFAAQs4B?cluster=devnet) |
 
+### Simulation instance
+
+A second protocol instance, `token-simulation`, runs in `DEVNET_TOKEN_SIMULATION` mode with a test token pool. The token has no
+real value. A Thetis-minted token is labelled "test USDC (Thetis-minted)" wherever it is shown, never as Circle's USDC. It is seeded by the same script and the same program, on devnet only. Run one instance at a time: both write the same `seed-log.json`.
+
+```bash
+pnpm seed:devnet --instance token-simulation   # the same as: node scripts/seed-demo.ts --instance token-simulation
+```
+
+With no `--instance` the script seeds `fiat-attestation` exactly as above. The simulation run needs the deployed program,
+a funded `deployer.json`, and the same `admin.json`, `accreditor.json` and `org-<slug>.json` keys as the fiat instance. It
+creates two more keys in the keys directory, only when missing, each with mode 600: `sim-mint.json` (the test mint itself,
+so a rerun finds the same mint) and `sim-mint-authority.json` (the mint authority). In order, it sends:
+
+1. `initialize_protocol`: instance id `token-simulation`, mode `DevnetTokenSimulation`.
+2. `create_test_mint`: a classic SPL Token mint (not Token-2022) with 2 decimals (USD cents), no freeze authority, the mint
+   authority above and an initial supply of 0, created and initialised in one transaction.
+3. `open_pool USD`: sent by the admin on that mint. The pool and its vault are the program's own derived addresses.
+4. `register_class CHROME v1` and `accredit_organisation` for the same seven organisations, with the same fixed ids and keys
+   as the fiat instance.
+
+Before it sends anything, the script reads the pool and then the test mint, so a pool left on another mint (for example after
+`sim-mint.json` was lost) stops the run before a new mint is paid for. Before each of the other steps it reads that step's
+account. An account that already holds the wanted values is skipped. An account that
+holds other values stops the run and prints the difference. For the mint the wanted values are: owned by the classic Token
+program, initialised, 2 decimals, no freeze authority, and `sim-mint-authority.json`'s address as mint authority (the supply
+is not compared, because it grows once test tokens are minted). For the pool they are the protocol, mint, vault, currency
+`USD` and 2 decimals (the counters are not compared).
+
+`seed-log.json` keeps the fiat transactions at the top level, as before, and the simulation's under
+`instances["token-simulation"]`, with its protocol, mint, pool and vault addresses and its own transaction links. Each
+transaction is `pending` before it is sent and `confirmed` after, and a rerun settles any `pending` entry first.
+
+Filled in from `seed-log.json` after the run:
+
+| Item | Address or transaction |
+|---|---|
+| Protocol instance `token-simulation` | [`7fQ15qzKyWGX1dfXG78tS3pEWjPDsDbaYVHNUgi3HoGa`](https://explorer.solana.com/address/7fQ15qzKyWGX1dfXG78tS3pEWjPDsDbaYVHNUgi3HoGa?cluster=devnet) |
+| Test mint (classic SPL Token, 2 decimals, no freeze authority) | [`Fiqy3yyLy1jDDMzkiH4dTREUwiUJZYuwdwwKTh4yBewZ`](https://explorer.solana.com/address/Fiqy3yyLy1jDDMzkiH4dTREUwiUJZYuwdwwKTh4yBewZ?cluster=devnet) |
+| Pool | [`CNVSV73hCbc2hkj9SeStmo6MTyakFMNxTF2KVV9tRvDr`](https://explorer.solana.com/address/CNVSV73hCbc2hkj9SeStmo6MTyakFMNxTF2KVV9tRvDr?cluster=devnet) |
+| Pool vault | [`FrfmMucMFcx3kSxNjTbqcQrJcc6zuNaMj83337TY7Cf9`](https://explorer.solana.com/address/FrfmMucMFcx3kSxNjTbqcQrJcc6zuNaMj83337TY7Cf9?cluster=devnet) |
+| Seeded on | 26 Nov 2026, devnet slot 526561622 |
+
+| Step | Transaction |
+|---|---|
+| initialize_protocol | [`3n7fGNCXhjjFvi2i…`](https://explorer.solana.com/tx/3n7fGNCXhjjFvi2ii6VBa5AY9BFcNZcnE3ji6rQd8Cfj9Qi1RAmTuJMLcSzL5P8eMoo87W2MbqMPnjZRNxyZiyGZ?cluster=devnet) |
+| create_test_mint | [`5S5iSjh6B2gBjdf6…`](https://explorer.solana.com/tx/5S5iSjh6B2gBjdf6ESAeJGTWydpchSQtKuynZQDDFD2DKa4ujctNtLJaHXBktJvXtU1XD8spTfaYNyQGBAkRjDd5?cluster=devnet) |
+| open_pool USD | [`2qdjk6MdarfQ7F2j…`](https://explorer.solana.com/tx/2qdjk6MdarfQ7F2jFxhRUraL8zxwabtLJrE1gESo15xe8S2YX8fAEYmRc5dds6WKbeZT66aRY2wktDLFcqiWWKmA?cluster=devnet) |
+| register_class CHROME v1 | [`29icaKtV4c4sEG4p…`](https://explorer.solana.com/tx/29icaKtV4c4sEG4p1Xe93QSv7uVguzWEEw5vXC6dCSnqSDZ9frRu1yseszyPGUU8QLqzUvqKAJ6YdN61PhRTYc8N?cluster=devnet) |
+| accredit_organisation khunou | [`3CwSwoT52izMRzMU…`](https://explorer.solana.com/tx/3CwSwoT52izMRzMUhgZ2gsozwisvMvcjPFjTDAFg8t43YqxjsMFqTgcB9RNTtiuAX31kud3JeyDndL4UMTHQu3S9?cluster=devnet) |
+| accredit_organisation kopano | [`4odCpNhrPjrpEDwy…`](https://explorer.solana.com/tx/4odCpNhrPjrpEDwyeXprens8HFXHaA6TKX9bJZXZNkKW7SN2NnMBZRsfRn34kgZjcUR3KgesXCdnykxzUGXxbDMD?cluster=devnet) |
+| accredit_organisation mosela | [`v37LecCYd1RoGA92…`](https://explorer.solana.com/tx/v37LecCYd1RoGA92D7rBPbRpeqUheyQ6mnZqnp2Z48uhn6Dve72JwstjPfsvibQ9RavAtCZ7r5F6pvPRRazKPTE?cluster=devnet) |
+| accredit_organisation port-t1 | [`3bhGsc4NVUkN4iXy…`](https://explorer.solana.com/tx/3bhGsc4NVUkN4iXybaM6XrLuQcUiyg1e2wTXTh4GXBf4MTLLW7w7dHscRVTVQgZrfjvizjXytg2i9XUAQ7fJFqQJ?cluster=devnet) |
+| accredit_organisation lender-one | [`HRQMPF2z3EiSdkhr…`](https://explorer.solana.com/tx/HRQMPF2z3EiSdkhrXbDeieLRXhm3r3joE62sVFiDFNeyT2wBYCSvxaaKG6P2cpNRTGvcXyigr8Zf4Pm6MUivsWo?cluster=devnet) |
+| accredit_organisation lender-two | [`3QVomAKvDARkQJcx…`](https://explorer.solana.com/tx/3QVomAKvDARkQJcx1uddPKBzDZRjYPkCPkkYo8HqKam7pGYQZeRG9mezi1ubndquYDGBEWKRYGH3zg8WA8rsP3QR?cluster=devnet) |
+| accredit_organisation buyer-smelter | [`3DEUaHL73iRaQPSz…`](https://explorer.solana.com/tx/3DEUaHL73iRaQPSzpgEPcqyVcz2CczXSGJMPA8skbXue6UkCigWBENgbmy1PQcBDtZwGoszQHkNST19cKCjcYRxe?cluster=devnet) |
+
 ## Built before vs. during the event
 
 Everything in this repository today was built **before** the Dev3Pack build window (27–29
