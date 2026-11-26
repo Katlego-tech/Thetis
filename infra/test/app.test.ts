@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { App, type Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +14,8 @@ const valid = {
   githubRepo: "Katlego-tech/Thetis",
   budgetMonthlyUsd: "25",
   alertEmail: "alerts@example.invalid",
+  // Declared placeholder until the hosted Supabase project exists.
+  supabaseUrl: "https://aaaaaaaaaaaaaaaaaaaa.supabase.co",
 };
 const oidcHost = "token.actions.githubusercontent.com";
 
@@ -29,6 +32,7 @@ const invalidValues = {
   githubRepo: "another/repo",
   budgetMonthlyUsd: "0",
   alertEmail: "invalid",
+  supabaseUrl: "https://example.supabase.co",
 };
 
 describe("required context", () => {
@@ -131,6 +135,28 @@ describe("synthesized deployment", () => {
     return Properties.Role["Fn::GetAtt"][0];
   }
 
+  function secretImport(name: string) {
+    const secrets = template("secrets");
+    const secretId = secrets.getResourceId("AWS::SecretsManager::Secret", {
+      Properties: { Name: `thetis/${instance}/${name}` },
+    });
+    const [output] = Object.values(secrets.findOutputs("*", { Value: { Ref: secretId } }));
+    if (!output) throw new Error(`secret ${name} is not exported`);
+    return { "Fn::ImportValue": output.Export.Name };
+  }
+
+  function workerContainer() {
+    const [task] = Object.values(template("worker").findResources("AWS::ECS::TaskDefinition"));
+    const [container] = task?.Properties.ContainerDefinitions ?? [];
+    if (!container) throw new Error("worker container missing");
+    return container;
+  }
+
+  function workerExecutionRoleId() {
+    const [task] = Object.values(template("worker").findResources("AWS::ECS::TaskDefinition"));
+    return task?.Properties.ExecutionRoleArn["Fn::GetAtt"][0];
+  }
+
   it("grants sponsor-key access exclusively to the sponsor role", () => {
     const secrets = template("secrets");
     const secretId = secrets.getResourceId("AWS::SecretsManager::Secret", {
@@ -141,12 +167,14 @@ describe("synthesized deployment", () => {
     expect(secret?.Export.Name).toEqual(expect.any(String));
     const secretArn = { "Fn::ImportValue": secret?.Export.Name };
 
-    const grants = Object.values(templates)
-      .flatMap(policyStatements)
-      .filter(({ statement }) =>
+    const secretGrants = (name: string) =>
+      policyStatements(template(name)).filter(({ statement }) =>
         actions(statement).some((action) => /^(secretsmanager:|\*)/i.test(action)),
       );
-    expect(grants).toEqual([
+    for (const name of Object.keys(templates)) {
+      if (name !== "api" && name !== "worker") expect(secretGrants(name), name).toEqual([]);
+    }
+    expect(secretGrants("api")).toEqual([
       {
         roles: [{ Ref: roleId("sponsor") }],
         statement: {
@@ -156,6 +184,28 @@ describe("synthesized deployment", () => {
         },
       },
     ]);
+    // The indexing worker's execution role reads exactly its two secrets, never sponsor-key.
+    const executionRole = workerExecutionRoleId();
+    const workerGrants = secretGrants("worker");
+    for (const { roles, statement } of workerGrants) {
+      expect(roles).toEqual([{ Ref: executionRole }]);
+      expect(statement.Effect).toBe("Allow");
+    }
+    const pairs = workerGrants.flatMap(({ statement }) =>
+      actions(statement).flatMap((action) =>
+        [statement.Resource].flat().map((resource) => `${action} ${JSON.stringify(resource)}`),
+      ),
+    );
+    expect(new Set(pairs)).toEqual(
+      new Set(
+        ["supabase-service-role", "solana-rpc-url"].flatMap((name) =>
+          ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"].map(
+            (action) => `${action} ${JSON.stringify(secretImport(name))}`,
+          ),
+        ),
+      ),
+    );
+    expect(pairs).toHaveLength(4);
     for (const item of Object.values(templates)) {
       item.resourceCountIs("AWS::SecretsManager::ResourcePolicy", 0);
     }
@@ -337,7 +387,13 @@ describe("synthesized deployment", () => {
       "FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54",
     );
     expect(dockerfile).toMatch(/^USER node$/m);
-    expect(dockerfile).toContain('CMD ["node", "src/main.ts"]');
+    expect(dockerfile).toContain('CMD ["node", "dist/main.js"]');
+    const staged = `${assembly.directory}/${image.source.directory}`;
+    const files = readdirSync(staged, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => relative(staged, join(entry.parentPath, entry.name)))
+      .sort();
+    expect(files).toEqual([".dockerignore", "Dockerfile", "dist/main.js"]);
   });
 
   it("waits for both public subnet route table associations and default routes", () => {
@@ -362,7 +418,7 @@ describe("synthesized deployment", () => {
       Endpoint: valid.alertEmail,
       TopicArn: topic,
     });
-    ops.resourceCountIs("AWS::CloudWatch::Alarm", 3);
+    ops.resourceCountIs("AWS::CloudWatch::Alarm", 4);
     const alarms = Object.values(ops.findResources("AWS::CloudWatch::Alarm"));
     expect(alarms.filter(({ Properties }) => Properties.MetricName === "Errors")).toHaveLength(2);
     for (const { Properties } of alarms.filter(
@@ -385,6 +441,78 @@ describe("synthesized deployment", () => {
       TreatMissingData: "breaching",
       AlarmActions: [topic],
     });
+  });
+
+  it("gives the fiat-attestation-test worker the indexer variables and secrets", () => {
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const deploy = /\[deploy transaction\]\(https:\/\/explorer\.solana\.com\/tx\/([1-9A-HJ-NP-Za-km-z]{64,88})\?cluster=devnet\)/.exec(
+      readme,
+    )?.[1];
+    expect(deploy).toEqual(expect.any(String));
+    const container = workerContainer();
+    const environment = Object.fromEntries(
+      (container.Environment ?? []).map(({ Name, Value }: { Name: string; Value: unknown }) => [Name, Value]),
+    );
+    expect(environment).toEqual({
+      THETIS_INDEXER: "on",
+      THETIS_NETWORK: "devnet",
+      THETIS_PROGRAM_ID: "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3",
+      THETIS_PROTOCOL: "G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3",
+      THETIS_FIRST_SIGNATURE: deploy,
+      SUPABASE_URL: valid.supabaseUrl,
+    });
+    const secrets = Object.fromEntries(
+      (container.Secrets ?? []).map(({ Name, ValueFrom }: { Name: string; ValueFrom: unknown }) => [Name, ValueFrom]),
+    );
+    expect(secrets).toEqual({
+      THETIS_RPC_URL: secretImport("solana-rpc-url"),
+      SUPABASE_SERVICE_ROLE_KEY: secretImport("supabase-service-role"),
+    });
+  });
+
+  it("alarms on IndexerHalted log lines for the indexing instance", () => {
+    const ops = template("ops");
+    const topic = { Ref: ops.getResourceId("AWS::SNS::Topic") };
+    const filters = Object.values(templates).flatMap((item) =>
+      Object.values(item.findResources("AWS::Logs::MetricFilter")),
+    );
+    expect(filters).toHaveLength(1);
+    expect(filters[0]?.Properties).toMatchObject({
+      FilterPattern: '{ $.code = "INDEXER_HALTED" }',
+      MetricTransformations: [
+        { MetricName: "IndexerHalted", MetricNamespace: `Thetis/${instance}`, MetricValue: "1" },
+      ],
+    });
+    ops.hasResourceProperties("AWS::CloudWatch::Alarm", {
+      Namespace: `Thetis/${instance}`,
+      MetricName: "IndexerHalted",
+      Statistic: "Sum",
+      Period: 300,
+      EvaluationPeriods: 1,
+      Threshold: 1,
+      ComparisonOperator: "GreaterThanOrEqualToThreshold",
+      TreatMissingData: "notBreaching",
+      AlarmActions: [topic],
+    });
+  });
+
+  it("runs the devnet-token-simulation worker as the health loop only, with no indexer alarm", () => {
+    const { stacks: simulation } = synth({ ...valid, instance: "devnet-token-simulation" });
+    const worker = Template.fromStack(simulation.worker);
+    const [task] = Object.values(worker.findResources("AWS::ECS::TaskDefinition"));
+    const [container] = task?.Properties.ContainerDefinitions ?? [];
+    expect(container?.Environment ?? []).toEqual([]);
+    expect(container?.Secrets ?? []).toEqual([]);
+    expect(
+      policyStatements(worker).filter(({ statement }) =>
+        actions(statement).some((action) => action.startsWith("secretsmanager:")),
+      ),
+    ).toEqual([]);
+    const ops = Template.fromStack(simulation.ops);
+    ops.resourceCountIs("AWS::CloudWatch::Alarm", 3);
+    for (const stack of Object.values(simulation)) {
+      Template.fromStack(stack).resourceCountIs("AWS::Logs::MetricFilter", 0);
+    }
   });
 
   it("sets an 80% actual and 100% forecast monthly cost budget in us-east-1", () => {

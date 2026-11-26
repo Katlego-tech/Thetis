@@ -6,6 +6,17 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/main.js --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "indexer:reset": "node src/reset.ts",
+    "local-fixture": "node scripts/local-fixture.ts"
+  },
+  "dependencies": {
+    "@solana/kit": "8.6.0",
+    "@supabase/supabase-js": "2.119.0",
+    "@thetis/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

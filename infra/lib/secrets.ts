@@ -8,14 +8,16 @@ interface SecretsStackProps extends StackProps {
 
 export class SecretsStack extends Stack {
   readonly sponsorKey: Secret;
+  readonly supabaseServiceRole: Secret;
+  readonly solanaRpcUrl: Secret;
 
   constructor(scope: Construct, id: string, props: SecretsStackProps) {
     super(scope, id, props);
 
     // Secrets Manager generates an initial string. Set the actual sponsor key out of band.
     this.sponsorKey = this.createSecret(props.instance, "sponsor-key");
-    this.createSecret(props.instance, "supabase-service-role");
-    this.createSecret(props.instance, "solana-rpc-url");
+    this.supabaseServiceRole = this.createSecret(props.instance, "supabase-service-role");
+    this.solanaRpcUrl = this.createSecret(props.instance, "solana-rpc-url");
   }
 
   private createSecret(instance: string, name: string) {
