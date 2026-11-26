@@ -182,14 +182,14 @@ async function pda(
 }
 
 /** Encodes `args` with a generated encoder; the casts keep one helper for every encoder type. */
-function bytesOf(
+export function bytesOf(
   encoder: { encode: (value: never) => ArrayLike<number> },
   args: unknown,
 ): Uint8Array {
   return Uint8Array.from((encoder.encode as (value: unknown) => ArrayLike<number>)(args));
 }
 
-function thetis(data: Uint8Array): AccountState {
+export function thetis(data: Uint8Array): AccountState {
   return { programAddress: PROGRAM, data };
 }
 

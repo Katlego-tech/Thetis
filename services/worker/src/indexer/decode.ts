@@ -80,6 +80,46 @@ export const HANDLED_EVENTS = [
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
 
+/** An instruction's name, as the generated `ThetisInstruction` object maps it. */
+export type InstructionName = Exclude<keyof typeof ThetisInstruction, number>;
+
+/**
+ * The position of the `protocol` account in each instruction's account list, from the IDL. Every
+ * optional account comes after it, so the position is fixed. It names the protocol instance an
+ * instruction belongs to without parsing its arguments.
+ */
+export const PROTOCOL_ACCOUNT_POSITION: Readonly<Record<InstructionName, number>> = {
+  AccreditCustodianClass: 0,
+  AccreditOrganisation: 0,
+  AttestDocument: 0,
+  DeclareRelationship: 0,
+  DelegateAuthority: 0,
+  InitializeProtocol: 0,
+  Pause: 0,
+  RegisterClass: 0,
+  RevokeAuthority: 0,
+  RevokeDocument: 0,
+  Unpause: 0,
+  Borrow: 1,
+  CloseLoan: 1,
+  CreateReleaseIntent: 1,
+  IssueLot: 1,
+  Liquidate: 1,
+  Pledge: 1,
+  RecordAdvance: 1,
+  Redeem: 1,
+  Repay: 1,
+  SellPledged: 1,
+  Split: 1,
+  Transfer: 1,
+  Withdraw: 1,
+  ConfirmPayment: 2,
+  Deposit: 2,
+  OpenFacility: 2,
+  OpenPool: 2,
+  SetValuation: 2,
+};
+
 /** The one event each instruction may emit, and whether it must. */
 const EMITS: Record<HandledInstruction, { event: HandledEvent; required: boolean }> = {
   InitializeProtocol: { event: "ProtocolInitialized", required: true },
@@ -179,10 +219,12 @@ export type Invocation = {
 };
 
 export type DecodedTransaction = {
-  /** Local invocations only: foreign ones were checked and dropped. */
+  /** Invocations of this stream's instance only. */
   invocations: Invocation[];
-  /** THETIS_PROTOCOL when the transaction has a local Thetis instruction, else null. */
+  /** THETIS_PROTOCOL when the transaction has a Thetis instruction of this instance, else null. */
   protocol: string | null;
+  /** Every Thetis instruction belongs to another protocol instance: recorded, never projected. */
+  otherInstance: boolean;
 };
 
 export type DecodeContext = { protocol: string };
@@ -355,7 +397,7 @@ export function decodeTransaction(
   });
   const complete = meta !== null && meta.innerInstructions !== null && logs !== null;
   if (complete && topLevel.length === 0 && !innerThetis && !thetisInvokeLine) {
-    return { invocations: [], protocol: null };
+    return { invocations: [], protocol: null, otherInstance: false };
   }
 
   // Keys and logs.
@@ -427,8 +469,8 @@ export function decodeTransaction(
     );
   }
 
-  // Instructions.
-  const parsed = topLevel.map((instruction, position) => {
+  // Identification and instance: the discriminator and the protocol account only.
+  const identified = topLevel.map((instruction, position) => {
     let data: Uint8Array;
     try {
       data = new Uint8Array(base58.encode(instruction.data));
@@ -439,7 +481,7 @@ export function decodeTransaction(
         `Thetis instruction ${position} data is not base58`,
       );
     }
-    let name: string;
+    let name: InstructionName;
     try {
       name = ThetisInstruction[identifyThetisInstruction(data)];
     } catch {
@@ -449,7 +491,45 @@ export function decodeTransaction(
         `Thetis instruction ${position} has a discriminator no instruction carries`,
       );
     }
-    if (!(HANDLED_INSTRUCTIONS as readonly string[]).includes(name)) {
+    const at = PROTOCOL_ACCOUNT_POSITION[name];
+    const index = instruction.accounts[at];
+    if (index === undefined) {
+      throw halt(
+        "UNKNOWN_INSTRUCTION",
+        signature,
+        `Thetis instruction ${position} (${name}) names ${instruction.accounts.length} accounts, so it has no protocol account at position ${at}`,
+      );
+    }
+    const protocol = keys[index];
+    if (protocol === undefined) {
+      throw halt(
+        "TRANSACTION_UNREADABLE",
+        signature,
+        `Thetis instruction ${position} names account index ${index}, outside the ${keys.length} keys`,
+      );
+    }
+    return { instruction, position, data, name, protocol };
+  });
+  const own = identified.filter((entry) => entry.protocol === context.protocol);
+  if (own.length > 0 && own.length < identified.length) {
+    const protocols = [...new Set(identified.map((entry) => entry.protocol))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    throw halt(
+      "MIXED_INSTANCE",
+      signature,
+      `the Thetis instructions belong to the protocols ${protocols.join(", ")}; this stream follows ${context.protocol} only`,
+    );
+  }
+  const otherInstance = identified.length > 0 && own.length === 0;
+  const handled = (name: string): name is HandledInstruction =>
+    (HANDLED_INSTRUCTIONS as readonly string[]).includes(name);
+
+  // Instructions: every one of this instance must be handled. Another instance's are checked up
+  // to pairing when handled, and only identified otherwise.
+  const parsed = identified.flatMap(({ instruction, position, data, name }) => {
+    if (!handled(name)) {
+      if (otherInstance) return [];
       throw halt(
         "UNKNOWN_INSTRUCTION",
         signature,
@@ -494,15 +574,17 @@ export function decodeTransaction(
     )) {
       named[account] = meta?.address;
     }
-    return { instruction: name as HandledInstruction, accounts: named };
+    return [{ position, instruction: name, accounts: named }];
   });
 
   // Events first, for every invocation, then pairing.
-  let counter = 0;
-  const decoded = parsed.map((entry, position) => ({
+  const first = eventLines.map((_, position) =>
+    eventLines.slice(0, position).reduce((sum, lines) => sum + lines.length, 0),
+  );
+  const decoded = parsed.map(({ position, ...entry }) => ({
     ...entry,
-    events: (eventLines[position] as string[]).map((line) =>
-      decodeEvent(line, counter++, signature),
+    events: (eventLines[position] as string[]).map((line, n) =>
+      decodeEvent(line, (first[position] as number) + n, signature),
     ),
   }));
   const invocations: Invocation[] = [];
@@ -528,7 +610,11 @@ export function decodeTransaction(
         }
       }
     }
-    if (entry.accounts.protocol === context.protocol) invocations.push(entry);
+    if (!otherInstance) invocations.push(entry);
   }
-  return { invocations, protocol: invocations.length > 0 ? context.protocol : null };
+  return {
+    invocations,
+    protocol: own.length > 0 ? context.protocol : null,
+    otherInstance,
+  };
 }

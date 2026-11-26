@@ -195,6 +195,7 @@ const TRANSACTION_COLUMNS = [
   "succeeded",
   "protocol",
   "event_count",
+  "other_instance",
 ];
 const EVENT_COLUMNS = [
   "network",
@@ -837,6 +838,17 @@ export function memoryStore(
             throw wrong("a transaction slot is outside the batch range");
           if (transaction.protocol === null && Number(transaction.event_count) > 0) {
             throw wrong("a transaction without a protocol has events");
+          }
+          if (typeof transaction.other_instance !== "boolean") {
+            throw wrong("a transaction's other_instance must be a boolean");
+          }
+          if (
+            transaction.other_instance &&
+            (transaction.succeeded !== true ||
+              transaction.protocol !== null ||
+              transaction.event_count !== 0)
+          ) {
+            throw wrong("an other-instance transaction must succeed, without protocol or events");
           }
         }
         const bySignature = new Map(batch.transactions.map((t) => [t.signature as string, t]));

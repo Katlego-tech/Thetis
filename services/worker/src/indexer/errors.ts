@@ -15,6 +15,7 @@ export const HALT_REASONS = [
   "ACCOUNT_VANISHED",
   "CONFIRMED_DROPPED",
   "HISTORY_INCOMPLETE",
+  "MIXED_INSTANCE",
 ] as const;
 
 export type HaltReason = (typeof HALT_REASONS)[number];

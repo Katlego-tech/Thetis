@@ -10,10 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StoreCodeError } from "../../src/indexer/errors.ts";
 import { type memoryStore, type ReadModelStore, supabaseStore } from "../../src/indexer/store.ts";
 import { counts, eventKeys, harness } from "../fixtures/harness.ts";
+import { mergeHistories, simulationSeed } from "../fixtures/instances.ts";
 import {
   fixture,
   lotHistory,
   PROGRAM,
+  seedHistory,
   seedOrganisations,
   syntheticSignature,
 } from "../fixtures/synthetic.ts";
@@ -181,6 +183,7 @@ describe("supabaseStore", () => {
       succeeded: true,
       protocol: f.protocol,
       event_count: 1,
+      other_instance: false,
     };
     const event = {
       network: "devnet",
@@ -256,5 +259,37 @@ describe("supabaseStore", () => {
     expect(paged.chain_authorities.size).toBe(1001);
     expect(paged.chain_lots.size).toBe(2);
     expect((await store.checkpoint(h.stream))?.indexedThroughSlot).toBe(15_001);
+  }, 120_000);
+
+  it("supabaseStore records another instance's transactions as other-instance on the local Supabase", async () => {
+    wipe();
+    const history = async () => mergeHistories(await seedHistory(), await simulationSeed());
+    const reference = await harness(await history());
+    await reference.pollUntilLive();
+    const expected = counts(reference.store);
+
+    const store: ReadModelStore = supabaseStore(local.url, local.key);
+    const h = await harness(await history(), { store, organisations: await seedOrganisations() });
+    const first = await h.pollUntilLive();
+    expect(first.indexedThroughSlot).toBe(12_000);
+    const afterFirst = sqlCounts();
+    expect(afterFirst).toEqual(expected);
+    const split = () =>
+      asPostgres(
+        "select count(*) filter (where other_instance), count(*) filter (where not other_instance and protocol is not null), count(*) filter (where not other_instance and protocol is null) from public.chain_transactions",
+      );
+    expect(split()).toBe("10|9|1");
+    expect(
+      asPostgres(
+        "select count(*) from public.chain_transactions where other_instance and (protocol is not null or event_count <> 0 or not succeeded)",
+      ),
+    ).toBe("0");
+
+    asPostgres("delete from public.indexer_checkpoints");
+    h.restart();
+    const second = await h.pollUntilLive();
+    expect(second.indexedThroughSlot).toBe(12_000);
+    expect(sqlCounts()).toEqual(afterFirst);
+    expect(split()).toBe("10|9|1");
   }, 120_000);
 });

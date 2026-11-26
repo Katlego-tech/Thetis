@@ -332,7 +332,7 @@ export type SlotTransaction = {
   blockTime: string;
   succeeded: boolean;
   /** Null for a failed transaction or one with no Thetis execution. */
-  decoded: { invocations: Invocation[]; protocol: string | null } | null;
+  decoded: { invocations: Invocation[]; protocol: string | null; otherInstance: boolean } | null;
 };
 
 export type ProjectionContext = {
@@ -916,6 +916,7 @@ export async function projectSlot(
     succeeded: transaction.succeeded,
     protocol: transaction.decoded?.protocol ?? null,
     event_count: counts.get(transaction.signature) ?? 0,
+    other_instance: transaction.decoded?.otherInstance ?? false,
   }));
   return { transactions: transactionRows, events: eventRows, upserts };
 }
