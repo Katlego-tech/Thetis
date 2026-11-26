@@ -4,6 +4,7 @@ use anchor_lang::{
 };
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
+use super::simulation;
 use crate::{
     error::ThetisError,
     events::{PaymentConfirmed, PaymentCorrected, Repaid},
@@ -259,25 +260,29 @@ pub struct Repay<'info> {
     pub token_program: Option<Program<'info, Token>>,
 }
 
-/// Consumes one unconsumed `Repayment` attestation against the loan: interest first, then
-/// principal. Any surplus stays on the consumed record. Neither the pause bits, the valuation,
-/// the lot nor the loan's open exceptions are read, and the loan's status never changes.
+/// Applies a repayment to the loan: interest first, then principal. The settlement mode picks
+/// the adapter, and neither the pause bits, the valuation, the lot nor the loan's open
+/// exceptions are read in either.
 pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
-    let accounts = ctx.accounts;
-    let protocol = &accounts.protocol;
-    let protocol_key = protocol.key();
-
-    // Step 0: only the fiat adapter is built.
-    require!(
-        protocol.settlement_mode == SettlementMode::FiatAttestationTest,
-        ThetisError::WrongSettlementMode
-    );
     // Step 1: top level. Repaying is never paused.
     require_eq!(
         get_stack_height(),
         TRANSACTION_LEVEL_STACK_HEIGHT,
         ThetisError::NotTopLevel
     );
+    match ctx.accounts.protocol.settlement_mode {
+        SettlementMode::FiatAttestationTest => repay_fiat(ctx, amount),
+        SettlementMode::DevnetTokenSimulation => simulation::repay_simulation(ctx, amount),
+    }
+}
+
+/// Consumes one unconsumed `Repayment` attestation against the loan: interest first, then
+/// principal. Any surplus stays on the consumed record, and the loan's status never changes.
+fn repay_fiat(ctx: Context<Repay>, amount: u64) -> Result<()> {
+    let accounts = ctx.accounts;
+    let protocol = &accounts.protocol;
+    let protocol_key = protocol.key();
+
     // Step 1b: the fiat layout has the attestation, the authority and the organisation, and no
     // pool slot.
     let Some(payment) = accounts.payment.as_ref() else {

@@ -19,6 +19,7 @@ use instructions::recovery::{self, *};
 use instructions::redeem::{self, *};
 use instructions::release::{self, *};
 use instructions::setup::{self, *};
+use instructions::simulation::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
 use instructions::valuation::{self, *};
@@ -298,5 +299,26 @@ pub mod thetis {
 
     pub fn close_loan(ctx: Context<CloseLoan>, expected_revision: u64) -> Result<()> {
         recovery::close_loan(ctx, expected_revision)
+    }
+
+    pub fn open_pool(ctx: Context<OpenPool>, currency: [u8; 3]) -> Result<()> {
+        simulation::open_pool(ctx, currency)
+    }
+
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        simulation::deposit(ctx, amount)
+    }
+
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        simulation::withdraw(ctx, amount)
+    }
+
+    pub fn borrow(
+        ctx: Context<Borrow>,
+        amount: u64,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        simulation::borrow(ctx, amount, expected_revision, valid_until)
     }
 }

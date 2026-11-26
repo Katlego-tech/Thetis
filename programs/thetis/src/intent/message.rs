@@ -403,6 +403,51 @@ pub fn buy_pledged_message(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn borrow_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    owner: &str,
+    lender: &str,
+    facility_id: &[u8; 16],
+    loan_index: u32,
+    amount: u64,
+    principal_after: u64,
+    currency: &[u8; 3],
+    decimals: u8,
+    destination: &Pubkey,
+    rate_bps: u16,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let facility = hex(facility_id);
+    let amount = format_money(amount, decimals, currency);
+    let principal_after = format_money(principal_after, decimals, currency);
+    let rate = format_bps(rate_bps);
+    signed_message(
+        program_id,
+        instance_id,
+        "Borrow test tokens",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Owner: {owner}\n\
+             Lender: {lender}\n\
+             Facility: {facility}\n\
+             Loan: {loan_index}\n\
+             Amount: {amount}\n\
+             Principal after: {principal_after}\n\
+             Pay to: {destination}\n\
+             Rate: {rate} a year, simple, actual/365\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
 fn signed_message(
     program_id: &Pubkey,
     instance_id: &[u8; 16],
