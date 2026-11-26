@@ -242,6 +242,81 @@
       ]
     },
     {
+      "name": "close_loan",
+      "discriminator": [
+        96,
+        114,
+        111,
+        204,
+        149,
+        228,
+        235,
+        124
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan",
+          "writable": true
+        },
+        {
+          "name": "lock",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "confirm_payment",
       "discriminator": [
         221,
@@ -944,6 +1019,83 @@
         {
           "name": "valid_until",
           "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "liquidate",
+      "discriminator": [
+        223,
+        179,
+        226,
+        125,
+        48,
+        46,
+        39,
+        74
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan",
+          "writable": true
+        },
+        {
+          "name": "lock",
+          "writable": true
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "valuation"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_revision",
+          "type": "u64"
         }
       ]
     },
@@ -2813,6 +2965,32 @@
       ]
     },
     {
+      "name": "Liquidated",
+      "discriminator": [
+        231,
+        57,
+        55,
+        75,
+        0,
+        170,
+        246,
+        68
+      ]
+    },
+    {
+      "name": "LoanClosed",
+      "discriminator": [
+        224,
+        57,
+        252,
+        104,
+        104,
+        185,
+        224,
+        107
+      ]
+    },
+    {
       "name": "LotIssued",
       "discriminator": [
         145,
@@ -3822,6 +4000,34 @@
       }
     },
     {
+      "name": "Liquidated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "lock",
+            "type": "pubkey"
+          },
+          {
+            "name": "debt",
+            "type": "u64"
+          },
+          {
+            "name": "limit",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Loan",
       "type": {
         "kind": "struct",
@@ -3893,6 +4099,30 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoanClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "released_kg",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
           }
         ]
       }

@@ -14,6 +14,8 @@ export * from './custodianClassAccredited.ts';
 export * from './documentAttested.ts';
 export * from './documentRevoked.ts';
 export * from './facilityOpened.ts';
+export * from './liquidated.ts';
+export * from './loanClosed.ts';
 export * from './lotIssued.ts';
 export * from './lotSplit.ts';
 export * from './organisationAccredited.ts';
