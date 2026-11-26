@@ -16,6 +16,7 @@ use instructions::issue::{self, *};
 use instructions::payment::{self, *};
 use instructions::pledge::{self, *};
 use instructions::redeem::{self, *};
+use instructions::release::{self, *};
 use instructions::setup::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
@@ -254,5 +255,39 @@ pub mod thetis {
 
     pub fn repay(ctx: Context<Repay>, amount: u64) -> Result<()> {
         payment::repay(ctx, amount)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the arguments are the signed intent's terms"
+    )]
+    pub fn create_release_intent(
+        ctx: Context<CreateReleaseIntent>,
+        nonce: u64,
+        quantity_kg: u64,
+        price: u64,
+        top_up: u64,
+        expires_at: i64,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        release::create_release_intent(
+            ctx,
+            nonce,
+            quantity_kg,
+            price,
+            top_up,
+            expires_at,
+            expected_revision,
+            valid_until,
+        )
+    }
+
+    pub fn sell_pledged(
+        ctx: Context<SellPledged>,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        release::sell_pledged(ctx, expected_revision, valid_until)
     }
 }

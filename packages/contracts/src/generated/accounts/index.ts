@@ -20,5 +20,6 @@ export * from './organisationName.ts';
 export * from './paymentAttestation.ts';
 export * from './position.ts';
 export * from './protocol.ts';
+export * from './releaseIntent.ts';
 export * from './simulationPool.ts';
 export * from './valuation.ts';

@@ -179,3 +179,32 @@ pub struct Repaid {
     pub booked_interest: u64,
     pub revision: u64,
 }
+
+#[event]
+pub struct ReleaseIntentCreated {
+    pub intent: Pubkey,
+    pub loan: Pubkey,
+    pub seller: Pubkey,
+    pub buyer: Pubkey,
+    pub quantity_kg: u64,
+    pub price: u64,
+    pub top_up: u64,
+    pub expires_at: i64,
+}
+
+#[event]
+pub struct PledgedSold {
+    pub intent: Pubkey,
+    pub loan: Pubkey,
+    pub payment: Pubkey,
+    pub lot: Pubkey,
+    pub seller_position: Pubkey,
+    pub buyer_position: Pubkey,
+    pub quantity_kg: u64,
+    pub applied: u64,
+    pub surplus: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub lot_revision: u64,
+    pub revision: u64,
+}

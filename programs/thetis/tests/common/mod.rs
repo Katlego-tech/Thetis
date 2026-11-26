@@ -70,6 +70,10 @@ pub enum Actor {
     Lender2,
     /// A second wallet of the first lender organisation, for scopes other than lending.
     LenderTreasury,
+    /// A wallet of a second, unrelated buyer organisation.
+    Buyer2,
+    /// A wallet of a second exporter organisation, which is not the borrower.
+    Owner2,
 }
 
 use Actor::*;
@@ -102,6 +106,8 @@ pub struct Fixture {
     lender: Keypair,
     lender2: Keypair,
     lender_treasury: Keypair,
+    buyer2: Keypair,
+    owner2: Keypair,
     pub protocol: Pubkey,
 }
 
@@ -137,6 +143,8 @@ impl Fixture {
             lender: Keypair::new(),
             lender2: Keypair::new(),
             lender_treasury: Keypair::new(),
+            buyer2: Keypair::new(),
+            owner2: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
     }
@@ -165,6 +173,8 @@ impl Fixture {
             Lender => &self.lender,
             Lender2 => &self.lender2,
             LenderTreasury => &self.lender_treasury,
+            Buyer2 => &self.buyer2,
+            Owner2 => &self.owner2,
         }
     }
 
