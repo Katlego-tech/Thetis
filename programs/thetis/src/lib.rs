@@ -15,6 +15,7 @@ use instructions::facility::{self, *};
 use instructions::issue::{self, *};
 use instructions::payment::{self, *};
 use instructions::pledge::{self, *};
+use instructions::recovery::{self, *};
 use instructions::redeem::{self, *};
 use instructions::release::{self, *};
 use instructions::setup::{self, *};
@@ -289,5 +290,13 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         release::sell_pledged(ctx, expected_revision, valid_until)
+    }
+
+    pub fn liquidate(ctx: Context<Liquidate>, expected_revision: u64) -> Result<()> {
+        recovery::liquidate(ctx, expected_revision)
+    }
+
+    pub fn close_loan(ctx: Context<CloseLoan>, expected_revision: u64) -> Result<()> {
+        recovery::close_loan(ctx, expected_revision)
     }
 }

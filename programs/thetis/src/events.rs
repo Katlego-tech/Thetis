@@ -208,3 +208,20 @@ pub struct PledgedSold {
     pub lot_revision: u64,
     pub revision: u64,
 }
+
+#[event]
+pub struct Liquidated {
+    pub loan: Pubkey,
+    pub lock: Pubkey,
+    pub debt: u64,
+    pub limit: u64,
+    pub revision: u64,
+}
+
+#[event]
+pub struct LoanClosed {
+    pub loan: Pubkey,
+    pub position: Pubkey,
+    pub released_kg: u64,
+    pub revision: u64,
+}
