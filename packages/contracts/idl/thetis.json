@@ -400,6 +400,122 @@
       ]
     },
     {
+      "name": "create_release_intent",
+      "discriminator": [
+        170,
+        69,
+        51,
+        181,
+        33,
+        207,
+        255,
+        148
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "seller_org"
+        },
+        {
+          "name": "seller_authority"
+        },
+        {
+          "name": "buyer_org"
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan"
+        },
+        {
+          "name": "lock"
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "position"
+        },
+        {
+          "name": "intent",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  108,
+                  101,
+                  97,
+                  115,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "loan"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "top_up",
+          "type": "u64"
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "declare_relationship",
       "discriminator": [
         36,
@@ -1631,6 +1747,196 @@
       "args": []
     },
     {
+      "name": "sell_pledged",
+      "discriminator": [
+        237,
+        3,
+        162,
+        72,
+        179,
+        144,
+        18,
+        228
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "loan",
+          "writable": true
+        },
+        {
+          "name": "lock",
+          "writable": true
+        },
+        {
+          "name": "valuation"
+        },
+        {
+          "name": "intent",
+          "writable": true
+        },
+        {
+          "name": "payment",
+          "writable": true
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "mint",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seller_org"
+        },
+        {
+          "name": "buyer_org"
+        },
+        {
+          "name": "buyer_authority"
+        },
+        {
+          "name": "seller_position",
+          "writable": true
+        },
+        {
+          "name": "seller_vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "seller_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seller_vault",
+          "writable": true
+        },
+        {
+          "name": "buyer_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              },
+              {
+                "kind": "account",
+                "path": "buyer_org"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "buyer_position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer_vault",
+          "writable": true
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "set_valuation",
       "discriminator": [
         201,
@@ -2362,6 +2668,19 @@
       ]
     },
     {
+      "name": "ReleaseIntent",
+      "discriminator": [
+        70,
+        136,
+        222,
+        190,
+        188,
+        144,
+        120,
+        82
+      ]
+    },
+    {
       "name": "SimulationPool",
       "discriminator": [
         154,
@@ -2585,6 +2904,19 @@
       ]
     },
     {
+      "name": "PledgedSold",
+      "discriminator": [
+        25,
+        221,
+        196,
+        185,
+        176,
+        176,
+        111,
+        36
+      ]
+    },
+    {
       "name": "ProtocolInitialized",
       "discriminator": [
         173,
@@ -2608,6 +2940,19 @@
         158,
         250,
         108
+      ]
+    },
+    {
+      "name": "ReleaseIntentCreated",
+      "discriminator": [
+        137,
+        151,
+        193,
+        41,
+        215,
+        91,
+        241,
+        89
       ]
     },
     {
@@ -3463,6 +3808,20 @@
       }
     },
     {
+      "name": "IntentStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "Executed"
+          }
+        ]
+      }
+    },
+    {
       "name": "Loan",
       "type": {
         "kind": "struct",
@@ -4084,6 +4443,66 @@
       }
     },
     {
+      "name": "PledgedSold",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "payment",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller_position",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer_position",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "applied",
+            "type": "u64"
+          },
+          {
+            "name": "surplus",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "lot_revision",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Position",
       "type": {
         "kind": "struct",
@@ -4199,6 +4618,123 @@
           {
             "name": "b",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReleaseIntent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "top_up",
+            "type": "u64"
+          },
+          {
+            "name": "currency",
+            "type": {
+              "array": [
+                "u8",
+                3
+              ]
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "position_revision",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "IntentStatus"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReleaseIntentCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "top_up",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
           }
         ]
       }

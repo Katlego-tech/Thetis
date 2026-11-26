@@ -7,6 +7,8 @@
  */
 
 export * from './authority.ts';
+export * from './buyerPosition.ts';
+export * from './buyerVaultAuthority.ts';
 export * from './childMint.ts';
 export * from './childMintAuthority.ts';
 export * from './childPosition.ts';
@@ -14,6 +16,7 @@ export * from './childVaultAuthority.ts';
 export * from './facility.ts';
 export * from './fromVaultAuthority.ts';
 export * from './intake.ts';
+export * from './intent.ts';
 export * from './loan.ts';
 export * from './lock.ts';
 export * from './mint.ts';
@@ -23,6 +26,7 @@ export * from './payment.ts';
 export * from './pool.ts';
 export * from './position.ts';
 export * from './protocol.ts';
+export * from './sellerVaultAuthority.ts';
 export * from './toPosition.ts';
 export * from './toVaultAuthority.ts';
 export * from './vaultAuthority.ts';

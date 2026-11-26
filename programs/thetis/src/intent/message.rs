@@ -306,6 +306,103 @@ pub fn advance_message(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn release_intent_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    quantity_kg: u64,
+    seller: &str,
+    buyer: &str,
+    lender: &str,
+    facility_id: &[u8; 16],
+    loan_index: u32,
+    nonce: u64,
+    price: u64,
+    top_up: u64,
+    currency: &[u8; 3],
+    decimals: u8,
+    expires_at: i64,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let quantity = format_tonnes(quantity_kg);
+    let facility = hex(facility_id);
+    let price = format_money(price, decimals, currency);
+    let top_up = format_money(top_up, decimals, currency);
+    let intent_expires = format_sast(expires_at);
+    signed_message(
+        program_id,
+        instance_id,
+        "Create release intent",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             Seller: {seller}\n\
+             Buyer: {buyer}\n\
+             Lender: {lender}\n\
+             Facility: {facility}\n\
+             Loan: {loan_index}\n\
+             Intent: {nonce}\n\
+             Price: {price}\n\
+             Top-up: {top_up}\n\
+             Intent expires: {intent_expires}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn buy_pledged_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    quantity_kg: u64,
+    seller: &str,
+    buyer: &str,
+    lender: &str,
+    facility_id: &[u8; 16],
+    loan_index: u32,
+    nonce: u64,
+    price: u64,
+    top_up: u64,
+    currency: &[u8; 3],
+    decimals: u8,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let quantity = format_tonnes(quantity_kg);
+    let facility = hex(facility_id);
+    let price = format_money(price, decimals, currency);
+    let top_up = format_money(top_up, decimals, currency);
+    signed_message(
+        program_id,
+        instance_id,
+        "Buy pledged receipts",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             Seller: {seller}\n\
+             Buyer: {buyer}\n\
+             Lender: {lender}\n\
+             Facility: {facility}\n\
+             Loan: {loan_index}\n\
+             Intent: {nonce}\n\
+             Price: {price}\n\
+             Top-up: {top_up}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
 fn signed_message(
     program_id: &Pubkey,
     instance_id: &[u8; 16],
