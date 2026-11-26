@@ -71,6 +71,13 @@ export function createStacks(app: App) {
     "an email address",
   );
 
+  const supabaseUrl = required(
+    app,
+    "supabaseUrl",
+    (value) => /^https:\/\/[a-z]{20}\.supabase\.co$/.test(value),
+    "a hosted Supabase project URL, https://<20 lowercase letters>.supabase.co",
+  );
+
   const createProvider: unknown = app.node.tryGetContext("createGithubOidcProvider");
   if (
     createProvider !== undefined &&
@@ -94,8 +101,17 @@ export function createStacks(app: App) {
     ...settings,
     instance,
     availabilityZones,
+    supabaseUrl,
+    supabaseServiceRole: secrets.supabaseServiceRole,
+    solanaRpcUrl: secrets.solanaRpcUrl,
   });
-  const ops = new OpsStack(app, `${stackPrefix}-Ops`, { ...settings, alertEmail, api, worker });
+  const ops = new OpsStack(app, `${stackPrefix}-Ops`, {
+    ...settings,
+    instance,
+    alertEmail,
+    api,
+    worker,
+  });
   const budget = new BudgetStack(app, `${stackPrefix}-Budget`, {
     ...settings,
     env: { account, region: budgetRegion },

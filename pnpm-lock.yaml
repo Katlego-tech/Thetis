@@ -209,7 +209,21 @@ importers:
         specifier: 8.10.164
         version: 8.10.164
 
-  services/worker: {}
+  services/worker:
+    dependencies:
+      '@solana/kit':
+        specifier: 8.6.0
+        version: 8.6.0(typescript@7.0.2)
+      '@supabase/supabase-js':
+        specifier: 2.119.0
+        version: 2.119.0
+      '@thetis/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   tools/signing-relay:
     dependencies:

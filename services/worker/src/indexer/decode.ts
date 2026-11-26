@@ -1,0 +1,534 @@
+// Transaction decoding: from one getTransaction response to the local Thetis invocations, each
+// with its decoded events. Every condition the indexer does not recognise is a HaltError; a
+// response of the wrong shape is an RpcShapeError (retried, never a halt).
+
+import {
+  AccountRole,
+  type Decoder,
+  getBase58Encoder,
+  isSolanaError,
+  SOLANA_ERROR__CODECS__ENUM_DISCRIMINATOR_OUT_OF_RANGE,
+} from "@solana/kit";
+import {
+  DocumentKind,
+  getAuthorityDelegatedEventDecoder,
+  getAuthorityRevokedEventDecoder,
+  getClassRegisteredEventDecoder,
+  getCustodianClassAccreditedEventDecoder,
+  getDocumentAttestedEventDecoder,
+  getDocumentRevokedEventDecoder,
+  getLotIssuedEventDecoder,
+  getLotSplitEventDecoder,
+  getOrganisationAccreditedEventDecoder,
+  getPauseChangedEventDecoder,
+  getProtocolInitializedEventDecoder,
+  getRelationshipDeclaredEventDecoder,
+  getUnitsRedeemedEventDecoder,
+  getUnitsTransferredEventDecoder,
+  identifyThetisEvent,
+  identifyThetisInstruction,
+  parseThetisInstruction,
+  Role,
+  THETIS_PROGRAM_ADDRESS,
+  ThetisEvent,
+  ThetisInstruction,
+  toI64String,
+  toU64String,
+} from "@thetis/contracts";
+import { HaltError, type HaltReason } from "./errors.ts";
+import { checkRawTransaction, type RawInstruction, type RawTransaction } from "./rpc.ts";
+import type { JsonValue } from "./store.ts";
+
+const PROGRAM = THETIS_PROGRAM_ADDRESS as string;
+
+export const HANDLED_INSTRUCTIONS = [
+  "InitializeProtocol",
+  "RegisterClass",
+  "AccreditOrganisation",
+  "DeclareRelationship",
+  "DelegateAuthority",
+  "RevokeAuthority",
+  "AccreditCustodianClass",
+  "Pause",
+  "Unpause",
+  "AttestDocument",
+  "RevokeDocument",
+  "IssueLot",
+  "Transfer",
+  "Split",
+  "Redeem",
+] as const;
+
+export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
+
+export const HANDLED_EVENTS = [
+  "ProtocolInitialized",
+  "ClassRegistered",
+  "OrganisationAccredited",
+  "RelationshipDeclared",
+  "AuthorityDelegated",
+  "AuthorityRevoked",
+  "CustodianClassAccredited",
+  "PauseChanged",
+  "DocumentAttested",
+  "DocumentRevoked",
+  "LotIssued",
+  "UnitsTransferred",
+  "LotSplit",
+  "UnitsRedeemed",
+] as const;
+
+export type HandledEvent = (typeof HANDLED_EVENTS)[number];
+
+/** The one event each instruction may emit, and whether it must. */
+const EMITS: Record<HandledInstruction, { event: HandledEvent; required: boolean }> = {
+  InitializeProtocol: { event: "ProtocolInitialized", required: true },
+  RegisterClass: { event: "ClassRegistered", required: true },
+  AccreditOrganisation: { event: "OrganisationAccredited", required: true },
+  DeclareRelationship: { event: "RelationshipDeclared", required: true },
+  DelegateAuthority: { event: "AuthorityDelegated", required: true },
+  RevokeAuthority: { event: "AuthorityRevoked", required: true },
+  AccreditCustodianClass: { event: "CustodianClassAccredited", required: true },
+  Pause: { event: "PauseChanged", required: false },
+  Unpause: { event: "PauseChanged", required: false },
+  AttestDocument: { event: "DocumentAttested", required: true },
+  RevokeDocument: { event: "DocumentRevoked", required: true },
+  IssueLot: { event: "LotIssued", required: true },
+  Transfer: { event: "UnitsTransferred", required: true },
+  Split: { event: "LotSplit", required: true },
+  Redeem: { event: "UnitsRedeemed", required: true },
+};
+
+/** Event field = instruction account. */
+const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
+  ProtocolInitialized: [["protocol", "protocol"]],
+  ClassRegistered: [["classPolicy", "classPolicy"]],
+  OrganisationAccredited: [["organisation", "organisation"]],
+  RelationshipDeclared: [
+    ["a", "a"],
+    ["b", "b"],
+  ],
+  AuthorityDelegated: [
+    ["authority", "authority"],
+    ["organisation", "organisation"],
+  ],
+  AuthorityRevoked: [["authority", "authority"]],
+  CustodianClassAccredited: [["custodianClass", "custodianClass"]],
+  PauseChanged: [],
+  DocumentAttested: [["document", "document"]],
+  DocumentRevoked: [["document", "document"]],
+  LotIssued: [
+    ["lot", "lot"],
+    ["owner", "owner"],
+    ["intake", "intake"],
+  ],
+  UnitsTransferred: [
+    ["lot", "lot"],
+    ["from", "owner"],
+    ["to", "recipient"],
+  ],
+  LotSplit: [
+    ["parent", "lot"],
+    ["child", "childLot"],
+    ["owner", "owner"],
+  ],
+  UnitsRedeemed: [
+    ["lot", "lot"],
+    ["owner", "owner"],
+  ],
+};
+
+const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
+  ProtocolInitialized: getProtocolInitializedEventDecoder,
+  ClassRegistered: getClassRegisteredEventDecoder,
+  OrganisationAccredited: getOrganisationAccreditedEventDecoder,
+  RelationshipDeclared: getRelationshipDeclaredEventDecoder,
+  AuthorityDelegated: getAuthorityDelegatedEventDecoder,
+  AuthorityRevoked: getAuthorityRevokedEventDecoder,
+  CustodianClassAccredited: getCustodianClassAccreditedEventDecoder,
+  PauseChanged: getPauseChangedEventDecoder,
+  DocumentAttested: getDocumentAttestedEventDecoder,
+  DocumentRevoked: getDocumentRevokedEventDecoder,
+  LotIssued: getLotIssuedEventDecoder,
+  UnitsTransferred: getUnitsTransferredEventDecoder,
+  LotSplit: getLotSplitEventDecoder,
+  UnitsRedeemed: getUnitsRedeemedEventDecoder,
+};
+
+/** Event fields that hold an enum, by event, with the generated name table of each. */
+const ENUM_FIELDS: Partial<Record<HandledEvent, Record<string, Record<number, string>>>> = {
+  OrganisationAccredited: { role: Role as unknown as Record<number, string> },
+  DocumentAttested: { kind: DocumentKind as unknown as Record<number, string> },
+};
+
+export type DecodedEvent = {
+  /** Position of the event line among all Thetis event lines of the transaction, from 0. */
+  index: number;
+  name: HandledEvent;
+  /** The decoder's output (bigints, bytes, enum numbers). */
+  value: Record<string, unknown>;
+  /** The same fields under the JSON boundary rule, in Codama camelCase. */
+  data: Record<string, JsonValue>;
+};
+
+export type Invocation = {
+  instruction: HandledInstruction;
+  /** Instruction account name to address; an absent optional account is undefined. */
+  accounts: Record<string, string | undefined>;
+  events: DecodedEvent[];
+};
+
+export type DecodedTransaction = {
+  /** Local invocations only: foreign ones were checked and dropped. */
+  invocations: Invocation[];
+  /** THETIS_PROTOCOL when the transaction has a local Thetis instruction, else null. */
+  protocol: string | null;
+};
+
+export type DecodeContext = { protocol: string };
+
+function halt(
+  reason: HaltReason,
+  signature: string,
+  message: string,
+  extra: string[] = [],
+): HaltError {
+  const named = extra.length > 0 ? ` (${extra.join(", ")})` : "";
+  return new HaltError(reason, `decode: ${message}${named}; transaction ${signature}`, signature);
+}
+
+const INVOKE = /^Program (\S+) invoke \[(\d+)\]$/;
+const FINISHED = /^Program (\S+) (?:success|failed(?:: .*)?)$/;
+const DATA = /^Program data: (.*)$/;
+const base58 = getBase58Encoder();
+
+function roleOf(index: number, raw: RawTransaction, staticCount: number): AccountRole {
+  const header = raw.transaction.message.header;
+  if (index >= staticCount) {
+    const writableLoaded = raw.meta?.loadedAddresses?.writable.length ?? 0;
+    return index < staticCount + writableLoaded ? AccountRole.WRITABLE : AccountRole.READONLY;
+  }
+  const required = header.numRequiredSignatures;
+  const signer = index < required;
+  const writable = signer
+    ? index < required - header.numReadonlySignedAccounts
+    : index < staticCount - header.numReadonlyUnsignedAccounts;
+  if (signer) return writable ? AccountRole.WRITABLE_SIGNER : AccountRole.READONLY_SIGNER;
+  return writable ? AccountRole.WRITABLE : AccountRole.READONLY;
+}
+
+function jsonValue(
+  event: HandledEvent,
+  field: string,
+  value: unknown,
+  signature: string,
+): JsonValue {
+  if (typeof value === "bigint") return value < 0n ? toI64String(value) : toU64String(value);
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("hex");
+  if (typeof value === "number") {
+    const names = ENUM_FIELDS[event]?.[field];
+    if (!names) return value;
+    const name = names[value];
+    if (name === undefined) {
+      throw halt(
+        "UNKNOWN_ENUM",
+        signature,
+        `${event}.${field} carries the number ${value}, which names no variant`,
+      );
+    }
+    return name;
+  }
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  throw halt(
+    "EVENT_DECODE_FAILED",
+    signature,
+    `${event}.${field} has a value of an unexpected type`,
+  );
+}
+
+function decodeEvent(base64: string, index: number, signature: string): DecodedEvent {
+  if (Buffer.from(base64, "base64").toString("base64") !== base64) {
+    throw halt("EVENT_DECODE_FAILED", signature, `event line ${index} is not canonical base64`);
+  }
+  const bytes = new Uint8Array(Buffer.from(base64, "base64"));
+  let name: string;
+  try {
+    name = ThetisEvent[identifyThetisEvent(bytes)];
+  } catch {
+    throw halt(
+      "UNKNOWN_EVENT",
+      signature,
+      `event line ${index} has a discriminator no event carries`,
+    );
+  }
+  if (!(HANDLED_EVENTS as readonly string[]).includes(name)) {
+    throw halt("UNKNOWN_EVENT", signature, `event line ${index} is ${name}, which is not handled`);
+  }
+  const handled = name as HandledEvent;
+  let value: unknown;
+  let offset: number;
+  try {
+    [value, offset] = EVENT_DECODERS[handled]().read(bytes, 0);
+  } catch (error) {
+    if (isSolanaError(error, SOLANA_ERROR__CODECS__ENUM_DISCRIMINATOR_OUT_OF_RANGE)) {
+      throw halt(
+        "UNKNOWN_ENUM",
+        signature,
+        `event ${handled} (line ${index}) carries an enum number outside its variants`,
+      );
+    }
+    throw halt(
+      "EVENT_DECODE_FAILED",
+      signature,
+      `event ${handled} (line ${index}) does not decode`,
+    );
+  }
+  if (offset !== bytes.length) {
+    throw halt(
+      "EVENT_DECODE_FAILED",
+      signature,
+      `event ${handled} (line ${index}) leaves ${bytes.length - offset} bytes unread`,
+    );
+  }
+  const fields = value as Record<string, unknown>;
+  const data: Record<string, JsonValue> = {};
+  for (const [field, entry] of Object.entries(fields)) {
+    data[field] = jsonValue(handled, field, entry, signature);
+  }
+  return { index, name: handled, value: fields, data };
+}
+
+function isThetis(keys: string[], instruction: RawInstruction): boolean {
+  return keys[instruction.programIdIndex] === PROGRAM;
+}
+
+/**
+ * Decodes one successful transaction. Throws HaltError (step decode), or RpcShapeError for a
+ * response of the wrong type or length.
+ */
+export function decodeTransaction(
+  raw: RawTransaction,
+  signature: string,
+  context: DecodeContext,
+): DecodedTransaction {
+  checkRawTransaction(raw);
+  const message = raw.transaction.message;
+  const staticKeys = message.accountKeys;
+  const loaded = raw.meta?.loadedAddresses;
+  const lookups = message.addressTableLookups ?? [];
+  if (raw.version === 0 && lookups.length > 0 && !loaded) {
+    throw halt(
+      "TRANSACTION_UNREADABLE",
+      signature,
+      "a version 0 message uses address lookups but the response has no loaded addresses",
+    );
+  }
+  const keys = [...staticKeys, ...(loaded?.writable ?? []), ...(loaded?.readonly ?? [])];
+
+  const outside = (instruction: RawInstruction, where: string) => {
+    if (instruction.programIdIndex >= keys.length) {
+      throw halt(
+        "TRANSACTION_UNREADABLE",
+        signature,
+        `${where} names program index ${instruction.programIdIndex}, outside the ${keys.length} keys`,
+      );
+    }
+  };
+  for (const [i, instruction] of message.instructions.entries())
+    outside(instruction, `instruction ${i}`);
+  const inner = raw.meta?.innerInstructions ?? [];
+  for (const group of inner) {
+    for (const [i, instruction] of group.instructions.entries()) {
+      outside(instruction, `inner instruction ${group.index}.${i}`);
+    }
+  }
+
+  const meta = raw.meta;
+  const logs = meta?.logMessages ?? null;
+  const topLevel = message.instructions.filter((instruction) => isThetis(keys, instruction));
+  const innerThetis = inner.some((group) =>
+    group.instructions.some((instruction) => isThetis(keys, instruction)),
+  );
+  const thetisInvokeLine = logs?.some((line) => {
+    const found = INVOKE.exec(line);
+    return found?.[1] === PROGRAM;
+  });
+  const complete = meta !== null && meta.innerInstructions !== null && logs !== null;
+  if (complete && topLevel.length === 0 && !innerThetis && !thetisInvokeLine) {
+    return { invocations: [], protocol: null };
+  }
+
+  // Keys and logs.
+  if (meta === null) throw halt("TRANSACTION_UNREADABLE", signature, "the response has no meta");
+  if (logs === null)
+    throw halt("TRANSACTION_UNREADABLE", signature, "the response has no log messages");
+  if (innerThetis) {
+    throw halt(
+      "TRANSACTION_UNREADABLE",
+      signature,
+      "an inner instruction calls the Thetis program (a CPI)",
+    );
+  }
+  const stack: string[] = [];
+  const eventLines: string[][] = [];
+  for (const line of logs) {
+    if (line === "Log truncated") {
+      throw halt("TRANSACTION_UNREADABLE", signature, "the logs were truncated");
+    }
+    const invoke = INVOKE.exec(line);
+    if (invoke) {
+      const program = invoke[1] as string;
+      const depth = Number(invoke[2]);
+      stack.push(program);
+      if (depth !== stack.length) {
+        throw halt(
+          "TRANSACTION_UNREADABLE",
+          signature,
+          `an invoke at depth ${depth} while the stack holds ${stack.length}`,
+        );
+      }
+      if (program === PROGRAM) {
+        if (depth > 1) {
+          throw halt(
+            "TRANSACTION_UNREADABLE",
+            signature,
+            "the Thetis program is invoked below the top level (a CPI)",
+          );
+        }
+        eventLines.push([]);
+      }
+      continue;
+    }
+    const finished = FINISHED.exec(line);
+    if (finished) {
+      if (stack.at(-1) !== finished[1]) {
+        throw halt(
+          "TRANSACTION_UNREADABLE",
+          signature,
+          `program ${finished[1]} ends while ${stack.at(-1) ?? "nothing"} is on top`,
+        );
+      }
+      stack.pop();
+      continue;
+    }
+    const data = DATA.exec(line);
+    if (data && stack.at(-1) === PROGRAM) {
+      eventLines.at(-1)?.push(data[1] as string);
+    }
+  }
+  if (stack.length !== 0) {
+    throw halt("TRANSACTION_UNREADABLE", signature, `${stack.length} invocations never ended`);
+  }
+  if (eventLines.length !== topLevel.length) {
+    throw halt(
+      "TRANSACTION_UNREADABLE",
+      signature,
+      `${eventLines.length} top-level Thetis invocations in the logs, ${topLevel.length} instructions`,
+    );
+  }
+
+  // Instructions.
+  const parsed = topLevel.map((instruction, position) => {
+    let data: Uint8Array;
+    try {
+      data = new Uint8Array(base58.encode(instruction.data));
+    } catch {
+      throw halt(
+        "UNKNOWN_INSTRUCTION",
+        signature,
+        `Thetis instruction ${position} data is not base58`,
+      );
+    }
+    let name: string;
+    try {
+      name = ThetisInstruction[identifyThetisInstruction(data)];
+    } catch {
+      throw halt(
+        "UNKNOWN_INSTRUCTION",
+        signature,
+        `Thetis instruction ${position} has a discriminator no instruction carries`,
+      );
+    }
+    if (!(HANDLED_INSTRUCTIONS as readonly string[]).includes(name)) {
+      throw halt(
+        "UNKNOWN_INSTRUCTION",
+        signature,
+        `Thetis instruction ${position} is ${name}, which is not handled`,
+      );
+    }
+    const accounts = instruction.accounts.map((index) => {
+      const address = keys[index];
+      if (address === undefined) {
+        throw halt(
+          "TRANSACTION_UNREADABLE",
+          signature,
+          `Thetis instruction ${position} names account index ${index}, outside the ${keys.length} keys`,
+        );
+      }
+      return { address, role: roleOf(index, raw, staticKeys.length) };
+    });
+    let result: ReturnType<typeof parseThetisInstruction>;
+    try {
+      result = parseThetisInstruction({
+        programAddress: THETIS_PROGRAM_ADDRESS,
+        accounts,
+        data,
+      } as unknown as Parameters<typeof parseThetisInstruction>[0]);
+    } catch (error) {
+      if (isSolanaError(error, SOLANA_ERROR__CODECS__ENUM_DISCRIMINATOR_OUT_OF_RANGE)) {
+        throw halt(
+          "UNKNOWN_ENUM",
+          signature,
+          `Thetis instruction ${position} (${name}) carries an enum number outside its variants`,
+        );
+      }
+      throw halt(
+        "UNKNOWN_INSTRUCTION",
+        signature,
+        `Thetis instruction ${position} (${name}) does not parse`,
+      );
+    }
+    const named: Record<string, string | undefined> = {};
+    for (const [account, meta] of Object.entries(
+      result.accounts as Record<string, { address: string } | undefined>,
+    )) {
+      named[account] = meta?.address;
+    }
+    return { instruction: name as HandledInstruction, accounts: named };
+  });
+
+  // Events first, for every invocation, then pairing.
+  let counter = 0;
+  const decoded = parsed.map((entry, position) => ({
+    ...entry,
+    events: (eventLines[position] as string[]).map((line) =>
+      decodeEvent(line, counter++, signature),
+    ),
+  }));
+  const invocations: Invocation[] = [];
+  for (const entry of decoded) {
+    const emits = EMITS[entry.instruction];
+    const allowed = entry.events.length === 1 || (entry.events.length === 0 && !emits.required);
+    if (!allowed || entry.events.some((event) => event.name !== emits.event)) {
+      throw halt(
+        "EVENT_MISMATCH",
+        signature,
+        `${entry.instruction} emitted [${entry.events.map((event) => event.name).join(", ")}], expected ${emits.required ? "exactly" : "at most"} one ${emits.event}`,
+      );
+    }
+    for (const event of entry.events) {
+      for (const [field, account] of PAIRING[event.name]) {
+        if (event.value[field] !== entry.accounts[account]) {
+          throw halt(
+            "EVENT_MISMATCH",
+            signature,
+            `${event.name}.${field} is not the ${entry.instruction} account ${account}`,
+            [String(event.value[field]), String(entry.accounts[account])],
+          );
+        }
+      }
+    }
+    if (entry.accounts.protocol === context.protocol) invocations.push(entry);
+  }
+  return { invocations, protocol: invocations.length > 0 ? context.protocol : null };
+}

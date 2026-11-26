@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { type IVpc, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
@@ -12,18 +13,34 @@ import {
   type ICluster,
   LogDrivers,
   OperatingSystemFamily,
+  Secret as EcsSecret,
 } from "aws-cdk-lib/aws-ecs";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
+import type { ISecret, Secret } from "aws-cdk-lib/aws-secretsmanager";
 import type { Construct } from "constructs";
 
 interface WorkerStackProps extends StackProps {
   instance: string;
   availabilityZones: string[];
+  supabaseUrl: string;
+  supabaseServiceRole: Secret;
+  solanaRpcUrl: Secret;
 }
+
+// The one CDK instance whose worker indexes the program: on-chain instance "fiat-attestation".
+const INDEXING_INSTANCE = "fiat-attestation-test";
+const THETIS_PROGRAM_ID = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
+const THETIS_PROTOCOL = "G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3";
+// The program's deploy transaction on devnet (README, "Seed transactions").
+const THETIS_FIRST_SIGNATURE =
+  "vtK8h43bEg8zDn5w7u319t6VfNztCKB87nYBJ7LN6bsgFmMR2cFKA2iVLKgve8spmhri9mQJbSk28amZthbVviE";
 
 export class WorkerStack extends Stack {
   readonly cluster: Cluster;
   readonly service: FargateService;
+  readonly logGroup: LogGroup;
+  /** True when this worker runs the indexer; the other instance runs the health loop only. */
+  readonly indexes: boolean;
   private readonly workerAvailabilityZones: string[];
 
   override get availabilityZones(): string[] {
@@ -34,6 +51,11 @@ export class WorkerStack extends Stack {
   constructor(scope: Construct, id: string, props: WorkerStackProps) {
     super(scope, id, props);
     this.workerAvailabilityZones = props.availabilityZones;
+    this.indexes = props.instance === INDEXING_INSTANCE;
+
+    // The image holds the bundled worker, so a direct cdk call cannot stage it without a build.
+    const bundle = fileURLToPath(new URL("../../services/worker/dist/main.js", import.meta.url));
+    if (!existsSync(bundle)) throw new Error("run pnpm --filter @thetis/worker build");
 
     const vpc = new Vpc(this, "Vpc", {
       natGateways: 0,
@@ -59,6 +81,7 @@ export class WorkerStack extends Stack {
       retention: RetentionDays.THREE_MONTHS,
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    this.logGroup = workerLogs;
     const task = new FargateTaskDefinition(this, "Task", {
       cpu: 256,
       memoryLimitMiB: 512,
@@ -73,6 +96,23 @@ export class WorkerStack extends Stack {
         { platform: Platform.LINUX_ARM64 },
       ),
       logging: LogDrivers.awsLogs({ logGroup: workerLogs, streamPrefix: "worker" }),
+      ...(this.indexes
+        ? {
+            environment: {
+              THETIS_INDEXER: "on",
+              THETIS_NETWORK: "devnet",
+              THETIS_PROGRAM_ID,
+              THETIS_PROTOCOL,
+              THETIS_FIRST_SIGNATURE,
+              SUPABASE_URL: props.supabaseUrl,
+            },
+            // CDK concrete types expose undefined for some optional interface properties.
+            secrets: {
+              THETIS_RPC_URL: EcsSecret.fromSecretsManager(props.solanaRpcUrl as ISecret),
+              SUPABASE_SERVICE_ROLE_KEY: EcsSecret.fromSecretsManager(props.supabaseServiceRole as ISecret),
+            },
+          }
+        : {}),
     });
 
     const vpcSubnets = { subnetType: SubnetType.PUBLIC };
