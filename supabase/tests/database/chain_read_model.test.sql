@@ -81,7 +81,7 @@ $$;
 create function pg_temp.tx(n int, slot bigint, events int) returns jsonb language sql immutable as $$
   select jsonb_build_object('network', 'devnet', 'program_id', pg_temp.a('program'),
     'signature', pg_temp.sig(n), 'slot', slot, 'block_time', pg_temp.at(slot), 'succeeded', true,
-    'protocol', pg_temp.a('protocol'), 'event_count', events)
+    'protocol', pg_temp.a('protocol'), 'event_count', events, 'other_instance', false)
 $$;
 
 create function pg_temp.ev(n int, idx int, slot bigint, instruction text, event text, scope text,
