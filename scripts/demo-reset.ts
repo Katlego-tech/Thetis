@@ -24,7 +24,7 @@ import {
   getExtendLookupTableInstruction,
 } from "@solana-program/address-lookup-table";
 import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
-import { findAssociatedTokenPda } from "@solana-program/token";
+import { findAssociatedTokenPda, getMintSize, getTokenSize } from "@solana-program/token";
 import {
   type Address,
   address,
@@ -44,12 +44,17 @@ import {
   isAddress,
   type KeyPairSigner,
   pipe,
+  type Rpc,
+  type RpcSubscriptions,
   type Signature,
+  type SolanaRpcApi,
+  type SolanaRpcSubscriptionsApi,
   sendAndConfirmTransactionFactory,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   signBytes,
   signTransactionMessageWithSigners,
+  some,
   type Transaction,
   type TransactionSigner,
 } from "@solana/kit";
@@ -70,8 +75,17 @@ import {
   findProtocolPda,
   findVaultAuthorityPda,
   getAccreditCustodianClassInstruction,
+  getAuthorityEncoder,
+  getClassPolicyEncoder,
+  getCustodianClassEncoder,
   getDelegateAuthorityInstruction,
+  getIntakeIdentitySize,
   getIssueLotInstruction,
+  getLotEncoder,
+  getOrganisationEncoder,
+  getOrganisationNameSize,
+  getPositionSize,
+  getProtocolSize,
   THETIS_PROGRAM_ADDRESS,
 } from "@thetis/contracts";
 import { sharedMessageInstruction } from "../services/api/src/commands/ed25519.ts";
@@ -371,6 +385,17 @@ export function validateCast(raw: unknown, operatorKeys: ReadonlyMap<string, str
   return cast as DemoCast;
 }
 
+/** The owner's cast file, or the template printed and a refusal when it is missing (reset and check alike). */
+function loadCast(keysDir: string, log: (line: string) => void, operatorKeys: ReadonlyMap<string, string>): DemoCast {
+  const castPath = join(keysDir, "demo-cast.json");
+  if (!existsSync(castPath)) {
+    log(`Write ${castPath} (mode 600) with the owner's public keys and .test emails, from this template:`);
+    log(castTemplate());
+    throw new DemoError(`refusing: ${castPath} is missing. Nothing was sent or wiped.`);
+  }
+  return validateCast(JSON.parse(readFileSync(castPath, "utf8")), operatorKeys);
+}
+
 function operatorKeyMap(keysDir: string): Map<string, string> {
   const keys = new Map<string, string>();
   for (const name of readdirSync(keysDir)) {
@@ -398,55 +423,146 @@ export type PlannedStep = {
   signatures: number;
 };
 
+/** state.rs's `max_len` bounds (MAX_CLASS_CODE … MAX_LOT_ID); a test reads them from state.rs. */
+export const STATE_MAX = {
+  classCode: 8,
+  grades: 8,
+  grade: 8,
+  displayName: 48,
+  related: 8,
+  siteCode: 16,
+  lotId: 16,
+} as const;
+
+/**
+ * Each created account's size in bytes, discriminator included (PR #68 review, item 9): a fixed-size
+ * account from its codec's size, a variable one by encoding its largest value (every string and
+ * vector at state.rs's bound, every option Some), which is what Anchor's InitSpace allocates.
+ */
+export const ACCOUNT_BYTES = (() => {
+  const key = SYSTEM_PROGRAM;
+  const text = (length: number) => "x".repeat(length);
+  return {
+    Protocol: getProtocolSize(),
+    ClassPolicy: getClassPolicyEncoder().encode({
+      protocol: key,
+      classCode: text(STATE_MAX.classCode),
+      version: 0,
+      unit: 0,
+      grades: Array.from({ length: STATE_MAX.grades }, () => text(STATE_MAX.grade)),
+      originRequired: false,
+      lotValiditySecs: 0n,
+      splitInheritsExpiry: false,
+      bump: 0,
+    }).length,
+    Organisation: getOrganisationEncoder().encode({
+      protocol: key,
+      orgId: new Uint8Array(16),
+      role: 0,
+      displayName: text(STATE_MAX.displayName),
+      admin: key,
+      related: Array.from({ length: STATE_MAX.related }, () => key),
+      bump: 0,
+    }).length,
+    OrganisationName: getOrganisationNameSize(),
+    CustodianClass: getCustodianClassEncoder().encode({
+      protocol: key,
+      custodian: key,
+      classPolicy: key,
+      siteCode: text(STATE_MAX.siteCode),
+      approvedCapacityKg: 0n,
+      occupiedKg: 0n,
+      reservedInboundKg: 0n,
+      bump: 0,
+    }).length,
+    Authority: getAuthorityEncoder().encode({
+      protocol: key,
+      organisation: key,
+      wallet: key,
+      scopes: 0,
+      expiresAt: 0n,
+      revokedAt: some(0n),
+      bump: 0,
+    }).length,
+    IntakeIdentity: getIntakeIdentitySize(),
+    Lot: getLotEncoder().encode({
+      protocol: key,
+      lotId: text(STATE_MAX.lotId),
+      classPolicy: key,
+      classVersion: 0,
+      grade: text(STATE_MAX.grade),
+      custodianClass: key,
+      intake: key,
+      parent: some(key),
+      root: key,
+      mint: key,
+      supplyKg: 0n,
+      state: 0,
+      restriction: 0,
+      expiresAt: 0n,
+      revision: 0n,
+      liveChildren: 0,
+      bump: 0,
+    }).length,
+    /** A Token-2022 mint with no extension is the base mint's 82 bytes. */
+    Mint: getMintSize(),
+    Position: getPositionSize(),
+    /** The vault is a Token-2022 associated account: base, the account-type byte, ImmutableOwner's empty TLV. */
+    Vault: getTokenSize() + 1 + 4,
+    /** The lookup table's metadata before its 32-byte addresses. */
+    LookupTableHeader: 56,
+  };
+})();
+
 /** The issue's keys held in the run's lookup table: every account but the sponsor and the programs. */
 const LOOKUP_KEY_COUNT = 17;
 
 export function planSteps(scenario: Scenario): PlannedStep[] {
   const organisations = parseSeedOrganisations(readFileSync(SEED_SQL_PATH, "utf8"));
   const base: Omit<PlannedStep, "label">[] = [
-    { name: "initialize_protocol", creates: [{ label: "Protocol", bytes: 92 }], signatures: 2 },
+    { name: "initialize_protocol", creates: [{ label: "Protocol", bytes: ACCOUNT_BYTES.Protocol }], signatures: 2 },
     {
       name: `register_class ${SEED.classCode} v${SEED.classVersion}`,
-      creates: [{ label: "ClassPolicy", bytes: 168 }],
+      creates: [{ label: "ClassPolicy", bytes: ACCOUNT_BYTES.ClassPolicy }],
       signatures: 2,
     },
     ...organisations.map((organisation) => ({
       name: `accredit_organisation ${organisation.slug}`,
       creates: [
-        { label: "Organisation", bytes: 402 },
-        { label: "OrganisationName", bytes: 8 },
+        { label: "Organisation", bytes: ACCOUNT_BYTES.Organisation },
+        { label: "OrganisationName", bytes: ACCOUNT_BYTES.OrganisationName },
       ],
       signatures: 2,
     })),
     ...CUSTODIAN_CLASSES.map((custodianClass) => ({
       name: `accredit_custodian_class ${custodianClass.site}`,
-      creates: [{ label: "CustodianClass", bytes: 149 }],
+      creates: [{ label: "CustodianClass", bytes: ACCOUNT_BYTES.CustodianClass }],
       signatures: 2,
     })),
     ...DELEGATIONS.map((delegation) => ({
       name: `delegate_authority ${delegation.key}`,
-      creates: [{ label: "Authority", bytes: 124 }],
+      creates: [{ label: "Authority", bytes: ACCOUNT_BYTES.Authority }],
       signatures: 2,
     })),
   ];
   const lender: Omit<PlannedStep, "label">[] =
     scenario === "lender"
       ? [
-          { name: `delegate_authority ${ISSUER_KEY}`, creates: [{ label: "Authority", bytes: 124 }], signatures: 2 },
+          { name: `delegate_authority ${ISSUER_KEY}`, creates: [{ label: "Authority", bytes: ACCOUNT_BYTES.Authority }], signatures: 2 },
           {
             name: "create_lookup_table",
-            creates: [{ label: "lookup table", bytes: 56 + 32 * LOOKUP_KEY_COUNT }],
+            creates: [{ label: "lookup table", bytes: ACCOUNT_BYTES.LookupTableHeader + 32 * LOOKUP_KEY_COUNT }],
             signatures: 1,
           },
           { name: "extend_lookup_table", creates: [], signatures: 1 },
           {
             name: `issue_lot ${LENDER_LOT.lotId}`,
             creates: [
-              { label: "IntakeIdentity", bytes: 138 },
-              { label: "Lot", bytes: 300 },
-              { label: "Mint", bytes: 82 },
-              { label: "Position", bytes: 137 },
-              { label: "Vault", bytes: 170 },
+              { label: "IntakeIdentity", bytes: ACCOUNT_BYTES.IntakeIdentity },
+              { label: "Lot", bytes: ACCOUNT_BYTES.Lot },
+              { label: "Mint", bytes: ACCOUNT_BYTES.Mint },
+              { label: "Position", bytes: ACCOUNT_BYTES.Position },
+              { label: "Vault", bytes: ACCOUNT_BYTES.Vault },
             ],
             signatures: 1,
           },
@@ -511,31 +627,36 @@ export interface LocalStack {
   listening(port: number): Promise<boolean>;
 }
 
-export function devnetChain(): Chain {
-  const rpc = createSolanaRpc(DEVNET_RPC_URL);
-  const sendAndConfirm = sendAndConfirmTransactionFactory({
-    rpc,
-    rpcSubscriptions: createSolanaRpcSubscriptions(DEVNET_WS_URL),
-  });
+/**
+ * Devnet through kit's RPC. Every read is at `confirmed` (PR #68 review, item 2): the default,
+ * finalized, lags a just-sent transaction, so L4 would read a lookup table without L3's keys.
+ */
+export function devnetChain(
+  rpc: Rpc<SolanaRpcApi> = createSolanaRpc(DEVNET_RPC_URL),
+  subscriptions: () => RpcSubscriptions<SolanaRpcSubscriptionsApi> = () => createSolanaRpcSubscriptions(DEVNET_WS_URL),
+): Chain {
+  let sendAndConfirm: ReturnType<typeof sendAndConfirmTransactionFactory> | undefined;
+  const commitment = "confirmed" as const;
   return {
     rpc,
     programDeployed: async () => {
-      const { value } = await rpc.getAccountInfo(THETIS_PROGRAM_ADDRESS, { encoding: "base64" }).send();
+      const { value } = await rpc.getAccountInfo(THETIS_PROGRAM_ADDRESS, { encoding: "base64", commitment }).send();
       return value !== null && value.executable;
     },
     unixTime: async () => {
-      const slot = await rpc.getSlot({ commitment: "confirmed" }).send();
+      const slot = await rpc.getSlot({ commitment }).send();
       const time = await rpc.getBlockTime(slot).send();
       if (time === null) throw new DemoError(`devnet has no block time for slot ${slot}`);
       return BigInt(time);
     },
-    slot: async () => rpc.getSlot({ commitment: "confirmed" }).send(),
-    balance: async (owner) => (await rpc.getBalance(owner, { commitment: "confirmed" }).send()).value,
-    rent: async (bytes) => rpc.getMinimumBalanceForRentExemption(BigInt(bytes)).send(),
-    latestBlockhash: async () => (await rpc.getLatestBlockhash({ commitment: "confirmed" }).send()).value,
+    slot: async () => rpc.getSlot({ commitment }).send(),
+    balance: async (owner) => (await rpc.getBalance(owner, { commitment }).send()).value,
+    rent: async (bytes) => rpc.getMinimumBalanceForRentExemption(BigInt(bytes), { commitment }).send(),
+    latestBlockhash: async () => (await rpc.getLatestBlockhash({ commitment }).send()).value,
     submit: async (transaction) => {
       assertIsTransactionWithBlockhashLifetime(transaction);
-      await sendAndConfirm(transaction as unknown as Parameters<typeof sendAndConfirm>[0], { commitment: "confirmed" });
+      sendAndConfirm ??= sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions: subscriptions() });
+      await sendAndConfirm(transaction as unknown as Parameters<typeof sendAndConfirm>[0], { commitment });
     },
     statuses: async (signatures) => {
       const { value } = await rpc
@@ -550,13 +671,13 @@ export function devnetChain(): Chain {
             },
       );
     },
-    blockHeight: async () => rpc.getBlockHeight().send(),
+    blockHeight: async () => rpc.getBlockHeight({ commitment }).send(),
     lookupTable: async (table) => {
-      const { value } = await rpc.getAccountInfo(table, { encoding: "base64" }).send();
+      const { value } = await rpc.getAccountInfo(table, { encoding: "base64", commitment }).send();
       if (value === null || value.owner !== ALT_PROGRAM) return null;
       const data = Buffer.from(value.data[0], "base64");
       const out: Address[] = [];
-      for (let at = 56; at + 32 <= data.length; at += 32) {
+      for (let at = ACCOUNT_BYTES.LookupTableHeader; at + 32 <= data.length; at += 32) {
         out.push(getAddressDecoder().decode(data.subarray(at, at + 32)));
       }
       return out;
@@ -564,10 +685,39 @@ export function devnetChain(): Chain {
   };
 }
 
+/** Runs the Supabase CLI with these arguments and returns its stdout. */
+export type SupabaseCli = (args: string[]) => string;
+
+/**
+ * A bare Postgres command tag (`INSERT 0 2`, `UPDATE 1`, `DO`): what `supabase db query` 2.122.1
+ * prints, instead of JSON, for a statement that yields no rows (PR #68 review, item 1).
+ */
+const COMMAND_TAG = /^(?:INSERT \d+ \d+|UPDATE \d+|DELETE \d+|MERGE \d+|SELECT \d+|DO)$/;
+
+/** The rows of `supabase db query --output-format json` stdout: JSON rows, or none for a command tag. */
+export function parseQueryOutput(stdout: string, sql: string): Record<string, unknown>[] {
+  const text = stdout.trim();
+  if (COMMAND_TAG.test(text)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  const rows = (parsed as { rows?: unknown } | undefined)?.rows;
+  if (typeof parsed === "object" && parsed !== null && Array.isArray(rows)) return rows as Record<string, unknown>[];
+  const first = sql.trim().split("\n")[0] ?? "";
+  throw new DemoError(
+    `supabase db query printed neither JSON rows nor a command tag for: ${first}\n${text.slice(0, 200)}`,
+  );
+}
+
 /** The local Supabase stack, through the CLI in the repository and its auth admin API. */
-export function localStack(repoRoot: string): LocalStack {
-  const cli = (args: string[]): string =>
-    execFileSync("supabase", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+export function localStack(
+  repoRoot: string,
+  cli: SupabaseCli = (args) =>
+    execFileSync("supabase", args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+): LocalStack {
   let cached: { apiUrl: string; serviceRoleKey: string } | undefined;
   const status = async () => {
     if (cached !== undefined) return cached;
@@ -586,12 +736,7 @@ export function localStack(repoRoot: string): LocalStack {
   };
   return {
     status,
-    query: async (sql) => {
-      const parsed = JSON.parse(cli(["db", "query", "--local", "--output-format", "json", sql])) as {
-        rows?: Record<string, unknown>[];
-      };
-      return parsed.rows ?? [];
-    },
+    query: async (sql) => parseQueryOutput(cli(["db", "query", "--local", "--output-format", "json", sql]), sql),
     resetDatabase: async () => {
       execFileSync("supabase", ["db", "reset", "--local"], { cwd: repoRoot, stdio: "inherit" });
     },
@@ -648,14 +793,49 @@ export type IssueTextFields = {
 export type IssueText = (fields: IssueTextFields) => Uint8Array;
 
 /**
- * T067r's `issueLotMessage`, or null while services/api has none. The arguments follow the relay's
- * builders (the program's `issue_message` order, origin absent for CHROME v1); the lender LiteSVM
- * case confirms the bytes once T067r lands.
+ * The order the script passes `issueLotMessage`'s arguments in: the relay's builders' order (the
+ * program's `issue_message`, origin absent for CHROME v1). This is a guess at T067r's signature until
+ * it lands, so the binding below checks the real function's arity and parameter names against it and
+ * refuses on any difference instead of signing a text with fields in the wrong slots (PR #68 review,
+ * item 5). The driver reruns the lender LiteSVM case once T067r exports the real builder.
  */
-export async function loadIssueText(): Promise<IssueText | null> {
-  const texts = (await import("../services/api/src/commands/texts.ts")) as Record<string, unknown>;
-  const build = texts.issueLotMessage;
-  if (typeof build !== "function") return null;
+export const ISSUE_LOT_MESSAGE_PARAMS = [
+  "programId",
+  "instanceId",
+  "lotId",
+  "classCode",
+  "classVersion",
+  "grade",
+  "quantityKg",
+  "owner",
+  "custodian",
+  "siteCode",
+  "intakeDigest",
+  "origin",
+  "validUntil",
+] as const;
+
+function parameterNames(build: (...args: never[]) => unknown): string[] {
+  const source = Function.prototype.toString.call(build);
+  const list = /^[^(]*\(([^)]*)\)/.exec(source)?.[1] ?? "";
+  return list
+    .replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "")
+    .split(",")
+    .map((name) => name.trim().split(/[\s=:]/)[0] ?? "")
+    .filter((name) => name.length > 0);
+}
+
+/** Binds T067r's `issueLotMessage` to the fields, refusing a builder whose signature differs. */
+export function bindIssueLotMessage(build: unknown): IssueText {
+  if (typeof build !== "function") throw new DemoError("issueLotMessage is not a function");
+  const names = parameterNames(build as (...args: never[]) => unknown);
+  const wanted = [...ISSUE_LOT_MESSAGE_PARAMS];
+  if (build.length !== wanted.length || names.join(",") !== wanted.join(",")) {
+    throw new DemoError(
+      `refusing: services/api's issueLotMessage takes (${names.join(", ")}) (arity ${build.length}); ` +
+        `demo-reset.ts passes (${wanted.join(", ")}). Update ISSUE_LOT_MESSAGE_PARAMS and the call together.`,
+    );
+  }
   return (f) =>
     build(
       f.programId,
@@ -674,6 +854,14 @@ export async function loadIssueText(): Promise<IssueText | null> {
     ) as Uint8Array;
 }
 
+/** T067r's `issueLotMessage`, or null while services/api has none. Left as is until T067r lands. */
+export async function loadIssueText(): Promise<IssueText | null> {
+  const texts = (await import("../services/api/src/commands/texts.ts")) as Record<string, unknown>;
+  const build = texts.issueLotMessage;
+  if (typeof build !== "function") return null;
+  return bindIssueLotMessage(build);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The run file
 // ---------------------------------------------------------------------------------------------
@@ -684,6 +872,8 @@ export type LoggedTransaction = {
   status: "pending" | "confirmed" | "failed" | "expired";
   explorerUrl: string;
   lastValidBlockHeight: string;
+  /** create_lookup_table only: the table this transaction creates, so a rerun reuses it. */
+  account?: string;
 };
 
 export type RunFile = {
@@ -768,16 +958,18 @@ export async function resetCast(
       if (!organisation || !UUID.test(organisation.id)) throw new DemoError(`unknown organisation ${slug}`);
       return `('${organisation.id}', '${id}', 'admin'::public.member_role)`;
     });
+    // Every write ends in RETURNING so the CLI prints JSON rows (item 1); a kept row returns nothing.
     await stack.query(
       `insert into public.memberships (organisation_id, user_id, member_role) values ${rows.join(", ")} ` +
-        "on conflict (organisation_id, user_id) where revoked_at is null do nothing",
+        "on conflict (organisation_id, user_id) where revoked_at is null do nothing returning organisation_id, user_id",
     );
     users.push({ email: user.email, id, organisations: [...user.organisations] });
   }
-  await stack.query(
+  const set = await stack.query(
     `insert into private.settings (key, value) values ('demo_run', '${instanceId}') ` +
-      "on conflict (key) do update set value = excluded.value",
+      "on conflict (key) do update set value = excluded.value returning value",
   );
+  if (set[0]?.value !== instanceId) throw new DemoError(`the run marker was not set to ${instanceId}`);
   return users;
 }
 
@@ -809,7 +1001,7 @@ export type ResetResult = {
 
 type ExecStep = PlannedStep & {
   decide(): Promise<"send" | "skip">;
-  build(): Promise<{ instructions: Instruction[]; tables?: Record<Address, Address[]> }>;
+  build(): Promise<{ instructions: Instruction[]; tables?: Record<Address, Address[]>; account?: Address }>;
   after?(): Promise<void>;
 };
 
@@ -888,13 +1080,7 @@ export async function reset(
     return found;
   };
   // Refusal 2 and 3: the owner's cast file.
-  const castPath = join(keysDir, "demo-cast.json");
-  if (!existsSync(castPath)) {
-    log(`Write ${castPath} (mode 600) with the owner's public keys and .test emails, from this template:`);
-    log(castTemplate());
-    throw new DemoError(`refusing: ${castPath} is missing. Nothing was sent or wiped.`);
-  }
-  const cast = validateCast(JSON.parse(readFileSync(castPath, "utf8")), operatorKeyMap(keysDir));
+  const cast = loadCast(keysDir, log, operatorKeyMap(keysDir));
   // Refusal 5: the local stack only.
   const { apiUrl } = await stack.status();
   const host = (() => {
@@ -907,6 +1093,12 @@ export async function reset(
   if (host !== "127.0.0.1" && host !== "localhost") {
     throw new DemoError(`refusing: Supabase ${apiUrl} is not the local stack. Only the local database is ever reset.`);
   }
+  // Read-only, in the dry run too: the run marker and the indexer checkpoint (demo.md §5.4 sequence).
+  const markerRows = await stack.query("select value from private.settings where key = 'demo_run'");
+  const marker = typeof markerRows[0]?.value === "string" ? (markerRows[0].value as string) : null;
+  const checkpoints = await stack.query(
+    "select protocol, extract(epoch from (now() - last_poll_at))::int as age from public.indexer_checkpoints",
+  );
   // Refusal 6: the API, the web app and the worker are stopped (only when something will change).
   if (args.yes) {
     for (const [port, what] of [
@@ -917,9 +1109,6 @@ export async function reset(
         throw new DemoError(`refusing: something is listening on 127.0.0.1:${port} (${what}). Stop it, then run again.`);
       }
     }
-    const checkpoints = await stack.query(
-      "select protocol, extract(epoch from (now() - last_poll_at))::int as age from public.indexer_checkpoints",
-    );
     for (const row of checkpoints) {
       if (row.age !== null && Number(row.age) < 120) {
         throw new DemoError("refusing: the worker polled in the last 120 s. Stop it, then run again.");
@@ -991,11 +1180,8 @@ export async function reset(
   if (args.scenario === "lender") {
     issueText = await deps.issueText();
     if (issueText === null) throw new DemoError(`refusing: ${NEEDS_T067R}. Nothing was sent or wiped.`);
-    issuer = args.yes
-      ? await loadOrCreateKey(keysDir, ISSUER_KEY)
-      : existsSync(keyPath(keysDir, ISSUER_KEY))
-        ? await readKeyFile(keyPath(keysDir, ISSUER_KEY))
-        : null;
+    // Read when present; a missing key is created only after every refusal has passed (item 8).
+    issuer = existsSync(keyPath(keysDir, ISSUER_KEY)) ? await readKeyFile(keyPath(keysDir, ISSUER_KEY)) : null;
   }
 
   const runFile: RunFile = existingRun ?? {
@@ -1170,7 +1356,6 @@ export async function reset(
   }
 
   if (args.scenario === "lender") {
-    const issuerAddress = issuer?.address ?? null;
     const custodianOrg = await orgPda(LENDER_LOT.custodian);
     const ownerOrg = await orgPda(LENDER_LOT.owner);
     const yard = runFile.custodianClasses.find((c) => c.site === LENDER_LOT.site)?.address as Address;
@@ -1181,10 +1366,12 @@ export async function reset(
     const [position] = await findPositionPda({ lot, owner: ownerOrg });
     const [vaultAuthority] = await findVaultAuthorityPda({ position });
     const [vault] = await findAssociatedTokenPda({ owner: vaultAuthority, mint, tokenProgram: TOKEN_2022 });
-    const issuerAuthority = issuerAddress === null ? null : (await findAuthorityPda({ protocol, wallet: issuerAddress }))[0];
-    const tableKeys = (): Address[] => [
+    // The issuer may be created after the decisions (item 8), so everything that names it reads it late.
+    const issuerAuthority = async (): Promise<Address | null> =>
+      issuer === null ? null : (await findAuthorityPda({ protocol, wallet: issuer.address }))[0];
+    const tableKeys = async (): Promise<Address[]> => [
       protocol,
-      issuerAuthority as Address,
+      (await issuerAuthority()) as Address,
       ownerOrg,
       custodianOrg,
       classPolicy,
@@ -1201,46 +1388,53 @@ export async function reset(
       ASSOCIATED_TOKEN_PROGRAM,
       SYSTEM_PROGRAM,
     ];
-    if (tableKeys().length !== LOOKUP_KEY_COUNT) throw new Error("lookup key count changed");
+    if ((await tableKeys()).length !== LOOKUP_KEY_COUNT) throw new Error("lookup key count changed");
 
-    if (issuerAddress === null) {
-      // Dry run with no issuer key yet: the key is created on the --yes run.
-      steps.push({
-        ...step(`delegate_authority ${ISSUER_KEY}`),
-        decide: async () => "send",
-        build: async () => {
-          throw new DemoError("no issuer key");
-        },
-      });
-    } else {
-      steps.push(delegateStep(`delegate_authority ${ISSUER_KEY}`, LENDER_LOT.custodian, issuerAddress, SCOPE.ISSUE));
-    }
+    const issuerStep = (): ExecStep =>
+      delegateStep(`delegate_authority ${ISSUER_KEY}`, LENDER_LOT.custodian, (issuer as TransactionSigner).address, SCOPE.ISSUE);
+    steps.push({
+      ...step(`delegate_authority ${ISSUER_KEY}`),
+      // No issuer key yet: its Authority can't exist, and the key is made after the refusals.
+      decide: async () => (issuer === null ? "send" : issuerStep().decide()),
+      build: async () => {
+        if (issuer === null) throw new DemoError("no issuer key");
+        return issuerStep().build();
+      },
+    });
+    // The table a confirmed create_lookup_table made: reused, never replaced by a second (item 3).
+    const createdTable = (): boolean =>
+      runFile.lookupTable !== null &&
+      runFile.transactions.some(
+        (entry) =>
+          entry.step === "create_lookup_table" && entry.status === "confirmed" && entry.account === runFile.lookupTable,
+      );
     steps.push({
       ...step("create_lookup_table"),
       decide: async () =>
-        runFile.lookupTable !== null && (await chain.lookupTable(runFile.lookupTable as Address)) !== null
+        createdTable() ||
+        (runFile.lookupTable !== null && (await chain.lookupTable(runFile.lookupTable as Address)) !== null)
           ? "skip"
           : "send",
       build: async () => {
         const recentSlot = await chain.slot();
         const [table, bump] = await findAddressLookupTablePda({ authority: deployer.address, recentSlot });
         runFile.lookupTable = table;
-        persist();
         return {
           instructions: [
             getCreateLookupTableInstruction({ address: [table, bump], authority: deployer, payer: deployer, recentSlot }),
           ],
+          account: table,
         };
       },
     });
     const missingKeys = async (): Promise<Address[]> => {
       if (runFile.lookupTable === null) return tableKeys();
       const held = (await chain.lookupTable(runFile.lookupTable as Address)) ?? [];
-      return tableKeys().filter((key) => !held.includes(key));
+      return (await tableKeys()).filter((key) => !held.includes(key));
     };
     steps.push({
       ...step("extend_lookup_table"),
-      decide: async () => (issuerAuthority !== null && (await missingKeys()).length === 0 ? "skip" : "send"),
+      decide: async () => (issuer !== null && (await missingKeys()).length === 0 ? "skip" : "send"),
       build: async () => ({
         instructions: [
           getExtendLookupTableInstruction({
@@ -1273,7 +1467,8 @@ export async function reset(
         return "skip";
       },
       build: async () => {
-        if (issuer === null || issueText === null || issuerAuthority === null) throw new DemoError("no issuer");
+        const authority = await issuerAuthority();
+        if (issuer === null || issueText === null || authority === null) throw new DemoError("no issuer");
         const validUntil = (await chain.unixTime()) + ISSUE_WINDOW_SECS;
         const text = issueText({
           programId: THETIS_PROGRAM_ADDRESS,
@@ -1298,7 +1493,7 @@ export async function reset(
             getIssueLotInstruction({
               sponsor: deployer,
               protocol,
-              authority: issuerAuthority,
+              authority,
               owner: ownerOrg,
               custodian: custodianOrg,
               classPolicy,
@@ -1327,6 +1522,33 @@ export async function reset(
     });
   }
 
+  // Settle anything an earlier attempt left pending, before deciding anything (seed-demo.ts rules): a
+  // landed transaction becomes confirmed, or failed when it carries an on-chain error; one not found
+  // stays pending until its blockhash expires (the chain passed lastValidBlockHeight).
+  const pending = runFile.transactions.filter((entry) => entry.status === "pending");
+  if (pending.length > 0) {
+    const statuses = await chain.statuses(pending.map((entry) => entry.signature));
+    let height: bigint | undefined;
+    for (const [index, entry] of pending.entries()) {
+      const status = statuses[index] ?? null;
+      if (status?.failed) entry.status = "failed";
+      else if (status?.confirmed) entry.status = "confirmed";
+      else if (status === null) {
+        height ??= await chain.blockHeight();
+        if (height > BigInt(entry.lastValidBlockHeight)) entry.status = "expired";
+      }
+      if (entry.status === "confirmed" && entry.step === "create_lookup_table" && entry.account !== undefined) {
+        runFile.lookupTable = entry.account;
+      }
+    }
+    const open = pending.find((entry) => entry.status === "pending");
+    if (open) {
+      const message = `${open.step} (${open.explorerUrl}) may still land`;
+      if (args.yes) throw new DemoError(`refusing: ${message}. Nothing sent or wiped; run again shortly.`);
+      log(`Warning: ${message}; the --yes run will refuse until it settles.`);
+    }
+  }
+
   // Decide every step before anything is sent: a difference stops the run with nothing spent.
   const actions: ResetResult["steps"] = [];
   for (const s of steps) actions.push({ label: s.label, name: s.name, action: await s.decide() });
@@ -1349,8 +1571,16 @@ export async function reset(
     const held = await chain.balance(sponsor.address);
     log(`Sponsor ${sponsor.address} holds ${sol(held)}${held < SPONSOR_WARN_LAMPORTS ? " (below 0.5 SOL: fund it before the run)" : ""}.`);
   }
+  const checkpoint = checkpoints[0];
   log(
-    "Supabase: with --yes this wipes the local Supabase database (supabase db reset --local) unless it already holds this run's cast, then creates the six users and their memberships.",
+    checkpoint === undefined
+      ? "Indexer: no indexer checkpoint in the local database."
+      : `Indexer: indexer checkpoint for ${String(checkpoint.protocol)}, polled ${checkpoint.age === null ? "never" : `${String(checkpoint.age)} s ago`}.`,
+  );
+  log(
+    marker === instanceId
+      ? `Supabase: the local database already holds this run's cast (demo_run = ${instanceId}): no wipe; the six users and their memberships are only ensured.`
+      : `Supabase: with --yes this wipes the local Supabase database (supabase db reset --local; demo_run = ${marker ?? "absent"}), then creates the six users and their memberships.`,
   );
   if (balance < exact.total + MARGIN_LAMPORTS) {
     const message = `the deployer balance ${sol(balance)} is below the plan's ${sol(exact.total)} plus 0.1 SOL`;
@@ -1361,24 +1591,10 @@ export async function reset(
     log("Dry run: nothing sent, nothing wiped. Run again with --yes to reset.");
     return { instanceId, protocol, t0, expiresAt, steps: actions, cost: exact, sent: [], runFile: null };
   }
+  // Every refusal has passed: only now may the lender's issuing key be created (item 8).
+  if (args.scenario === "lender" && issuer === null) issuer = await loadOrCreateKey(keysDir, ISSUER_KEY);
+  persist();
 
-  // Settle anything an earlier attempt left pending.
-  const pending = runFile.transactions.filter((entry) => entry.status === "pending");
-  if (pending.length > 0) {
-    const statuses = await chain.statuses(pending.map((entry) => entry.signature));
-    let height: bigint | undefined;
-    for (const [index, entry] of pending.entries()) {
-      const status = statuses[index] ?? null;
-      if (status?.failed) entry.status = "failed";
-      else if (status?.confirmed) entry.status = "confirmed";
-      else {
-        height ??= await chain.blockHeight();
-        if (height > BigInt(entry.lastValidBlockHeight)) entry.status = "expired";
-      }
-    }
-    const open = pending.find((entry) => entry.status === "pending");
-    if (open) throw new DemoError(`refusing: ${open.step} (${open.explorerUrl}) may still land. Run again shortly.`);
-  }
   persist();
 
   const sent: string[] = [];
@@ -1387,7 +1603,7 @@ export async function reset(
       log(`skip ${s.name}`);
       continue;
     }
-    const { instructions, tables } = await s.build();
+    const { instructions, tables, account } = await s.build();
     const blockhash = await chain.latestBlockhash();
     const base = pipe(
       createTransactionMessage({ version: 0 }),
@@ -1412,15 +1628,20 @@ export async function reset(
       status: "pending",
       explorerUrl: explorerUrl(signature),
       lastValidBlockHeight: blockhash.lastValidBlockHeight.toString(),
+      ...(account === undefined ? {} : { account }),
     };
     runFile.transactions.push(entry);
     persist();
     try {
       await chain.submit(signed);
     } catch (error) {
-      entry.status = "failed";
+      // A send error is not proof it didn't land: the entry stays pending and the rerun settles it
+      // with getSignatureStatuses and lastValidBlockHeight before deciding anything (item 3).
       persist();
-      throw new DemoError(`${s.name} failed: ${entry.explorerUrl}\n${error instanceof Error ? error.message : String(error)}`);
+      throw new DemoError(
+        `${s.name}: sending failed and the transaction may still land: ${entry.explorerUrl}\n` +
+          `${error instanceof Error ? error.message : String(error)}\nRun the same command again to settle it.`,
+      );
     }
     entry.status = "confirmed";
     await s.after?.();
@@ -1466,7 +1687,7 @@ export async function check(
   const keysDir = assertKeysDirOutsideRepo(deps.keysDir, deps.repoRoots);
   const run = readRunFile(keysDir, instanceId);
   if (run === null) throw new DemoError(`refusing: no run file for ${instanceId}; run demo:reset first.`);
-  const cast = validateCast(JSON.parse(readFileSync(join(keysDir, "demo-cast.json"), "utf8")), new Map());
+  const cast = loadCast(keysDir, deps.log, new Map());
   const p = run.protocol;
   if (!isAddress(p)) throw new DemoError(`the run file's protocol ${p} is not an address`);
   const q = (sql: string) => deps.stack.query(sql);
@@ -1509,6 +1730,26 @@ export async function check(
         String(row.expires_at) === String(run.expiresAt) &&
         row.revoked_at === null,
       row === undefined ? "not indexed" : `scopes ${String(row.scopes)}, expires ${String(row.expires_at)}`,
+    );
+  }
+  // Exactly the delegated wallets, no more (item 6): 7 in phone, 8 in lender with the seed issuer.
+  const wantedCount = DELEGATIONS.length + (run.scenario === "lender" ? 1 : 0);
+  add(
+    `exactly ${wantedCount} Authorities on ${instanceId}`,
+    authorities.length === wantedCount,
+    `${authorities.length} indexed`,
+  );
+  if (run.scenario === "lender") {
+    const issuerPath = keyPath(keysDir, ISSUER_KEY);
+    const issuer = existsSync(issuerPath) ? (await readKeyFile(issuerPath)).address : null;
+    const row = issuer === null ? undefined : authorities.find((r) => r.wallet === issuer);
+    add(
+      `${ISSUER_KEY} Authority (scopes ${SCOPE.ISSUE})`,
+      row !== undefined &&
+        Number(row.scopes) === SCOPE.ISSUE &&
+        String(row.expires_at) === String(run.expiresAt) &&
+        row.revoked_at === null,
+      issuer === null ? `${issuerPath} is missing` : row === undefined ? "not indexed" : `scopes ${String(row.scopes)}`,
     );
   }
   add(
