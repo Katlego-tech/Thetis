@@ -19,6 +19,16 @@ vi.mock("@/lib/supabase-server", () => ({
   },
 }));
 
+// The rail's account block reads the browser session: no session here, and no browser client.
+vi.mock("@/lib/supabase-browser", () => ({
+  supabaseBrowser: () => ({
+    auth: {
+      getSession: async () => ({ data: { session: null }, error: null }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+    },
+  }),
+}));
+
 const { default: Home } = await import("@/app/page");
 const { default: ContextLayout } = await import("@/app/[context]/layout");
 const { default: QueuePage } = await import("@/app/[context]/queue/page");
@@ -93,7 +103,8 @@ function expectFailure(container: HTMLElement, message: string) {
   ).toBeInTheDocument();
   expect(screen.getByText(message)).toBeInTheDocument();
   expect(container.querySelector("main.workspace-main")).not.toBeNull();
-  expect(screen.queryByRole("complementary", { name: "Thetis workspace" })).not.toBeInTheDocument();
+  expect(container.querySelector(".side-rail")).toBeNull();
+  expect(screen.queryByRole("navigation", { name: "Workspace" })).not.toBeInTheDocument();
   expect(screen.queryByText(liveBannerText)).not.toBeInTheDocument();
 }
 
@@ -111,9 +122,7 @@ describe("routes", () => {
       screen.getByRole("heading", { name: "CR-0001 Chrome ore, single grade class" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Loan to value 60\.00%/ })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Thetis workspace" })).toHaveTextContent(
-      "Lender One Bank",
-    );
+    expect(container.querySelector(".side-rail")).toHaveTextContent("Lender One Bank");
     cleanup();
 
     render(await ContextLayout({ params, children: await queue("lender-one") }));
@@ -199,7 +208,11 @@ describe("routes", () => {
     const fake = fakeSupabase(freshSnapshot());
     server.client = fake.client;
     const reads = () => fake.calls.filter(({ table }) => table === "organisations").length;
-    const rail = () => within(screen.getByRole("complementary", { name: "Thetis workspace" }));
+    const rail = () => {
+      const root = document.querySelector<HTMLElement>(".side-rail");
+      if (!root) throw new Error("no rail on the page");
+      return within(root);
+    };
     const currentLine =
       /^Live from devnet\. Indexed through slot 12,000, last reported \d\d:\d\d:\d\d SAST\.$/;
 
@@ -223,14 +236,13 @@ describe("routes", () => {
       "href",
       "/khunou/queue",
     );
-    expect(rail().getByRole("link", { name: /^Lots/ })).toHaveAttribute(
+    expect(rail().queryByRole("link", { name: /^Lots/ })).not.toBeInTheDocument();
+    expect(rail().getByRole("link", { name: "CR-0001" })).toHaveAttribute(
       "href",
       "/khunou/lots/CR-0001",
     );
-    expect(rail().getByText("Releases").closest("[aria-disabled]")).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(rail().getByRole("heading", { level: 2, name: "Releases, 0" })).toBeInTheDocument();
+    expect(rail().getByText("No releases yet")).toBeInTheDocument();
     expect(rail().getByRole("link", { name: /^Exceptions/ })).toHaveAttribute(
       "href",
       "/khunou/exceptions",
@@ -268,7 +280,7 @@ describe("routes", () => {
       "Indexing stopped 26 Nov 2026, 02:05 SAST: the program sent something this version of Thetis does not recognise. What you see may be out of date; the chain itself is unaffected.",
       "Indexing has stopped, so this lot may have changed since. The figures below may be out of date.",
     ]);
-    expect(rail().getByRole("link", { name: /^Lots/, current: "page" })).toBeInTheDocument();
+    expect(rail().getByRole("link", { name: "CR-0001", current: "page" })).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { level: 1, name: "CR-0001 CHROME v1, grade G1" }),
     ).toBeInTheDocument();
