@@ -166,6 +166,7 @@ export const PROTOCOL_ACCOUNT_POSITION: Readonly<Record<InstructionName, number>
   Pledge: 1,
   PrepareShipment: 1,
   RecordAdvance: 1,
+  RecordObservation: 1,
   Redeem: 1,
   RegisterBatch: 1,
   Repay: 1,

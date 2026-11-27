@@ -27,6 +27,7 @@ export * from './pause.ts';
 export * from './pledge.ts';
 export * from './prepareShipment.ts';
 export * from './recordAdvance.ts';
+export * from './recordObservation.ts';
 export * from './redeem.ts';
 export * from './registerBatch.ts';
 export * from './registerClass.ts';

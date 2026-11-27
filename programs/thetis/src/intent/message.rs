@@ -2,7 +2,7 @@ use std::fmt::{Arguments, Write};
 
 use anchor_lang::solana_program::pubkey::Pubkey;
 
-use crate::state::{HandoverStage, MAX_DISPLAY_NAME};
+use crate::state::{HandoverStage, ObservationKind, MAX_DISPLAY_NAME};
 
 pub fn format_tonnes(kg: u64) -> String {
     format!(
@@ -565,6 +565,53 @@ pub fn custody_handover_message(
              Stage: {stage}\n\
              Manifest: {manifest}\n\
              Sequence: {expected_sequence}"
+        ),
+        valid_until,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn observation_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    shipment_id: &[u8; 16],
+    batch_number: u8,
+    batch_count: u8,
+    holder: &str,
+    observer: &str,
+    kind: ObservationKind,
+    location_code: &str,
+    evidence_digest: &[u8; 32],
+    observed_at: i64,
+    expected_observation: u32,
+    valid_until: i64,
+) -> Vec<u8> {
+    let shipment = hex(shipment_id);
+    let kind = match kind {
+        ObservationKind::Checkpoint => "Checkpoint",
+        ObservationKind::Border => "Border",
+    };
+    let evidence = digest_hex(evidence_digest);
+    let observed = format_sast(observed_at);
+    signed_message(
+        program_id,
+        instance_id,
+        "Record observation",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Shipment: {shipment}\n\
+             Batch: {batch_number} of {batch_count}\n\
+             Holder: {holder}\n\
+             Observer: {observer}\n\
+             Kind: {kind}\n\
+             Location: {location_code}\n\
+             Evidence: {evidence}\n\
+             Observed at: {observed}\n\
+             Observation: {expected_observation}"
         ),
         valid_until,
     )

@@ -6,6 +6,7 @@ import {
   AccountRole,
   type Address,
   createNoopSigner,
+  getAddressDecoder,
   getAddressEncoder,
   getProgramDerivedAddress,
   type Instruction,
@@ -13,25 +14,34 @@ import {
 } from "@solana/kit";
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
 import {
+  DOCUMENT_ATTESTATION_DISCRIMINATOR,
+  type DocumentAttestation,
+  DocumentKind,
   decodeClassPolicy,
   decodeCustodianClass,
+  decodeDocumentAttestation,
   decodeFacility,
   decodeLoan,
   decodeLot,
+  decodeManifestBatch,
   decodeOrganisation,
   decodePaymentAttestation,
   decodePoolShare,
   decodePosition,
   decodeProtocol,
   decodeReleaseIntent,
+  decodeShipment,
   decodeSimulationPool,
   decodeValuation,
   type Facility,
   findAuthorityPda,
   findFacilityPda,
+  findHandoverPda,
+  findIntakePda,
   findIntentPda,
   findLoanPda,
   findLockPda,
+  findMintAuthorityPda,
   findMintPda,
   findOrganisationPda,
   findPaymentPda,
@@ -45,6 +55,8 @@ import {
   getConfirmPaymentInstruction,
   getCreateReleaseIntentInstruction,
   getDepositInstruction,
+  getHandoverInstruction,
+  getIssueLotInstruction,
   getLiquidateInstruction,
   getOpenFacilityInstruction,
   getPledgeInstruction,
@@ -54,11 +66,13 @@ import {
   getSetValuationInstruction,
   getWithdrawInstruction,
   type Loan,
+  type ManifestBatch,
   type Organisation,
   PaymentPurpose,
   PaymentStatus,
   Role,
   SettlementMode,
+  type Shipment,
   THETIS_PROGRAM_ADDRESS,
   U64_MAX,
 } from "@thetis/contracts";
@@ -68,9 +82,14 @@ import {
   borrowMessage,
   buyPledgedMessage,
   correctionPaymentId,
+  custodyHandoverMessage,
   formatBps,
   formatMoney,
   formatSast,
+  handoverStage,
+  intakeDigest,
+  issueLotMessage,
+  normaliseTicket,
   paymentId,
   pledgeMessage,
   releaseIntentMessage,
@@ -80,12 +99,27 @@ import {
 } from "./texts.ts";
 import { type CommandKind, RelayError, type SignerRole, type StoredSigner } from "./views.ts";
 
+// DocumentAttestation (state.rs): 8 discriminator + protocol 32 + kind 1, then the subject.
+const DOCUMENT_SUBJECT_OFFSET = 41;
+const DOCUMENT_ATTESTATION_SIZE = 159;
+const DOCUMENT_DISCRIMINATOR = Buffer.from(DOCUMENT_ATTESTATION_DISCRIMINATOR);
+
 export const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as Address;
 export const TEXT_WINDOW_SECS = 270n;
+/** Custody texts (signing-inhouse.md §6.3): the program's 600 s ceiling less the 30 s margin. */
+export const CUSTODY_TEXT_WINDOW_SECS = 570n;
 const DAY = 86_400n;
 const HOUR = 3_600n;
 
-const SCOPES = { PLEDGE: 1 << 5, BUY: 1 << 6, LEND: 1 << 7, POOL: 1 << 8 } as const;
+// state.rs `scope`; field-app.md fold 18 adds the field kinds' scopes as their kinds land.
+const SCOPES = {
+  ISSUE: 1 << 0,
+  PLEDGE: 1 << 5,
+  CARRY: 1 << 10,
+  BUY: 1 << 6,
+  LEND: 1 << 7,
+  POOL: 1 << 8,
+} as const;
 type ScopeName = keyof typeof SCOPES;
 
 export interface SignerSpec {
@@ -103,7 +137,17 @@ export interface KindSpec {
   args: readonly string[];
   signers: readonly SignerSpec[];
   event: string;
+  /** validUntil = chainTime + this (field-app.md fold 17); unused by kinds without a text. */
+  textWindowSecs: bigint;
+  /** Plan keys of program-signer PDAs that never hold an account (field-app.md fold 25): they
+   * may enter the lookup table although they don't exist on chain. Derived from the plan, never
+   * from a signer's wallet. */
+  tableSigners?: readonly ProgramSignerKey[];
 }
+
+/** The plan keys a kind may name in `tableSigners` (field-app.md PR #69 fold 27): typed, so a
+ * misspelt key does not compile. */
+export type ProgramSignerKey = "mintAuthority" | "vaultAuthority";
 
 const tx = (role: SignerRole, scope: ScopeName | null, preCheckAuthority = true): SignerSpec => ({
   role,
@@ -111,11 +155,11 @@ const tx = (role: SignerRole, scope: ScopeName | null, preCheckAuthority = true)
   scope,
   preCheckAuthority,
 });
-const text = (role: SignerRole, scope: ScopeName): SignerSpec => ({
+const text = (role: SignerRole, scope: ScopeName, preCheckAuthority = true): SignerSpec => ({
   role,
   method: "text",
   scope,
-  preCheckAuthority: true,
+  preCheckAuthority,
 });
 
 export const KIND_SPECS: Record<CommandKind, KindSpec> = {
@@ -124,6 +168,7 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     args: ["borrower", "currency", "currencyDecimals", "termsVersion", "rateBps", "maxLtvBps"],
     signers: [tx("lender", "LEND")],
     event: "FacilityOpened",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   set_valuation: {
     mode: "both",
@@ -138,18 +183,21 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     ],
     signers: [tx("lender", "LEND")],
     event: "ValuationSet",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   pledge: {
     mode: "both",
     args: ["facility", "lot", "quantityKg"],
     signers: [text("borrower", "PLEDGE"), text("lender", "LEND")],
     event: "Pledged",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   record_advance: {
     mode: "fiat",
     args: ["loan", "amountMinor"],
     signers: [text("borrower", "PLEDGE"), tx("lender", "LEND")],
     event: "AdvanceRecorded",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   confirm_payment: {
     mode: "fiat",
@@ -164,58 +212,110 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     ],
     signers: [tx("lender", "LEND")],
     event: "PaymentConfirmed",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   correct_payment: {
     mode: "fiat",
     args: ["target", "correctionReference", "evidenceVersionId"],
     signers: [tx("lender", "LEND")],
     event: "PaymentCorrected",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
-  repay: { mode: "fiat", args: ["payment"], signers: [tx("lender", "LEND")], event: "Repaid" },
+  repay: {
+    mode: "fiat",
+    args: ["payment"],
+    signers: [tx("lender", "LEND")],
+    event: "Repaid",
+    textWindowSecs: TEXT_WINDOW_SECS,
+  },
   create_release_intent: {
     mode: "fiat",
     args: ["loan", "buyer", "quantityKg", "priceMinor", "topUpMinor", "expiresInHours"],
     signers: [text("seller", "PLEDGE")],
     event: "ReleaseIntentCreated",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   sell_pledged: {
     mode: "fiat",
     args: ["intent"],
     signers: [text("buyer", "BUY")],
     event: "PledgedSold",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
-  liquidate: { mode: "both", args: ["loan"], signers: [tx("lender", "LEND")], event: "Liquidated" },
+  liquidate: {
+    mode: "both",
+    args: ["loan"],
+    signers: [tx("lender", "LEND")],
+    event: "Liquidated",
+    textWindowSecs: TEXT_WINDOW_SECS,
+  },
   close_loan: {
     mode: "both",
     args: ["loan"],
     signers: [tx("lender", "LEND")],
     event: "LoanClosed",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   deposit: {
     mode: "simulation",
     args: ["amountMinor"],
     signers: [tx("depositor", "POOL")],
     event: "Deposited",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   withdraw: {
     mode: "simulation",
     args: ["amountMinor"],
     signers: [tx("depositor", "POOL")],
     event: "Withdrawn",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   borrow: {
     mode: "simulation",
     args: ["loan", "amountMinor", "wallet"],
     signers: [text("borrower", "PLEDGE")],
     event: "Borrowed",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   repay_simulated: {
     mode: "simulation",
     args: ["loan", "amountMinor"],
     signers: [tx("payer", null, false)],
     event: "Repaid",
+    textWindowSecs: TEXT_WINDOW_SECS,
+  },
+  issue_lot: {
+    mode: "both",
+    args: ["custodianClass", "owner", "lotId", "grade", "quantityKg", "weighbridgeTicket"],
+    signers: [text("custodian", "ISSUE")],
+    event: "LotIssued",
+    textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+    // Program-signer PDAs that never hold an account go into the table (fold 25; sizes, fold 28).
+    tableSigners: ["mintAuthority", "vaultAuthority"],
+  },
+  handover: {
+    mode: "both",
+    args: ["batch", "to"],
+    // Owner, 27 Nov (field-app.md §11): a next holder without an Authority is refused on chain.
+    signers: [text("holder", "CARRY"), text("next_holder", "CARRY", false)],
+    event: "CustodyHandedOver",
+    textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
   },
 };
+
+/** The addresses of a kind's program-signer PDAs, read from its plan (fold 25). */
+export function tableSignerAddresses(
+  kind: CommandKind,
+  plan: Readonly<Record<string, string>>,
+): Set<Address> {
+  return new Set(
+    (KIND_SPECS[kind].tableSigners ?? []).map((key) => {
+      const value = plan[key];
+      if (!value) throw new RelayError("INTERNAL", `plan has no ${key}`);
+      return value as Address;
+    }),
+  );
+}
 
 export function scopeBit(scope: string): number | null {
   return scope in SCOPES ? SCOPES[scope as ScopeName] : null;
@@ -241,6 +341,15 @@ function isBase58Address(value: string): boolean {
 
 const ARG_RULES: Record<string, (value: string) => boolean> = {
   borrower: (v) => UUID.test(v),
+  owner: (v) => UUID.test(v),
+  to: (v) => UUID.test(v),
+  batch: isBase58Address,
+  lotId: (v) => /^[A-Z0-9-]{1,16}$/.test(v),
+  weighbridgeTicket: (v) =>
+    Buffer.byteLength(v) >= 1 &&
+    Buffer.byteLength(v) <= 64 &&
+    /^[\x20-\x7e]*$/.test(v) &&
+    normaliseTicket(v) !== null,
   buyer: (v) => UUID.test(v),
   evidenceVersionId: (v) => UUID.test(v),
   facility: isBase58Address,
@@ -326,7 +435,8 @@ function hex(bytes: ReadonlyUint8Array): string {
 
 type Decoder<T> = (account: MaybeEncodedAccount) => { exists: boolean; data?: T };
 
-/** Reads accounts fresh at `confirmed`; a missing or wrong account is ACCOUNT_MISSING. */
+/** Reads accounts fresh at `confirmed`; a missing, foreign-owned or wrong account is
+ * ACCOUNT_MISSING. */
 export class Reader {
   readonly chain: ChainPort;
   readonly protocol: Address;
@@ -353,6 +463,10 @@ export class Reader {
   async read<T>(role: string, address: Address, decode: Decoder<T>, kindName: string): Promise<T> {
     const account = await this.raw(address);
     if (!account.exists) throw new RelayError("ACCOUNT_MISSING", `${role}: ${address}`);
+    // PR #69 fold 29: the owner is checked here, whatever the decoder checks.
+    if (account.programAddress !== THETIS_PROGRAM_ADDRESS) {
+      throw new RelayError("ACCOUNT_MISSING", `${address}: not a ${kindName}`);
+    }
     let decoded: { exists: boolean; data?: T };
     try {
       decoded = decode(account);
@@ -545,8 +659,8 @@ async function checkNotRecorded(context: PrepareContext, payment: Address) {
     throw new RelayError("PAYMENT_ALREADY_RECORDED", payment);
 }
 
-function validUntil(context: PrepareContext) {
-  return context.chainTime + TEXT_WINDOW_SECS;
+function validUntil(context: PrepareContext, kind: CommandKind) {
+  return context.chainTime + KIND_SPECS[kind].textWindowSecs;
 }
 
 async function readPool(context: PrepareContext) {
@@ -568,7 +682,211 @@ async function readPool(context: PrepareContext) {
 
 type Preparer = (context: PrepareContext) => Promise<Prepared>;
 
+/** field-app.md fold 21: the highest-version Origin attestation of this instance for the intake
+ * digest that is unrevoked and unexpired at chain time. */
+async function readOrigin(context: PrepareContext, subject: Uint8Array) {
+  const found = await context.reader.chain.programAccounts({
+    memcmp: { offset: DOCUMENT_SUBJECT_OFFSET, bytes: getAddressDecoder().decode(subject) },
+    dataSize: DOCUMENT_ATTESTATION_SIZE,
+  });
+  let best: { address: Address; sha256: Uint8Array; version: number; issuer: Address } | null =
+    null;
+  for (const account of found) {
+    if (!Buffer.from(account.data.subarray(0, 8)).equals(DOCUMENT_DISCRIMINATOR)) continue;
+    let document: DocumentAttestation;
+    try {
+      document = decodeDocumentAttestation(account).data;
+    } catch {
+      continue;
+    }
+    if (
+      document.protocol !== context.protocol ||
+      document.kind !== DocumentKind.Origin ||
+      !Buffer.from(Uint8Array.from(document.subject)).equals(Buffer.from(subject)) ||
+      document.revokedAt.__option !== "None" ||
+      document.validUntil <= context.chainTime
+    ) {
+      continue;
+    }
+    if (!best || document.version > best.version) {
+      best = {
+        address: account.address,
+        sha256: Uint8Array.from(document.sha256),
+        version: document.version,
+        issuer: document.issuer,
+      };
+    }
+  }
+  if (!best) throw new RelayError("ACCOUNT_MISSING", "origin: none valid");
+  return best;
+}
+
+const BATCH_STAGES = ["AtSource", "InTransit", "Arrived"] as const;
+
 const PREPARE: Record<CommandKind, Preparer> = {
+  async handover(context) {
+    const { args } = context;
+    const batchAddress = args.batch as Address;
+    const batch = (await context.reader.read(
+      "batch",
+      batchAddress,
+      decodeManifestBatch as never,
+      "ManifestBatch",
+    )) as ManifestBatch;
+    requireInitiator(context, batch.holder);
+    const shipment = (await context.reader.read(
+      "shipment",
+      batch.shipment,
+      decodeShipment as never,
+      "Shipment",
+    )) as Shipment;
+    const lot = await readLot(context, shipment.lot);
+    const holder = await context.reader.organisation("holderOrg", batch.holder);
+    const to = await context.reader.organisationByUuid("to", args.to as string);
+    const batchStage = BATCH_STAGES[batch.stage];
+    if (!batchStage)
+      throw new RelayError("ACCOUNT_MISSING", `${batchAddress}: not a ManifestBatch`);
+    const stage = handoverStage({
+      batchStage,
+      to: to.address,
+      destinationCustodian: shipment.destinationCustodian,
+    });
+    const [handover] = await findHandoverPda({
+      batch: batchAddress,
+      expectedSequence: batch.sequence,
+    });
+    const until = validUntil(context, "handover");
+    const manifest = Uint8Array.from(batch.manifestDigest as ArrayLike<number>);
+    const message = custodyHandoverMessage(
+      context.programId,
+      context.instanceId,
+      lot.lotId,
+      Uint8Array.from(shipment.shipmentId as ArrayLike<number>),
+      batch.index + 1,
+      batch.batchCount,
+      batch.quantityKg,
+      holder.name,
+      to.name,
+      stage,
+      manifest,
+      batch.sequence,
+      until,
+    );
+    return {
+      plan: {
+        shipment: batch.shipment,
+        batch: batchAddress,
+        lot: shipment.lot,
+        fromOrg: batch.holder,
+        toOrg: to.address,
+        sourceClass: shipment.source,
+        destinationClass: shipment.destination,
+        ...(stage === "Departure" ? { departureDocument: shipment.departureDocument } : {}),
+        handover,
+        stage,
+        manifestDigest: hex(manifest),
+        expectedSequence: String(batch.sequence),
+        validUntil: String(until),
+      },
+      fields: textFields(message),
+      text: message,
+      validUntil: until,
+      signers: stored("handover", [holder, to]),
+      lot: shipment.lot,
+      facility: null,
+      loan: null,
+      intent: null,
+      payment: null,
+    };
+  },
+
+  async issue_lot(context) {
+    const { args } = context;
+    const custodianClass = args.custodianClass as Address;
+    const site = (await context.reader.read(
+      "custodianClass",
+      custodianClass,
+      decodeCustodianClass as never,
+      "CustodianClass",
+    )) as { custodian: Address; classPolicy: Address; siteCode: string };
+    requireInitiator(context, site.custodian);
+    const policy = (await context.reader.read(
+      "classPolicy",
+      site.classPolicy,
+      decodeClassPolicy as never,
+      "ClassPolicy",
+    )) as { classCode: string; version: number; originRequired: boolean };
+    const owner = await context.reader.organisationByUuid("ownerOrg", args.owner as string);
+    const custodian = await context.reader.organisation("custodianOrg", site.custodian);
+    const ticket = normaliseTicket(args.weighbridgeTicket as string);
+    if (ticket === null) throw new RelayError("VALIDATION", "args.weighbridgeTicket");
+    const digestHex = intakeDigest(site.siteCode, ticket);
+    const digest = Uint8Array.from(Buffer.from(digestHex, "hex"));
+    const origin = policy.originRequired ? await readOrigin(context, digest) : null;
+    const lotId = args.lotId as string;
+    const [intake] = await findIntakePda({
+      protocol: context.protocol,
+      custodian: site.custodian,
+      intakeDigest: digest,
+    });
+    const [lot] = await getProgramDerivedAddress({
+      programAddress: THETIS_PROGRAM_ADDRESS,
+      seeds: ["lot", getAddressEncoder().encode(context.protocol), lotId],
+    });
+    const [mint] = await findMintPda({ lot });
+    const [mintAuthority] = await findMintAuthorityPda({ mint });
+    const [position] = await findPositionPda({ lot, owner: owner.address });
+    const { vaultAuthority, vault } = await lotVault(position, mint);
+    const quantityKg = BigInt(args.quantityKg as string);
+    const until = validUntil(context, "issue_lot");
+    const message = issueLotMessage(
+      context.programId,
+      context.instanceId,
+      lotId,
+      policy.classCode,
+      policy.version,
+      args.grade as string,
+      quantityKg,
+      owner.name,
+      custodian.name,
+      site.siteCode,
+      digest,
+      origin,
+      until,
+    );
+    return {
+      plan: {
+        classPolicy: site.classPolicy,
+        custodianClass,
+        ownerOrg: owner.address,
+        custodianOrg: site.custodian,
+        ...(origin ? { origin: origin.address, originIssuer: origin.issuer } : {}),
+        intake,
+        lot,
+        mint,
+        mintAuthority,
+        position,
+        vaultAuthority,
+        vault,
+        lotId,
+        grade: args.grade as string,
+        quantityKg: String(quantityKg),
+        ticket,
+        intakeDigest: digestHex,
+        validUntil: String(until),
+      },
+      fields: textFields(message),
+      text: message,
+      validUntil: until,
+      signers: stored("issue_lot", [custodian]),
+      lot,
+      facility: null,
+      loan: null,
+      intent: null,
+      payment: null,
+    };
+  },
+
   async open_facility(context) {
     const { args } = context;
     if (context.initiator.role !== Role.Lender) notAuthorised("only a lender opens a facility");
@@ -709,7 +1027,7 @@ const PREPARE: Record<CommandKind, Preparer> = {
     const loanIndex = f.data.loanCount;
     const [loan] = await findLoanPda({ facility: f.address, loanIndex });
     const [lock] = await findLockPda({ loan });
-    const until = validUntil(context);
+    const until = validUntil(context, "pledge");
     const quantityKg = BigInt(args.quantityKg as string);
     const message = pledgeMessage(
       context.programId,
@@ -763,7 +1081,7 @@ const PREPARE: Record<CommandKind, Preparer> = {
     const principalAfter = loan.principal + amount;
     if (principalAfter > U64_MAX)
       throw new RelayError("VALIDATION", "principal after the advance is above u64");
-    const until = validUntil(context);
+    const until = validUntil(context, "record_advance");
     const message = advanceMessage(
       context.programId,
       context.instanceId,
@@ -983,7 +1301,7 @@ const PREPARE: Record<CommandKind, Preparer> = {
     const nonce = new DataView(new Uint8Array(randomBytes(8)).buffer).getBigUint64(0, true);
     const [intent] = await findIntentPda({ loan: address, nonce });
     const expiresAt = context.chainTime + BigInt(args.expiresInHours as string) * HOUR;
-    const until = validUntil(context);
+    const until = validUntil(context, "create_release_intent");
     const quantityKg = BigInt(args.quantityKg as string);
     const price = BigInt(args.priceMinor as string);
     const topUp = BigInt(args.topUpMinor as string);
@@ -1074,7 +1392,7 @@ const PREPARE: Record<CommandKind, Preparer> = {
     const [buyerPosition] = await findPositionPda({ lot: intent.lot, owner: intent.buyer });
     const sellerVault = await lotVault(intent.position, mint);
     const buyerVault = await lotVault(buyerPosition, mint);
-    const until = validUntil(context);
+    const until = validUntil(context, "sell_pledged");
     const message = buyPledgedMessage(
       context.programId,
       context.instanceId,
@@ -1217,7 +1535,7 @@ const PREPARE: Record<CommandKind, Preparer> = {
     const principalAfter = loan.principal + amount;
     if (principalAfter > U64_MAX)
       throw new RelayError("VALIDATION", "principal after the loan is above u64");
-    const until = validUntil(context);
+    const until = validUntil(context, "borrow");
     const message = borrowMessage(
       context.programId,
       context.instanceId,
@@ -1450,6 +1768,48 @@ export async function buildInstruction(input: BuildInput): Promise<Instruction> 
     return createNoopSigner(wallet);
   };
   switch (input.kind) {
+    case "handover":
+      return getHandoverInstruction({
+        sponsor,
+        protocol,
+        shipment: a(plan.shipment),
+        batch: a(plan.batch),
+        lot: a(plan.lot),
+        fromOrg: a(plan.fromOrg),
+        fromAuthority: await authority(protocol, wallets.holder),
+        toOrg: a(plan.toOrg),
+        toAuthority: await authority(protocol, wallets.next_holder),
+        sourceClass: a(plan.sourceClass),
+        destinationClass: a(plan.destinationClass),
+        ...(plan.departureDocument ? { departureDocument: a(plan.departureDocument) } : {}),
+        handover: a(plan.handover),
+        manifestDigest: bytes(plan.manifestDigest),
+        expectedSequence: n(plan.expectedSequence),
+        validUntil: n(plan.validUntil),
+      });
+    case "issue_lot":
+      return getIssueLotInstruction({
+        sponsor,
+        protocol,
+        authority: await authority(protocol, wallets.custodian),
+        owner: a(plan.ownerOrg),
+        custodian: a(plan.custodianOrg),
+        classPolicy: a(plan.classPolicy),
+        custodianClass: a(plan.custodianClass),
+        ...(plan.origin ? { origin: a(plan.origin), originIssuer: a(plan.originIssuer) } : {}),
+        intake: a(plan.intake),
+        lot: a(plan.lot),
+        mint: a(plan.mint),
+        mintAuthority: a(plan.mintAuthority),
+        position: a(plan.position),
+        vaultAuthority: a(plan.vaultAuthority),
+        vault: a(plan.vault),
+        lotId: a(plan.lotId),
+        grade: a(plan.grade),
+        quantityKg: n(plan.quantityKg),
+        intakeDigest: bytes(plan.intakeDigest),
+        validUntil: n(plan.validUntil),
+      });
     case "open_facility":
       return getOpenFacilityInstruction({
         lender: signer("lender"),

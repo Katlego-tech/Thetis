@@ -505,8 +505,10 @@ describe("demo reset (demo.md §5)", () => {
     expect(Number(phone.total) / 1e9).toBeCloseTo(0.0524, 3);
   });
 
-  it("a lender run refuses before sending anything with needs T067r while texts.ts has no issueLotMessage", async () => {
-    expect(await loadIssueText()).toBeNull();
+  it("the real issueLotMessage from services/api binds, so a lender run can build CR-0001's text", async () => {
+    expect(await loadIssueText()).toBeTypeOf("function");
+  });
+  it("a lender run refuses before sending anything with needs T067r when no issueLotMessage is available", async () => {
     const dir = await keysDir();
     await castFile(dir);
     const run = deps(dir);

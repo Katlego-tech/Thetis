@@ -2159,6 +2159,87 @@
       ]
     },
     {
+      "name": "record_observation",
+      "discriminator": [
+        37,
+        148,
+        41,
+        216,
+        83,
+        104,
+        162,
+        96
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "observer_org"
+        },
+        {
+          "name": "observer_authority"
+        },
+        {
+          "name": "holder_org"
+        },
+        {
+          "name": "shipment"
+        },
+        {
+          "name": "batch",
+          "writable": true
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "kind",
+          "type": {
+            "defined": {
+              "name": "ObservationKind"
+            }
+          }
+        },
+        {
+          "name": "location_code",
+          "type": "string"
+        },
+        {
+          "name": "evidence_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "observed_at",
+          "type": "i64"
+        },
+        {
+          "name": "expected_observation",
+          "type": "u32"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "redeem",
       "discriminator": [
         184,
@@ -3975,6 +4056,19 @@
         186,
         154,
         56
+      ]
+    },
+    {
+      "name": "ObservationRecorded",
+      "discriminator": [
+        233,
+        242,
+        174,
+        139,
+        15,
+        36,
+        175,
+        196
       ]
     },
     {
@@ -5827,6 +5921,77 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ObservationKind",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Checkpoint"
+          },
+          {
+            "name": "Border"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ObservationRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "batch",
+            "type": "pubkey"
+          },
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "observer",
+            "type": "pubkey"
+          },
+          {
+            "name": "holder",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": {
+              "defined": {
+                "name": "ObservationKind"
+              }
+            }
+          },
+          {
+            "name": "location_code",
+            "type": "string"
+          },
+          {
+            "name": "evidence_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "index",
+            "type": "u32"
           }
         ]
       }
