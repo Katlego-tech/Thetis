@@ -53,7 +53,9 @@ const idl = JSON.parse(
   readFileSync(new URL("../../../packages/contracts/idl/thetis.json", import.meta.url), "utf8"),
 ) as { instructions: IdlInstruction[] };
 
-const PHASE_2 = [
+// The Phase 2 lending instructions, then the field kinds whose instructions exist (field-app.md
+// §6.3, T067r folds): each is an explicit entry (live-lending.md fold 7).
+const SPONSORED_NAMES = [
   "open_facility",
   "set_valuation",
   "pledge",
@@ -68,6 +70,7 @@ const PHASE_2 = [
   "deposit",
   "withdraw",
   "borrow",
+  "issue_lot",
 ];
 const TEXT_SIGNED = new Set([
   "pledge",
@@ -75,6 +78,7 @@ const TEXT_SIGNED = new Set([
   "create_release_intent",
   "sell_pledged",
   "borrow",
+  "issue_lot",
 ]);
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 const SYSTEM = "11111111111111111111111111111111" as Address;
@@ -173,7 +177,9 @@ function refused(wireBase64: string, detail?: RegExp) {
 describe("sponsor allowlist", () => {
   it("signs each allowlisted command shape and both lookup-table shapes", async () => {
     // The hard-coded table is the IDL's: discriminator, account count, protocol and sponsor slots.
-    expect(SPONSORED_INSTRUCTIONS.map((entry) => entry.name).sort()).toEqual([...PHASE_2].sort());
+    expect(SPONSORED_INSTRUCTIONS.map((entry) => entry.name).sort()).toEqual(
+      [...SPONSORED_NAMES].sort(),
+    );
     for (const entry of SPONSORED_INSTRUCTIONS) {
       const definition = idlInstruction(entry.name);
       const names = definition.accounts.map((account) => account.name);
@@ -184,7 +190,7 @@ describe("sponsor allowlist", () => {
         names.flatMap((name, index) => (name === "sponsor" || name === "payer" ? [index] : [])),
       );
     }
-    for (const name of PHASE_2) {
+    for (const name of SPONSORED_NAMES) {
       const instructions = TEXT_SIGNED.has(name)
         ? [limit(), ed25519(), thetis(name)]
         : [limit(), thetis(name)];

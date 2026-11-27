@@ -44,7 +44,9 @@ import {
 } from "@solana-program/token";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
+  decodeCustodianClass,
   decodeLoan,
+  decodeLot,
   decodePaymentAttestation,
   findAuthorityPda,
   findIntakePda,
@@ -74,7 +76,7 @@ import type { ChainPort } from "../src/commands/chain.ts";
 import { KIND_SPECS } from "../src/commands/plan.ts";
 import type { CommandDependencies } from "../src/commands/routes.ts";
 import { keyFileSponsor, SponsorUnavailableError } from "../src/commands/sponsor.ts";
-import { envelope, formatTonnes } from "../src/commands/texts.ts";
+import { envelope, formatTonnes, intakeDigest, issueLotMessage } from "../src/commands/texts.ts";
 import type { CommandView } from "../src/commands/views.ts";
 import { localSupabaseEnv } from "../src/local.ts";
 import { route } from "../src/routes.ts";
@@ -122,9 +124,14 @@ type WalletKey =
   | "khunouUnscoped"
   | "khunouUnlinked"
   | "buyer"
-  | "kopano";
+  | "kopano"
+  | "kopanoField"
+  | "kopanoNoAuthority";
 const SCOPE = { ISSUE: 1, TRANSFER: 2, PLEDGE: 32, BUY: 64, LEND: 128, POOL: 256 } as const;
-const WALLETS: Record<WalletKey, { org: OrgKey; scopes: number; linked: boolean }> = {
+const WALLETS: Record<
+  WalletKey,
+  { org: OrgKey; scopes: number; linked: boolean; delegated?: false }
+> = {
   lenderOne: { org: "lenderOne", scopes: SCOPE.LEND | SCOPE.POOL, linked: true },
   lenderTwo: { org: "lenderTwo", scopes: SCOPE.LEND, linked: true },
   khunou: { org: "khunou", scopes: SCOPE.PLEDGE, linked: true },
@@ -132,6 +139,9 @@ const WALLETS: Record<WalletKey, { org: OrgKey; scopes: number; linked: boolean 
   khunouUnlinked: { org: "khunou", scopes: SCOPE.PLEDGE, linked: false },
   buyer: { org: "buyer", scopes: SCOPE.BUY, linked: true },
   kopano: { org: "kopano", scopes: SCOPE.ISSUE, linked: false },
+  // The field kinds (field-app.md §6.3): Kopano's linked issuer, and a linked wallet with no Authority.
+  kopanoField: { org: "kopano", scopes: SCOPE.ISSUE, linked: true },
+  kopanoNoAuthority: { org: "kopano", scopes: 0, linked: true, delegated: false },
 };
 
 let clients: AccessClients;
@@ -340,6 +350,7 @@ interface World {
   custodianClass: Address;
   orgs: Record<OrgKey, Address>;
   mint: Address | null;
+  instanceId: Uint8Array;
 }
 
 function send(svm: LiteSVM, instructions: Instruction[], signers: KeyPairSigner[]) {
@@ -533,6 +544,7 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
     [accreditor],
   );
   for (const key of Object.keys(WALLETS) as WalletKey[]) {
+    if (WALLETS[key].delegated === false) continue;
     const [authority] = await findAuthorityPda({ protocol, wallet: wallets[key].address });
     await send(
       svm,
@@ -700,7 +712,7 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
     sleep: async () => chain.advanceSlots(10n),
     now: () => Date.now(),
   };
-  return { svm, chain, deps, protocol, lot, custodianClass, orgs, mint: poolMint };
+  return { svm, chain, deps, protocol, lot, custodianClass, orgs, mint: poolMint, instanceId };
 }
 
 // ---------------------------------------------------------------- the API, as the web calls it
@@ -1797,4 +1809,174 @@ describe("relay commands on the real program", () => {
     const logs = (await w.chain.transaction(view.transaction?.signature ?? ""))?.logs ?? [];
     expect(logs.some((line) => line.startsWith("Program data: "))).toBe(true);
   }, 120_000);
+});
+
+// ---------------------------------------------------------------- the field kinds (field-app.md §6.3)
+
+const TICKET = "WB2611-0042";
+
+function issueArgs(
+  w: World,
+  lotId: string,
+  quantityKg: string,
+  weighbridgeTicket = "wb 2611-0042",
+) {
+  return {
+    custodianClass: w.custodianClass,
+    owner: orgIds.khunou,
+    lotId,
+    grade: GRADE,
+    quantityKg,
+    weighbridgeTicket,
+  };
+}
+
+const kopanoIssuer = (): Actor => ({ org: "kopano", wallet: wallets.kopanoField });
+
+async function lotPda(protocol: Address, lotId: string) {
+  const [found] = await getProgramDerivedAddress({
+    programAddress: THETIS_PROGRAM_ADDRESS,
+    seeds: ["lot", getAddressEncoder().encode(protocol), lotId],
+  });
+  return found;
+}
+
+function failedWith(view: CommandView, code: string) {
+  const shown = JSON.stringify({ status: view.status, error: view.error });
+  expect(view.status, shown).toBe("failed");
+  expect(view.error?.code, shown).toBe(code);
+  expect(view.transaction?.explorerUrl).toBe(
+    `https://explorer.solana.com/tx/${view.transaction?.signature}?cluster=devnet`,
+  );
+}
+
+describe("field kinds on the real program", () => {
+  it("issue_lot through /v1/commands lands with the pinned text and values", async () => {
+    const w = await world();
+    const chainTime = w.svm.getClock().unixTimestamp;
+    const created = await create(w, "kopano", "issue_lot", issueArgs(w, "CR-0002", "2000000"));
+    const lot = await lotPda(w.protocol, "CR-0002");
+    expect(created.kind).toBe("issue_lot");
+    expect(created.lot).toBe(lot);
+    expect(created.signers).toStrictEqual([
+      { role: "custodian", organisationId: orgIds.kopano, method: "text", signed: null },
+    ]);
+    const validUntil = BigInt(Date.parse(created.text?.validUntil ?? "") / 1000);
+    expect(validUntil - chainTime).toBe(570n);
+    const expected = issueLotMessage(
+      THETIS_PROGRAM_ADDRESS,
+      w.instanceId,
+      "CR-0002",
+      "CHROME",
+      1,
+      GRADE,
+      2_000_000n,
+      ORGS.khunou.name,
+      ORGS.kopano.name,
+      SITE,
+      Uint8Array.from(Buffer.from(intakeDigest(SITE, TICKET), "hex")),
+      null,
+      validUntil,
+    );
+    const sent = new Uint8Array(getBase64Encoder().encode(created.text?.messageBase64 ?? ""));
+    expect(Buffer.from(sent).equals(Buffer.from(expected))).toBe(true);
+    expect(created.text?.messageSha256).toBe(createHash("sha256").update(expected).digest("hex"));
+    expect(created.fields).toContainEqual({ label: "Origin document", value: "not required" });
+
+    const view = confirmed(
+      data<CommandView>(await signText(w, "kopano", created, "custodian", wallets.kopanoField)),
+      "LotIssued",
+    );
+    const [intake] = await findIntakePda({
+      protocol: w.protocol,
+      custodian: w.orgs.kopano,
+      intakeDigest: Uint8Array.from(Buffer.from(intakeDigest(SITE, TICKET), "hex")),
+    });
+    expect(view.outcome?.data).toStrictEqual({
+      lot,
+      owner: w.orgs.khunou,
+      quantityKg: "2000000",
+      intake,
+      revision: "0",
+    });
+    const stored = decodeLot(w.svm.getAccount(lot) as never).data;
+    expect(stored.lotId).toBe("CR-0002");
+    expect(stored.supplyKg).toBe(2_000_000n);
+    expect(stored.grade).toBe(GRADE);
+    expect(stored.custodianClass).toBe(w.custodianClass);
+    const site = decodeCustodianClass(w.svm.getAccount(w.custodianClass) as never).data;
+    expect(site.occupiedKg).toBe(LOT_KG + 2_000_000n);
+    // Fold 9: an account the instruction created never went into the lookup table.
+    const { address: table } = mustSucceed(
+      await service
+        .from("relay_lookup_tables")
+        .select("address")
+        .eq("protocol", w.protocol)
+        .single(),
+    );
+    expect(lookupTableAddresses(w.svm, address(table as string))).not.toContain(lot);
+  });
+
+  it("a second lot for the same weighbridge ticket fails on chain as Anchor0", async () => {
+    const w = await world();
+    confirmed(
+      await run(w, "kopano", "issue_lot", issueArgs(w, "CR-0002", "1000000"), {
+        custodian: kopanoIssuer(),
+      }),
+      "LotIssued",
+    );
+    const again = await run(
+      w,
+      "kopano",
+      "issue_lot",
+      issueArgs(w, "CR-0003", "1000000", "WB2611-0042"),
+      { custodian: kopanoIssuer() },
+    );
+    failedWith(again, "Anchor0");
+    expect(w.svm.getAccount(await lotPda(w.protocol, "CR-0003")).exists).toBe(false);
+  });
+
+  it("a lot above the site's free capacity fails on chain as OverCapacity", async () => {
+    const w = await world();
+    // 10,000 t approved, 5,000 t occupied by CR-0001.
+    const view = await run(w, "kopano", "issue_lot", issueArgs(w, "CR-0002", "5000001"), {
+      custodian: kopanoIssuer(),
+    });
+    failedWith(view, "OverCapacity");
+    const site = decodeCustodianClass(w.svm.getAccount(w.custodianClass) as never).data;
+    expect(site.occupiedKg).toBe(LOT_KG);
+  });
+
+  it("a linked custodian wallet with no Authority is AUTHORITY_INVALID and nothing is sent", async () => {
+    const w = await world();
+    const created = await create(w, "kopano", "issue_lot", issueArgs(w, "CR-0002", "1000000"));
+    const before = w.chain.sent.length;
+    const response = await signText(w, "kopano", created, "custodian", wallets.kopanoNoAuthority);
+    expect(response.statusCode).toBe(409);
+    expect(errorOf(response).code).toBe("AUTHORITY_INVALID");
+    expect(w.chain.sent.length).toBe(before);
+    const view = data<CommandView>(
+      await call(w, "GET", `/v1/commands/${created.id}`, people.kopano),
+    );
+    expect(view.status).toBe("awaiting_signatures");
+    expect(view.transaction).toBeNull();
+  });
+
+  it("refuses an initiator that is not the class's custodian and an owner that is not on chain", async () => {
+    const w = await world();
+    const notCustodian = await call(w, "POST", "/v1/commands", people.khunou, {
+      kind: "issue_lot",
+      organisationId: orgIds.khunou,
+      args: issueArgs(w, "CR-0002", "1000000"),
+    });
+    expect(notCustodian.statusCode).toBe(403);
+    expect(errorOf(notCustodian).code).toBe("NOT_AUTHORISED");
+    const missingOwner = await call(w, "POST", "/v1/commands", people.kopano, {
+      kind: "issue_lot",
+      organisationId: orgIds.kopano,
+      args: { ...issueArgs(w, "CR-0002", "1000000"), owner: randomUUID() },
+    });
+    expect(errorOf(missingOwner).code).toBe("ACCOUNT_MISSING");
+    expect(errorOf(missingOwner).detail).toMatch(/^ownerOrg: /);
+  });
 });
