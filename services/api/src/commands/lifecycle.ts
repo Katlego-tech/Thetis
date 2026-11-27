@@ -678,7 +678,8 @@ async function compileCommand(
   // Table keys: every account except signers, the invoked programs and the protocol, which
   // stays static so the sponsor can check it; and only accounts that exist on chain now, so an
   // account the instruction creates stays static and unsigned requests can't fill the table
-  // (fold 9).
+  // (fold 9). A kind's program-signer PDAs, which never hold an account, are the exception
+  // (field-app.md fold 25).
   const signerKeys = new Set(Object.values(wallets));
   const candidates = [
     ...new Set(
@@ -697,7 +698,12 @@ async function compileCommand(
     ),
   ];
   const onChain = await relay.chain.accounts(candidates);
-  const existing = candidates.filter((_, index) => onChain[index]?.exists === true);
+  const programSigners = new Set(
+    (KIND_SPECS[row.kind].tableSigners ?? []).map((key) => row.plan[key]),
+  );
+  const existing = candidates.filter(
+    (key, index) => onChain[index]?.exists === true || programSigners.has(key),
+  );
   let table: Awaited<ReturnType<typeof ensureTableKeys>>;
   try {
     table = await ensureTableKeys({ ...relay, service: context.service }, existing);

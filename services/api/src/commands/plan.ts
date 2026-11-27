@@ -139,6 +139,10 @@ export interface KindSpec {
   event: string;
   /** validUntil = chainTime + this (field-app.md fold 17); unused by kinds without a text. */
   textWindowSecs: bigint;
+  /** Plan keys of program-signer PDAs that never hold an account (field-app.md fold 25): they
+   * may enter the lookup table although they don't exist on chain. Derived from the plan, never
+   * from a signer's wallet. */
+  tableSigners?: readonly string[];
 }
 
 const tx = (role: SignerRole, scope: ScopeName | null, preCheckAuthority = true): SignerSpec => ({
@@ -282,6 +286,8 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     signers: [text("custodian", "ISSUE")],
     event: "LotIssued",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+    // With the five accounts it creates static, the transaction is 1,256 bytes otherwise.
+    tableSigners: ["mintAuthority", "vaultAuthority"],
   },
   handover: {
     mode: "both",

@@ -1957,7 +1957,14 @@ describe("field kinds on the real program", () => {
         .eq("protocol", w.protocol)
         .single(),
     );
-    expect(lookupTableAddresses(w.svm, address(table as string))).not.toContain(lot);
+    const tableKeys = lookupTableAddresses(w.svm, address(table as string));
+    expect(tableKeys).not.toContain(lot);
+    // Fold 25: the mint and vault authorities (never accounts) are table entries, so the
+    // transaction fits devnet's 1,232 bytes (the LiteSVM port refuses a larger one).
+    const [mint] = await findMintPda({ lot });
+    const [position] = await findPositionPda({ lot, owner: w.orgs.khunou });
+    expect(tableKeys).toContain((await findMintAuthorityPda({ mint }))[0]);
+    expect(tableKeys).toContain((await findVaultAuthorityPda({ position }))[0]);
   });
 
   it("a second lot for the same weighbridge ticket fails on chain as Anchor0", async () => {
