@@ -1,8 +1,37 @@
 // The field kinds' texts, digests and specs (field-app.md §6.3, §6.4 and the T067r folds).
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  type Address,
+  decodeAccount,
+  generateKeyPairSigner,
+  type Instruction,
+  lamports,
+  type MaybeEncodedAccount,
+} from "@solana/kit";
+import {
+  getCustodianClassDecoder,
+  getCustodianClassEncoder,
+  THETIS_PROGRAM_ADDRESS,
+} from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
-import { KIND_SPECS, validateArgs } from "../src/commands/plan.ts";
+import {
+  admittedKeys,
+  commandInstructions,
+  FIXED_TABLE_KEYS,
+  MAX_TRANSACTION_BYTES,
+  measureCommand,
+  tableCandidates,
+} from "../src/commands/compile.ts";
+import { sharedMessageInstruction } from "../src/commands/ed25519.ts";
+import {
+  buildInstruction,
+  KIND_SPECS,
+  type KindSpec,
+  Reader,
+  tableSignerAddresses,
+  validateArgs,
+} from "../src/commands/plan.ts";
 import {
   custodyHandoverMessage,
   handoverStage,
@@ -10,6 +39,7 @@ import {
   issueLotMessage,
   normaliseTicket,
 } from "../src/commands/texts.ts";
+import type { SignerRole } from "../src/commands/views.ts";
 
 const PROGRAM = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -235,5 +265,320 @@ describe("handover kind spec (field-app.md §6.3)", () => {
     expect(() => validateArgs("handover", { ...args, batch: "x" })).toThrow(
       expect.objectContaining({ code: "VALIDATION", detail: "args.batch" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------- transaction size (PR #69 folds)
+
+const SYSVAR_INSTRUCTIONS = "Sysvar1nstructions1111111111111111111111111" as Address;
+const newKey = async () => (await generateKeyPairSigner()).address;
+
+/** The size the relay computes for one command, with the accounts named in `absent` not on chain
+ * (the ones the instruction creates, a wallet-derived Authority that was never delegated, and
+ * the instructions sysvar, which never has an account). */
+async function commandSize(
+  kind: "issue_lot" | "handover",
+  plan: Record<string, string>,
+  wallets: Partial<Record<SignerRole, Address>>,
+  text: Uint8Array,
+  absent: (thetis: Instruction) => Address[],
+) {
+  const sponsor = await newKey();
+  const protocol = await newKey();
+  const thetis = await buildInstruction({ kind, plan, protocol, sponsor, wallets });
+  const signers = Object.values(wallets) as Address[];
+  const ed25519 = sharedMessageInstruction(
+    signers.map((wallet) => ({ wallet, signature: new Uint8Array(64) })),
+    text,
+  );
+  const candidates = tableCandidates(thetis, { protocol, sponsor, signers });
+  const missing = new Set([SYSVAR_INSTRUCTIONS, ...absent(thetis)]);
+  const keys = admittedKeys(
+    candidates,
+    candidates.map((key) => !missing.has(key)),
+    tableSignerAddresses(kind, plan),
+  );
+  return {
+    keys,
+    candidates,
+    bytes: measureCommand(commandInstructions(thetis, ed25519), sponsor, keys),
+  };
+}
+
+async function issueSize(values: {
+  lotId: string;
+  grade: string;
+  classCode: string;
+  siteCode: string;
+  owner: string;
+  custodian: string;
+  origin: boolean;
+}) {
+  const plan: Record<string, string> = {};
+  for (const key of [
+    "classPolicy",
+    "custodianClass",
+    "ownerOrg",
+    "custodianOrg",
+    "intake",
+    "lot",
+    "mint",
+    "mintAuthority",
+    "position",
+    "vaultAuthority",
+    "vault",
+    ...(values.origin ? ["origin", "originIssuer"] : []),
+  ])
+    plan[key] = await newKey();
+  Object.assign(plan, {
+    lotId: values.lotId,
+    grade: values.grade,
+    quantityKg: "5000000",
+    intakeDigest: "ab".repeat(32),
+    validUntil: String(DEMO.validUntil),
+  });
+  const text = issueLotMessage(
+    PROGRAM,
+    DEMO.instanceId,
+    values.lotId,
+    values.classCode,
+    1,
+    values.grade,
+    5_000_000n,
+    values.owner,
+    values.custodian,
+    values.siteCode,
+    new Uint8Array(32),
+    values.origin ? { sha256: new Uint8Array(32), version: 1 } : null,
+    DEMO.validUntil,
+  );
+  const created = ["intake", "lot", "mint", "position", "vault", "mintAuthority", "vaultAuthority"];
+  return commandSize("issue_lot", plan, { custodian: await newKey() }, text, () =>
+    created.map((key) => plan[key] as Address),
+  );
+}
+
+async function handoverSize(values: {
+  lotId: string;
+  from: string;
+  to: string;
+  stage: "Departure" | "Transfer" | "Arrival";
+  nextHolderAuthority: boolean;
+}) {
+  const plan: Record<string, string> = {};
+  for (const key of [
+    "shipment",
+    "batch",
+    "lot",
+    "fromOrg",
+    "toOrg",
+    "sourceClass",
+    "destinationClass",
+    "handover",
+    ...(values.stage === "Departure" ? ["departureDocument"] : []),
+  ])
+    plan[key] = await newKey();
+  Object.assign(plan, {
+    manifestDigest: "44".repeat(32),
+    expectedSequence: "0",
+    validUntil: String(DEMO.validUntil),
+  });
+  const text = custodyHandoverMessage(
+    PROGRAM,
+    DEMO.instanceId,
+    values.lotId,
+    new Uint8Array(16),
+    1,
+    1,
+    5_000_000n,
+    values.from,
+    values.to,
+    values.stage,
+    new Uint8Array(32),
+    0n,
+    DEMO.validUntil,
+  );
+  const wallets = { holder: await newKey(), next_holder: await newKey() };
+  return commandSize("handover", plan, wallets, text, (thetis) => [
+    plan.handover as Address,
+    // toAuthority, slot 8: absent when the next holder was never delegated.
+    ...(values.nextHolderAuthority ? [] : [thetis.accounts?.[8]?.address as Address]),
+  ]);
+}
+
+const DEMO_FIELDS = {
+  lotId: "CR-0001",
+  grade: "G1",
+  classCode: "CHROME",
+  siteCode: "KOPANO-YARD-1",
+};
+const WIDEST = {
+  lotId: "L".repeat(16),
+  grade: "G".repeat(8),
+  classCode: "C".repeat(8),
+  siteCode: "S".repeat(16),
+};
+const name = (length: number) => "N".repeat(length);
+
+describe("transaction size (field-app.md PR #69 review folds)", () => {
+  it("lets the fixed program and sysvar addresses into the table, the instructions sysvar too", async () => {
+    const { keys } = await issueSize({
+      ...DEMO_FIELDS,
+      owner: DEMO.owner,
+      custodian: DEMO.custodian,
+      origin: false,
+    });
+    expect(keys).toContain(SYSVAR_INSTRUCTIONS);
+    for (const fixed of [
+      SYSVAR_INSTRUCTIONS,
+      "11111111111111111111111111111111",
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    ]) {
+      expect(FIXED_TABLE_KEYS.has(fixed as Address)).toBe(true);
+    }
+  });
+
+  it("fits the demo issue_lot, with and without origin, under 1,232 bytes", async () => {
+    const plain = await issueSize({
+      ...DEMO_FIELDS,
+      owner: DEMO.owner,
+      custodian: DEMO.custodian,
+      origin: false,
+    });
+    const origin = await issueSize({
+      ...DEMO_FIELDS,
+      owner: DEMO.owner,
+      custodian: DEMO.custodian,
+      origin: true,
+    });
+    expect(plain.bytes).toBe(1_162);
+    expect(origin.bytes).toBe(1_219);
+    expect(MAX_TRANSACTION_BYTES).toBe(1_232);
+  });
+
+  it("fits the widest issue_lot names claimed: 48 and 48 without origin, 55 in all with origin", async () => {
+    const plain = await issueSize({
+      ...DEMO_FIELDS,
+      owner: name(48),
+      custodian: name(48),
+      origin: false,
+    });
+    expect(plain.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+    const fits = await issueSize({
+      ...DEMO_FIELDS,
+      owner: name(27),
+      custodian: name(28),
+      origin: true,
+    });
+    expect(fits.bytes).toBe(MAX_TRANSACTION_BYTES);
+    const over = await issueSize({
+      ...DEMO_FIELDS,
+      owner: name(28),
+      custodian: name(28),
+      origin: true,
+    });
+    expect(over.bytes).toBe(MAX_TRANSACTION_BYTES + 1);
+    // Every field at its widest: 77 name characters in all without origin, 20 with it.
+    expect(
+      (await issueSize({ ...WIDEST, owner: name(48), custodian: name(29), origin: false })).bytes,
+    ).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+    expect(
+      (await issueSize({ ...WIDEST, owner: name(48), custodian: name(30), origin: false })).bytes,
+    ).toBeGreaterThan(MAX_TRANSACTION_BYTES);
+    expect(
+      (await issueSize({ ...WIDEST, owner: name(10), custodian: name(10), origin: true })).bytes,
+    ).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+    // The guard's case: every field at its widest, with origin.
+    expect(
+      (await issueSize({ ...WIDEST, owner: name(48), custodian: name(48), origin: true })).bytes,
+    ).toBe(1_308);
+  });
+
+  it("fits every handover with 48-character names and a 16-character lot ID", async () => {
+    for (const stage of ["Departure", "Transfer", "Arrival"] as const) {
+      for (const nextHolderAuthority of [true, false]) {
+        const { bytes } = await handoverSize({
+          lotId: "L".repeat(16),
+          from: name(48),
+          to: name(48),
+          stage,
+          nextHolderAuthority,
+        });
+        expect(bytes, `${stage} ${nextHolderAuthority}`).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+      }
+    }
+    const widest = await handoverSize({
+      lotId: "L".repeat(16),
+      from: name(48),
+      to: name(48),
+      stage: "Departure",
+      nextHolderAuthority: false,
+    });
+    expect(widest.bytes).toBe(1_228);
+  });
+
+  it("never admits a wallet-derived key that is not on chain: the undelegated next holder's Authority stays static", async () => {
+    const { keys, candidates } = await handoverSize({
+      lotId: "CR-0001",
+      from: DEMO.custodian,
+      to: "Mosela Haulage",
+      stage: "Departure",
+      nextHolderAuthority: false,
+    });
+    const admittedOnly = candidates.filter((key) => !keys.includes(key));
+    // The handover PDA the instruction creates and the next holder's missing Authority.
+    expect(admittedOnly).toHaveLength(2);
+  });
+
+  it("types tableSigners as plan keys, so a misspelt key does not compile", () => {
+    // @ts-expect-error: not a program-signer plan key
+    const misspelt: KindSpec["tableSigners"] = ["mintAuthorty"];
+    expect(misspelt).toBeDefined();
+    expect(KIND_SPECS.issue_lot.tableSigners).toStrictEqual(["mintAuthority", "vaultAuthority"]);
+  });
+});
+
+describe("Reader owner check (field-app.md PR #69 fold 29)", () => {
+  it("refuses an account another program owns before decoding, whatever the decoder checks", async () => {
+    const [protocol, custodian, classPolicy, address, otherProgram] = await Promise.all(
+      Array.from({ length: 5 }, newKey),
+    );
+    const data = getCustodianClassEncoder().encode({
+      protocol,
+      custodian,
+      classPolicy,
+      siteCode: "KOPANO-YARD-1",
+      approvedCapacityKg: 10_000_000n,
+      occupiedKg: 0n,
+      reservedInboundKg: 0n,
+      bump: 255,
+    });
+    const account = (programAddress: Address): MaybeEncodedAccount => ({
+      exists: true,
+      address,
+      programAddress,
+      data,
+      executable: false,
+      lamports: lamports(1_000_000n),
+      space: BigInt(data.length),
+    });
+    // A decoder without the generated owner guard: only the Reader stands between it and the
+    // lookalike.
+    const unguarded = (encoded: MaybeEncodedAccount) =>
+      decodeAccount(encoded, getCustodianClassDecoder());
+    const chainOf = (programAddress: Address) =>
+      ({ accounts: async (keys: Address[]) => keys.map(() => account(programAddress)) }) as never;
+    const lookalike = new Reader(chainOf(otherProgram), protocol);
+    await expect(
+      lookalike.read("custodianClass", address, unguarded as never, "CustodianClass"),
+    ).rejects.toMatchObject({
+      code: "ACCOUNT_MISSING",
+      detail: `${address}: not a CustodianClass`,
+    });
+    const real = new Reader(chainOf(THETIS_PROGRAM_ADDRESS), protocol);
+    await expect(
+      real.read("custodianClass", address, unguarded as never, "CustodianClass"),
+    ).resolves.toMatchObject({ custodian, siteCode: "KOPANO-YARD-1" });
   });
 });

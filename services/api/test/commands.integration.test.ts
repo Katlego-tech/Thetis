@@ -71,6 +71,7 @@ import {
   getPrepareShipmentInstructionAsync,
   getRegisterBatchInstructionAsync,
   getRegisterClassInstruction,
+  getRevokeDocumentInstruction,
   Role,
   SettlementMode,
   THETIS_PROGRAM_ADDRESS,
@@ -161,6 +162,7 @@ const SCOPE = {
   POOL: 256,
   SHIP: 512,
   CARRY: 1024,
+  ATTEST_ORIGIN: 16,
   ATTEST_TRANSPORT: 16384,
 } as const;
 const WALLETS: Record<
@@ -221,6 +223,8 @@ interface SvmChain extends ChainPort {
   /** Every Thetis command transaction the API sent (lookup-table upkeep excluded), in order. */
   sent: string[];
   advanceSlots(n: bigint): void;
+  /** Adds accounts made outside the API to what `programAccounts` scans. */
+  touch(...keys: Address[]): void;
 }
 
 /** LiteSVM's InstructionError (its class is not exported): an index and an inner error. */
@@ -299,6 +303,9 @@ function svmChain(svm: LiteSVM): SvmChain {
     dropSends: false,
     sent: [],
     advanceSlots,
+    touch(...keys) {
+      for (const key of keys) touched.add(key);
+    },
     async genesisHash() {
       return DEVNET_GENESIS;
     },
@@ -455,12 +462,12 @@ function sharedEd25519(
   };
 }
 
-async function classPolicyPda(protocol: Address) {
+async function classPolicyPda(protocol: Address, classCode = "CHROME") {
   const version = new Uint8Array(4);
   new DataView(version.buffer).setUint32(0, 1, true);
   const [found] = await getProgramDerivedAddress({
     programAddress: THETIS_PROGRAM_ADDRESS,
-    seeds: ["class", getAddressEncoder().encode(protocol), "CHROME", version],
+    seeds: ["class", getAddressEncoder().encode(protocol), classCode, version],
   });
   return found;
 }
@@ -479,7 +486,11 @@ async function orgNamePda(protocol: Address, name: string) {
 
 let worlds = BigInt(Date.now() % 1_000_000);
 
-async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
+async function world(
+  mode: "fiat" | "simulation" = "fiat",
+  options: { names?: Partial<Record<OrgKey, string>> } = {},
+): Promise<World> {
+  const nameOf = (key: OrgKey) => options.names?.[key] ?? ORGS[key].name;
   if (!existsSync(programSo)) {
     throw new Error(`${programSo} is missing: run anchor build before the relay suite`);
   }
@@ -546,12 +557,12 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
         getAccreditOrganisationInstruction({
           protocol,
           organisation,
-          organisationName: await orgNamePda(protocol, ORGS[key].name),
+          organisationName: await orgNamePda(protocol, nameOf(key)),
           accreditor,
           payer,
           orgId: uuidBytes(orgIds[key]),
           role: ORGS[key].role as never,
-          displayName: ORGS[key].name,
+          displayName: nameOf(key),
           admin: orgAdmin.address,
         }),
       ],
@@ -630,8 +641,8 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
       ["Class", "CHROME v1"],
       ["Grade", GRADE],
       ["Quantity", formatTonnes(LOT_KG)],
-      ["Owner", ORGS.khunou.name],
-      ["Custodian", ORGS.kopano.name],
+      ["Owner", nameOf("khunou")],
+      ["Custodian", nameOf("kopano")],
       ["Site", SITE],
       ["Intake", Buffer.from(INTAKE).toString("hex")],
       ["Origin document", "not required"],
@@ -2281,6 +2292,19 @@ describe("handover on the real program", () => {
     );
     failedWith(view, "Anchor3012");
     expect(w.chain.sent.length).toBe(before + 1);
+    // A wallet-derived key that is not on chain never enters the table (fold 9; PR #69 folds).
+    const [undelegated] = await findAuthorityPda({
+      protocol: w.protocol,
+      wallet: wallets.moselaNoAuthority.address,
+    });
+    const { address: table } = mustSucceed(
+      await service
+        .from("relay_lookup_tables")
+        .select("address")
+        .eq("protocol", w.protocol)
+        .single(),
+    );
+    expect(lookupTableAddresses(w.svm, address(table as string))).not.toContain(undelegated);
     const after = decodeManifestBatch(w.svm.getAccount(batch) as never).data;
     expect(after.holder).toBe(w.orgs.kopano);
     expect(after.sequence).toBe(0n);
@@ -2296,5 +2320,350 @@ describe("handover on the real program", () => {
     });
     expect(response.statusCode).toBe(403);
     expect(errorOf(response).code).toBe("NOT_AUTHORISED");
+  });
+});
+
+// ---------------------------------------------------------------- PR #69 review folds (field-app.md)
+
+/** A class and a Kopano site for it, registered directly (Phase 1 state). */
+async function accreditSite(
+  w: World,
+  values: { classCode: string; grade: string; site: string; originRequired: boolean },
+) {
+  const classPolicy = await classPolicyPda(w.protocol, values.classCode);
+  await send(
+    w.svm,
+    [
+      getRegisterClassInstruction({
+        protocol: w.protocol,
+        classPolicy,
+        accreditor,
+        payer,
+        classCode: values.classCode,
+        version: 1,
+        grades: [values.grade],
+        originRequired: values.originRequired,
+        lotValiditySecs: 30n * DAY,
+        splitInheritsExpiry: true,
+      }),
+    ],
+    [accreditor],
+  );
+  const [custodianClass] = await getProgramDerivedAddress({
+    programAddress: THETIS_PROGRAM_ADDRESS,
+    seeds: [
+      "custodian_class",
+      getAddressEncoder().encode(w.protocol),
+      getAddressEncoder().encode(w.orgs.kopano),
+      getAddressEncoder().encode(classPolicy),
+      values.site,
+    ],
+  });
+  await send(
+    w.svm,
+    [
+      getAccreditCustodianClassInstruction({
+        protocol: w.protocol,
+        custodian: w.orgs.kopano,
+        classPolicy,
+        custodianClass,
+        accreditor,
+        payer,
+        siteCode: values.site,
+        approvedCapacityKg: 10_000_000n,
+      }),
+    ],
+    [accreditor],
+  );
+  return custodianClass;
+}
+
+/** A synthetic document issuer on chain, with one wallet holding ATTEST_ORIGIN. */
+async function originIssuer(w: World) {
+  const orgId = uuidBytes(randomUUID());
+  const [organisation] = await findOrganisationPda({ protocol: w.protocol, orgId });
+  const name = "Origin Registry (synthetic)";
+  await send(
+    w.svm,
+    [
+      getAccreditOrganisationInstruction({
+        protocol: w.protocol,
+        organisation,
+        organisationName: await orgNamePda(w.protocol, name),
+        accreditor,
+        payer,
+        orgId,
+        role: Role.DocumentIssuer as never,
+        displayName: name,
+        admin: orgAdmin.address,
+      }),
+    ],
+    [accreditor],
+  );
+  const wallet = await signer();
+  const [authority] = await findAuthorityPda({ protocol: w.protocol, wallet: wallet.address });
+  await send(
+    w.svm,
+    [
+      getDelegateAuthorityInstruction({
+        protocol: w.protocol,
+        organisation,
+        authority,
+        admin: orgAdmin,
+        payer,
+        wallet: wallet.address,
+        scopes: SCOPE.ATTEST_ORIGIN,
+        expiresAt: NOW + 60n * DAY,
+      }),
+    ],
+    [orgAdmin],
+  );
+  return { organisation, authority, wallet };
+}
+
+async function attestOrigin(
+  w: World,
+  issuer: Awaited<ReturnType<typeof originIssuer>>,
+  subject: Uint8Array,
+  version: number,
+  validUntil: bigint,
+  sha256: Uint8Array,
+) {
+  const versionBytes = new Uint8Array(4);
+  new DataView(versionBytes.buffer).setUint32(0, version, true);
+  const [document] = await getProgramDerivedAddress({
+    programAddress: THETIS_PROGRAM_ADDRESS,
+    seeds: [
+      "document",
+      getAddressEncoder().encode(w.protocol),
+      Uint8Array.of(DocumentKind.Origin),
+      subject,
+      versionBytes,
+    ],
+  });
+  await send(
+    w.svm,
+    [
+      getAttestDocumentInstruction({
+        protocol: w.protocol,
+        organisation: issuer.organisation,
+        authority: issuer.authority,
+        document,
+        wallet: issuer.wallet,
+        payer,
+        kind: DocumentKind.Origin,
+        subject,
+        version,
+        sha256,
+        validUntil,
+      }),
+    ],
+    [issuer.wallet],
+  );
+  w.chain.touch(document);
+  return document;
+}
+
+async function lookupTableRows(w: World) {
+  return mustSucceed(
+    await service.from("relay_lookup_tables").select("address").eq("protocol", w.protocol),
+  );
+}
+
+describe("PR #69 review folds on the real program", () => {
+  it("an issue_lot above 1,232 bytes is TRANSACTION_TOO_LARGE before the sponsor signs, the table grows or anything is sent, and the command ends expired with the byte count", async () => {
+    // Every field at its widest (48-character names, 16-character lot ID and site, 8-character
+    // class code and grade), no origin: 1,251 bytes after the PR #69 folds.
+    const w = await world("fiat", {
+      names: {
+        khunou: "Khunou Ore Exports".padEnd(48, "-"),
+        kopano: "Kopano Stockyard Custody".padEnd(48, "-"),
+      },
+    });
+    const custodianClass = await accreditSite(w, {
+      classCode: "MANGANES",
+      grade: "GRADE-A1",
+      site: "KOPANO-YARD-0001",
+      originRequired: false,
+    });
+    const sponsor = w.deps.sponsor;
+    const signed: string[] = [];
+    w.deps = {
+      ...w.deps,
+      sponsor: {
+        address: () => sponsor.address(),
+        sign: async (wire, table) => {
+          signed.push(wire);
+          return sponsor.sign(wire, table);
+        },
+      },
+    };
+    const lotId = "CR-0000000000002";
+    const created = await create(w, "kopano", "issue_lot", {
+      custodianClass,
+      owner: orgIds.khunou,
+      lotId,
+      grade: "GRADE-A1",
+      quantityKg: "1000000",
+      weighbridgeTicket: "WB2611-0099",
+    });
+    const before = w.chain.sent.length;
+    const response = await signText(w, "kopano", created, "custodian", wallets.kopanoField);
+    expect(response.statusCode, response.body).toBe(422);
+    expect(errorOf(response)).toMatchObject({
+      code: "TRANSACTION_TOO_LARGE",
+      detail: "1251 bytes",
+    });
+    expect(signed).toHaveLength(0);
+    expect(w.chain.sent.length).toBe(before);
+    expect(await lookupTableRows(w)).toStrictEqual([]);
+    const view = data<CommandView>(
+      await call(w, "GET", `/v1/commands/${created.id}`, people.kopano),
+    );
+    expect(view.status).toBe("expired");
+    expect(view.error).toStrictEqual({ code: "TRANSACTION_TOO_LARGE", detail: "1251 bytes" });
+    expect(view.transaction).toBeNull();
+    expect(w.svm.getAccount(await lotPda(w.protocol, lotId)).exists).toBe(false);
+  });
+
+  it("origin required: revoked and expired attestations are skipped, none valid is ACCOUNT_MISSING, and the valid one is in the text and lands", async () => {
+    const w = await world();
+    const site = "KOPANO-YARD-1";
+    const custodianClass = await accreditSite(w, {
+      classCode: "MANGAN",
+      grade: GRADE,
+      site,
+      originRequired: true,
+    });
+    const issuer = await originIssuer(w);
+    const ticket = "WB2611-0077";
+    const digest = Uint8Array.from(Buffer.from(intakeDigest(site, ticket), "hex"));
+    const now = w.svm.getClock().unixTimestamp;
+    await attestOrigin(w, issuer, digest, 2, now + 100n, new Uint8Array(32).fill(0x52));
+    const revoked = await attestOrigin(
+      w,
+      issuer,
+      digest,
+      3,
+      now + 30n * DAY,
+      new Uint8Array(32).fill(0x53),
+    );
+    await send(
+      w.svm,
+      [
+        getRevokeDocumentInstruction({
+          protocol: w.protocol,
+          organisation: issuer.organisation,
+          authority: issuer.authority,
+          document: revoked,
+          wallet: issuer.wallet,
+        }),
+      ],
+      [issuer.wallet],
+    );
+    // Version 2 expires.
+    const clock = w.svm.getClock();
+    clock.unixTimestamp = now + 200n;
+    w.svm.setClock(clock);
+
+    const args = {
+      custodianClass,
+      owner: orgIds.khunou,
+      lotId: "MN-0001",
+      grade: GRADE,
+      quantityKg: "1000000",
+      weighbridgeTicket: ticket,
+    };
+    const before = w.chain.sent.length;
+    const none = await call(w, "POST", "/v1/commands", people.kopano, {
+      kind: "issue_lot",
+      organisationId: orgIds.kopano,
+      args,
+    });
+    expect(none.statusCode).toBe(409);
+    expect(errorOf(none)).toMatchObject({ code: "ACCOUNT_MISSING", detail: "origin: none valid" });
+
+    const validSha = new Uint8Array(32).fill(0x51);
+    await attestOrigin(w, issuer, digest, 1, now + 30n * DAY, validSha);
+    const created = await create(w, "kopano", "issue_lot", args);
+    expect(created.fields).toContainEqual({
+      label: "Origin document",
+      value: `${Buffer.from(validSha).toString("hex")} v1`,
+    });
+    const validUntil = BigInt(Date.parse(created.text?.validUntil ?? "") / 1000);
+    const expected = issueLotMessage(
+      THETIS_PROGRAM_ADDRESS,
+      w.instanceId,
+      "MN-0001",
+      "MANGAN",
+      1,
+      GRADE,
+      1_000_000n,
+      ORGS.khunou.name,
+      ORGS.kopano.name,
+      site,
+      digest,
+      { sha256: validSha, version: 1 },
+      validUntil,
+    );
+    const sent = new Uint8Array(getBase64Encoder().encode(created.text?.messageBase64 ?? ""));
+    expect(Buffer.from(sent).equals(Buffer.from(expected))).toBe(true);
+    confirmed(
+      data<CommandView>(await signText(w, "kopano", created, "custodian", wallets.kopanoField)),
+      "LotIssued",
+    );
+    expect(w.chain.sent.length).toBe(before + 1);
+    expect(
+      decodeLot(w.svm.getAccount(await lotPda(w.protocol, "MN-0001")) as never).data.lotId,
+    ).toBe("MN-0001");
+  });
+
+  it("a custodianClass lookalike owned by another program is ACCOUNT_MISSING, and nothing is sent or put in the table", async () => {
+    const w = await world();
+    const real = w.svm.getAccount(w.custodianClass);
+    if (!real.exists) throw new Error("no custodian class");
+    const lookalike = (await signer()).address;
+    const otherProgram = (await signer()).address;
+    w.svm.setAccount({
+      address: lookalike,
+      programAddress: otherProgram,
+      lamports: real.lamports,
+      executable: false,
+      space: real.space,
+      data: real.data,
+    } as never);
+    const before = w.chain.sent.length;
+    const response = await call(w, "POST", "/v1/commands", people.kopano, {
+      kind: "issue_lot",
+      organisationId: orgIds.kopano,
+      args: { ...issueArgs(w, "CR-0002", "1000000"), custodianClass: lookalike },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "ACCOUNT_MISSING",
+      detail: `${lookalike}: not a CustodianClass`,
+    });
+    expect(w.chain.sent.length).toBe(before);
+    expect(await lookupTableRows(w)).toStrictEqual([]);
+  });
+
+  it("a handover holder whose linked wallet has no Authority is AUTHORITY_INVALID and nothing is sent", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const created = await create(w, "kopano", "handover", { batch, to: orgIds.mosela });
+    const before = w.chain.sent.length;
+    const response = await signText(w, "kopano", created, "holder", wallets.kopanoNoAuthority);
+    expect(response.statusCode).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "AUTHORITY_INVALID",
+      detail: "no authority for this wallet",
+    });
+    expect(w.chain.sent.length).toBe(before);
+    const view = data<CommandView>(
+      await call(w, "GET", `/v1/commands/${created.id}`, people.kopano),
+    );
+    expect(view.status).toBe("awaiting_signatures");
+    expect(view.signers.every((s) => s.signed === null)).toBe(true);
+    expect(view.transaction).toBeNull();
   });
 });

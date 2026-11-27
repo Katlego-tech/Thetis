@@ -8,6 +8,7 @@ import {
 } from "../src/api/client";
 import { type CommandStatus, commandsApi, parseCommandView } from "../src/api/commands";
 import { REFETCH_CODES, relayErrorCopy } from "../src/copy";
+import { outcomeView } from "../src/outcome";
 import { commandView } from "./fixtures";
 
 const STATUSES: CommandStatus[] = [
@@ -302,5 +303,40 @@ describe("the client", () => {
     await expect(api.get("6a1f0c3e-8b2d-4e5f-9a7b-1c2d3e4f5a6b")).rejects.toBeInstanceOf(
       ApiShapeError,
     );
+  });
+});
+
+describe("a text too long for one transaction (field-app.md PR #69 review folds)", () => {
+  const vars = {
+    org: "Kopano Stockyard Custody",
+    detail: "1251 bytes",
+    signBefore: "10:14:05 SAST",
+    siteCode: "KOPANO-YARD-1",
+    classLabel: "CHROME v1",
+    ownerName: "Khunou Ore Exports",
+  };
+  const TOO_LARGE =
+    "This text is too long for one devnet transaction (1251 bytes; devnet takes 1,232). Nothing was sent. Shorter organisation names or a shorter lot ID make it smaller.";
+
+  it("is the relay error copy on signatures", () => {
+    expect(relayErrorCopy("TRANSACTION_TOO_LARGE", "signatures", vars)).toBe(TOO_LARGE);
+  });
+
+  it("is what an expired command with that error shows, with edit, not renew", () => {
+    const view = commandView("expired", {
+      error: { code: "TRANSACTION_TOO_LARGE", detail: "1251 bytes" },
+    });
+    const shown = outcomeView(parseCommandView(JSON.parse(JSON.stringify(view))), {
+      lotId: "CR-0001",
+      ownerName: "Khunou Ore Exports",
+      ownerOrgAddress: null,
+      org: "Kopano Stockyard Custody",
+      signed: { quantity: "5,000.000 t", owner: "Khunou Ore Exports", site: "KOPANO-YARD-1" },
+      signBefore: "10:14:05 SAST",
+    });
+    expect(shown.lines).toStrictEqual([TOO_LARGE]);
+    expect(shown.primary).toBe("edit");
+    expect(shown.issued).toBe(false);
+    expect(shown.transaction).toBeNull();
   });
 });

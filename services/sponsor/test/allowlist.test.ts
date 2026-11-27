@@ -110,7 +110,7 @@ function idlInstruction(name: string) {
  * every other slot filled as the relay fills them. */
 function thetis(
   name: string,
-  options: { protocol?: Address; sponsorAt?: string; extra?: Address[] } = {},
+  options: { protocol?: Address; sponsorAt?: string; extra?: Address[]; drop?: number } = {},
 ): Instruction {
   const definition = idlInstruction(name);
   const accounts = definition.accounts.map((account) => {
@@ -132,6 +132,7 @@ function thetis(
   });
   for (const extra of options.extra ?? [])
     accounts.push({ address: extra, role: AccountRole.WRITABLE });
+  accounts.splice(accounts.length - (options.drop ?? 0));
   return {
     programAddress: THETIS_PROGRAM_ADDRESS,
     accounts,
@@ -298,6 +299,18 @@ describe("sponsor allowlist", () => {
     refused(getBase64EncodedWireTransaction(compileTransaction(legacy)), /version/);
     // Not a transaction at all.
     refused(Buffer.from("not a transaction").toString("base64"));
+  });
+
+  it("refuses each field kind with the sponsor at a slot other than 0, or with too few accounts", () => {
+    for (const [name, slot] of [
+      ["issue_lot", "custodian"],
+      ["handover", "from_org"],
+    ] as const) {
+      const shape = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === name);
+      expect(shape?.sponsorSlots, name).toStrictEqual([0]);
+      refused(wire([limit(), ed25519(), thetis(name, { sponsorAt: slot })]), /sponsor/);
+      refused(wire([limit(), ed25519(), thetis(name, { drop: 1 })]), /too few accounts/);
+    }
   });
 
   it("refuses a protocol through the table, foreign lookup-table authorities, another table, an Ed25519 instruction with accounts, a compute price, a trailing instruction and short lookup-table data", () => {
