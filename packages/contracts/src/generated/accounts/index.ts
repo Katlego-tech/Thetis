@@ -13,6 +13,7 @@ export * from './documentAttestation.ts';
 export * from './facility.ts';
 export * from './handoffAcceptance.ts';
 export * from './handoverRecord.ts';
+export * from './incident.ts';
 export * from './intakeIdentity.ts';
 export * from './loadingIntent.ts';
 export * from './loan.ts';

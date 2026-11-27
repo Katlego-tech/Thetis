@@ -357,6 +357,120 @@
       ]
     },
     {
+      "name": "attest_shortfall",
+      "discriminator": [
+        44,
+        80,
+        201,
+        115,
+        156,
+        115,
+        24,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "inspector_org"
+        },
+        {
+          "name": "inspector_authority"
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "batch",
+          "optional": true
+        },
+        {
+          "name": "incident",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  105,
+                  110,
+                  99,
+                  105,
+                  100,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "arg",
+                "path": "incident_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "incident_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "observed_kg",
+          "type": "u64"
+        },
+        {
+          "name": "tolerance_bps",
+          "type": "u16"
+        },
+        {
+          "name": "method_code",
+          "type": "string"
+        },
+        {
+          "name": "evidence_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "observed_at",
+          "type": "i64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "borrow",
       "discriminator": [
         228,
@@ -3258,6 +3372,51 @@
       ]
     },
     {
+      "name": "set_restriction",
+      "discriminator": [
+        88,
+        190,
+        9,
+        42,
+        74,
+        242,
+        62,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "accreditor",
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "lot",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "restriction",
+          "type": {
+            "defined": {
+              "name": "Restriction"
+            }
+          }
+        },
+        {
+          "name": "reason_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "set_valuation",
       "discriminator": [
         201,
@@ -4011,6 +4170,19 @@
       ]
     },
     {
+      "name": "Incident",
+      "discriminator": [
+        144,
+        81,
+        144,
+        130,
+        200,
+        193,
+        26,
+        111
+      ]
+    },
+    {
       "name": "IntakeIdentity",
       "discriminator": [
         175,
@@ -4637,6 +4809,19 @@
       ]
     },
     {
+      "name": "RestrictionSet",
+      "discriminator": [
+        138,
+        119,
+        141,
+        84,
+        126,
+        253,
+        61,
+        74
+      ]
+    },
+    {
       "name": "ShipmentCancelled",
       "discriminator": [
         203,
@@ -4660,6 +4845,19 @@
         240,
         187,
         70
+      ]
+    },
+    {
+      "name": "ShortfallAttested",
+      "discriminator": [
+        227,
+        32,
+        237,
+        250,
+        38,
+        175,
+        200,
+        111
       ]
     },
     {
@@ -5895,6 +6093,105 @@
           },
           {
             "name": "Arrival"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Incident",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "incident_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "batch",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "inspector",
+            "type": "pubkey"
+          },
+          {
+            "name": "method_code",
+            "type": "string"
+          },
+          {
+            "name": "expected_kg",
+            "type": "u64"
+          },
+          {
+            "name": "observed_kg",
+            "type": "u64"
+          },
+          {
+            "name": "tolerance_bps",
+            "type": "u16"
+          },
+          {
+            "name": "within_tolerance",
+            "type": "bool"
+          },
+          {
+            "name": "evidence_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "observed_at",
+            "type": "i64"
+          },
+          {
+            "name": "restriction_after",
+            "type": {
+              "defined": {
+                "name": "Restriction"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "IncidentStatus"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "IncidentStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
           }
         ]
       }
@@ -7509,6 +7806,47 @@
       }
     },
     {
+      "name": "RestrictionSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "from",
+            "type": {
+              "defined": {
+                "name": "Restriction"
+              }
+            }
+          },
+          {
+            "name": "to",
+            "type": {
+              "defined": {
+                "name": "Restriction"
+              }
+            }
+          },
+          {
+            "name": "reason_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Role",
       "type": {
         "kind": "enum",
@@ -7777,6 +8115,60 @@
           },
           {
             "name": "Cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShortfallAttested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "incident",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "batch",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "inspector",
+            "type": "pubkey"
+          },
+          {
+            "name": "expected_kg",
+            "type": "u64"
+          },
+          {
+            "name": "observed_kg",
+            "type": "u64"
+          },
+          {
+            "name": "tolerance_bps",
+            "type": "u16"
+          },
+          {
+            "name": "within_tolerance",
+            "type": "bool"
+          },
+          {
+            "name": "restriction",
+            "type": {
+              "defined": {
+                "name": "Restriction"
+              }
+            }
+          },
+          {
+            "name": "lot_revision",
+            "type": "u64"
           }
         ]
       }
