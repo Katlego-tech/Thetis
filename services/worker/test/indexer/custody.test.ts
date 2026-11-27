@@ -235,17 +235,29 @@ describe("Phase 3 custody, the shipment part", () => {
     );
   });
 
-  it("1. handles every instruction and event of the IDL it is built on, but observation", () => {
-    // The IDL at main has 34 instructions and 34 events, of which this slice handles all but
-    // RecordObservation and ObservationRecorded (T063d.2 pre-check fold 2).
+  it("1. handles every instruction and event of the IDL it is built on, but observation and loading", () => {
+    // The IDL at main has record_observation and the three loading instructions unhandled: 37
+    // instructions and 38 events, of which this slice handles all but those and their events
+    // (live-custody.md, the handover pre-check folds, item 2).
     const idl = JSON.parse(readFileSync(IDL, "utf8")) as {
       instructions: { name: string }[];
       events: { name: string }[];
     };
-    expect(idl.instructions).toHaveLength(34);
-    expect(idl.events).toHaveLength(34);
-    const unhandledInstructions = ["RecordObservation"];
-    const unhandledEvents = ["ObservationRecorded"];
+    expect(idl.instructions).toHaveLength(37);
+    expect(idl.events).toHaveLength(38);
+    const unhandledInstructions = [
+      "RecordObservation",
+      "CreateLoadingIntent",
+      "AcceptLoading",
+      "RecordLoading",
+    ];
+    const unhandledEvents = [
+      "ObservationRecorded",
+      "LoadingIntentCreated",
+      "LoadingAccepted",
+      "LoadingRecorded",
+      "LoanHandedOff",
+    ];
     const instructions = idl.instructions.map((entry) => pascal(entry.name));
     for (const name of unhandledInstructions) expect(instructions).toContain(name);
     expect([...HANDLED_INSTRUCTIONS].sort()).toEqual(

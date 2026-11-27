@@ -87,6 +87,49 @@ const rewriteAuthority = bottomUpTransformerVisitor([
   },
 ]);
 codama.update(rewriteAuthority);
+
+// 3. Stable PDA names. The converter names a PDA after the account that holds it and renames
+//    a collision after its instruction, so a new instruction with an account of the same name
+//    can take over an existing PDA's name. The release intent's PDA (["release", loan, nonce])
+//    keeps `intent`, and the loading intent's (["loading", position, nonce]) is `loadingIntent`.
+const PDA_NAMES = { release: "intent", loading: "loadingIntent" };
+const constantSeed = (pda) => {
+  const [constant] = pda.seeds;
+  if (constant?.kind !== "constantPdaSeedNode" || constant.value.kind !== "bytesValueNode")
+    return undefined;
+  if (constant.value.encoding !== "base58") return undefined;
+  return new TextDecoder().decode(getBase58Encoder().encode(constant.value.data));
+};
+const renamePdas = bottomUpTransformerVisitor([
+  {
+    select: "[programNode]",
+    transform: (program) => {
+      const renames = new Map();
+      for (const pda of program.pdas) {
+        const name = PDA_NAMES[constantSeed(pda)];
+        if (name !== undefined) renames.set(pda.name, name);
+      }
+      if (renames.size !== Object.keys(PDA_NAMES).length)
+        throw new Error("expected one release and one loading intent PDA");
+      const pdas = program.pdas.map((pda) =>
+        renames.has(pda.name) ? { ...pda, name: renames.get(pda.name) } : pda,
+      );
+      const instructions = program.instructions.map((instruction) => ({
+        ...instruction,
+        accounts: instruction.accounts.map((account) => {
+          const value = account.defaultValue;
+          if (value?.kind !== "pdaValueNode" || !renames.has(value.pda.name)) return account;
+          return {
+            ...account,
+            defaultValue: { ...value, pda: { ...value.pda, name: renames.get(value.pda.name) } },
+          };
+        }),
+      }));
+      return { ...program, pdas, instructions };
+    },
+  },
+]);
+codama.update(renamePdas);
 {
   const { program } = codama.getRoot();
   const optional = program.instructions.flatMap((i) => i.accounts).filter((a) => a.isOptional);

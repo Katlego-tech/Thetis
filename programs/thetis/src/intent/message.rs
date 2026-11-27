@@ -617,6 +617,86 @@ pub fn observation_message(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn loading_intent_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    quantity_kg: u64,
+    owner: &str,
+    terminal: &str,
+    site_code: &str,
+    document_sha256: &[u8; 32],
+    nonce: u64,
+    expires_at: i64,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let quantity = format_tonnes(quantity_kg);
+    let document = digest_hex(document_sha256);
+    let expires = format_sast(expires_at);
+    signed_message(
+        program_id,
+        instance_id,
+        "Prepare loading",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             Owner: {owner}\n\
+             Terminal: {terminal}\n\
+             Site: {site_code}\n\
+             Loading document: {document}\n\
+             Intent: {nonce}\n\
+             Intent expires: {expires}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn record_loading_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    quantity_kg: u64,
+    owner: &str,
+    terminal: &str,
+    document_sha256: &[u8; 32],
+    nonce: u64,
+    locked_kg: u64,
+    loans_accepted: u8,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let quantity = format_tonnes(quantity_kg);
+    let document = digest_hex(document_sha256);
+    let locked = format_tonnes(locked_kg);
+    signed_message(
+        program_id,
+        instance_id,
+        "Record loading",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Quantity: {quantity}\n\
+             Owner: {owner}\n\
+             Terminal: {terminal}\n\
+             Loading document: {document}\n\
+             Intent: {nonce}\n\
+             Locked: {locked}\n\
+             Loan acceptances: {loans_accepted}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
 fn signed_message(
     program_id: &Pubkey,
     instance_id: &[u8; 16],
