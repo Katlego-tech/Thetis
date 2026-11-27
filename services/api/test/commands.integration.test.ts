@@ -50,6 +50,7 @@ import {
   decodeLot,
   decodeManifestBatch,
   decodePaymentAttestation,
+  decodeShipment,
   findAuthorityPda,
   findHandoverPda,
   findIntakePda,
@@ -64,6 +65,7 @@ import {
   getAccreditCustodianClassInstruction,
   getAccreditOrganisationInstruction,
   getAttestDocumentInstruction,
+  getCancelShipmentInstruction,
   getDelegateAuthorityInstruction,
   getInitializeProtocolInstruction,
   getIssueLotInstruction,
@@ -74,6 +76,7 @@ import {
   getRevokeDocumentInstruction,
   Role,
   SettlementMode,
+  ShipmentStatus,
   THETIS_PROGRAM_ADDRESS,
 } from "@thetis/contracts";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
@@ -89,6 +92,7 @@ import {
   formatTonnes,
   intakeDigest,
   issueLotMessage,
+  observationMessage,
 } from "../src/commands/texts.ts";
 import type { CommandView } from "../src/commands/views.ts";
 import { localSupabaseEnv } from "../src/local.ts";
@@ -162,6 +166,7 @@ const SCOPE = {
   POOL: 256,
   SHIP: 512,
   CARRY: 1024,
+  OBSERVE: 2048,
   ATTEST_ORIGIN: 16,
   ATTEST_TRANSPORT: 16384,
 } as const;
@@ -179,13 +184,13 @@ const WALLETS: Record<
   // The field kinds (field-app.md §6.3): Kopano's linked issuer, and a linked wallet with no Authority.
   kopanoField: {
     org: "kopano",
-    scopes: SCOPE.ISSUE | SCOPE.CARRY | SCOPE.ATTEST_TRANSPORT,
+    scopes: SCOPE.ISSUE | SCOPE.CARRY | SCOPE.OBSERVE | SCOPE.ATTEST_TRANSPORT,
     linked: true,
   },
   kopanoNoAuthority: { org: "kopano", scopes: 0, linked: true, delegated: false },
   khunouShip: { org: "khunou", scopes: SCOPE.SHIP, linked: false },
   // Phone 2: Mosela's carrier wallet, and the second wallet with no Authority (the refused driver).
-  mosela: { org: "mosela", scopes: SCOPE.CARRY, linked: true },
+  mosela: { org: "mosela", scopes: SCOPE.CARRY | SCOPE.OBSERVE, linked: true },
   moselaNoAuthority: { org: "mosela", scopes: 0, linked: true, delegated: false },
 };
 
@@ -2665,5 +2670,313 @@ describe("PR #69 review folds on the real program", () => {
     expect(view.status).toBe("awaiting_signatures");
     expect(view.signers.every((s) => s.signed === null)).toBe(true);
     expect(view.transaction).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- record_observation (T067r.2)
+
+/** A finalized transport photo of `batch`, uploaded by a member of `org` (field-app.md §4.4, §5.2). */
+async function transportEvidence(
+  w: World,
+  org: OrgKey,
+  batch: Address,
+  object: { purpose?: string; subjectRef?: string } = {},
+) {
+  const person = people[org];
+  const bytes = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    Buffer.from(`Synthetic test border photo ${randomUUID()}, not a real photo`),
+  ]);
+  const { id: objectId } = mustSucceed(
+    await person.client
+      .from("evidence_objects")
+      .insert({
+        owner_organisation_id: orgIds[org],
+        subject_kind: "batch",
+        subject_ref: object.subjectRef ?? batch,
+        purpose: object.purpose ?? "transport",
+        created_by: person.id,
+      })
+      .select("id")
+      .single(),
+  );
+  const storagePath = `${orgIds[org]}/${objectId}/1`;
+  const { id: versionId } = mustSucceed(
+    await person.client
+      .from("evidence_versions")
+      .insert({
+        object_id: objectId,
+        version: 1,
+        storage_path: storagePath,
+        mime: "image/jpeg",
+        uploaded_by: person.id,
+      })
+      .select("id")
+      .single(),
+  );
+  mustSucceed(
+    await person.client.storage
+      .from("originals")
+      .upload(storagePath, bytes, { contentType: "image/jpeg" }),
+  );
+  const finalized = data<{ sha256: string }>(
+    await call(w, "POST", `/v1/evidence/${versionId}/finalize`, person),
+  );
+  return { versionId: versionId as string, sha256: finalized.sha256 };
+}
+
+async function observationArgs(
+  w: World,
+  org: OrgKey,
+  batch: Address,
+  kind: "Border" | "Checkpoint" = "Border",
+) {
+  const evidence = await transportEvidence(w, org, batch);
+  const observedAt = w.svm.getClock().unixTimestamp - 60n;
+  return {
+    args: {
+      batch,
+      kind,
+      locationCode: "BORDER-1",
+      evidenceVersionId: evidence.versionId,
+      observedAt: String(observedAt),
+    },
+    sha256: evidence.sha256,
+    observedAt,
+  };
+}
+
+const moselaObserver = (): Actor => ({ org: "mosela", wallet: wallets.mosela });
+const kopanoObserver = (): Actor => ({ org: "kopano", wallet: wallets.kopanoField });
+
+/** The owner cancels the shipment directly (program-custody.md cancel_shipment). */
+async function cancelShipment(w: World, batch: Address) {
+  const shipmentAddress = decodeManifestBatch(w.svm.getAccount(batch) as never).data.shipment;
+  const shipment = decodeShipment(w.svm.getAccount(shipmentAddress) as never).data;
+  const validUntil = w.svm.getClock().unixTimestamp + 300n;
+  const text = envelope(
+    THETIS_PROGRAM_ADDRESS,
+    Buffer.from(w.instanceId).toString("hex"),
+    "Cancel shipment",
+    [
+      ["Lot", LOT_ID],
+      ["Shipment", Buffer.from(Uint8Array.from(shipment.shipmentId)).toString("hex")],
+      ["Owner", ORGS.khunou.name],
+      ["To", ORGS.portT1.name],
+      ["Site", "PORT-T1"],
+      ["Revision", String(shipment.revision)],
+    ],
+    validUntil,
+  );
+  const [ownerAuthority] = await findAuthorityPda({
+    protocol: w.protocol,
+    wallet: wallets.khunouShip.address,
+  });
+  const signature = await signBytes(wallets.khunouShip.keyPair.privateKey, text);
+  await send(
+    w.svm,
+    [
+      sharedEd25519([{ wallet: wallets.khunouShip.address, signature }], text),
+      getCancelShipmentInstruction({
+        sponsor: payer,
+        protocol: w.protocol,
+        ownerOrg: w.orgs.khunou,
+        ownerAuthority,
+        lot: w.lot,
+        shipment: shipmentAddress,
+        destinationClass: shipment.destination,
+        destinationOrg: w.orgs.portT1,
+        expectedRevision: shipment.revision,
+        validUntil,
+      }),
+    ],
+    [],
+  );
+  expect(decodeShipment(w.svm.getAccount(shipmentAddress) as never).data.status).toBe(
+    ShipmentStatus.Cancelled,
+  );
+}
+
+describe("record_observation on the real program", () => {
+  it("a Checkpoint observation by the custodian holding the batch lands with ObservationRecorded and the pinned text", async () => {
+    const w = await world();
+    const { batch, shipmentId } = await shippedBatch(w);
+    const chainTime = w.svm.getClock().unixTimestamp;
+    const { args, sha256, observedAt } = await observationArgs(w, "kopano", batch, "Checkpoint");
+    const created = await create(w, "kopano", "record_observation", args);
+    expect(created.lot).toBe(w.lot);
+    expect(created.signers.map((s) => [s.role, s.organisationId, s.method])).toStrictEqual([
+      ["observer", orgIds.kopano, "text"],
+    ]);
+    const validUntil = BigInt(Date.parse(created.text?.validUntil ?? "") / 1000);
+    expect(validUntil - chainTime).toBe(570n);
+    const expected = observationMessage(
+      THETIS_PROGRAM_ADDRESS,
+      w.instanceId,
+      LOT_ID,
+      shipmentId,
+      1,
+      1,
+      ORGS.kopano.name,
+      ORGS.kopano.name,
+      "Checkpoint",
+      "BORDER-1",
+      Uint8Array.from(Buffer.from(sha256, "hex")),
+      observedAt,
+      0,
+      validUntil,
+    );
+    const sent = new Uint8Array(getBase64Encoder().encode(created.text?.messageBase64 ?? ""));
+    expect(Buffer.from(sent).equals(Buffer.from(expected))).toBe(true);
+
+    const view = confirmed(
+      data<CommandView>(await signText(w, "kopano", created, "observer", wallets.kopanoField)),
+      "ObservationRecorded",
+    );
+    expect(view.outcome?.data).toMatchObject({
+      batch,
+      lot: w.lot,
+      observer: w.orgs.kopano,
+      holder: w.orgs.kopano,
+      locationCode: "BORDER-1",
+      evidenceDigest: sha256,
+      observedAt: String(observedAt),
+      index: 0,
+    });
+    const after = decodeManifestBatch(w.svm.getAccount(batch) as never).data;
+    expect(after.observationCount).toBe(1);
+    expect(after.holder).toBe(w.orgs.kopano);
+    expect(after.sequence).toBe(0n);
+  });
+
+  it("a Border observation by the transporter lands and leaves the holder unchanged", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const { args } = await observationArgs(w, "mosela", batch);
+    const view = confirmed(
+      await run(w, "mosela", "record_observation", args, { observer: moselaObserver() }),
+      "ObservationRecorded",
+    );
+    expect(view.outcome?.data).toMatchObject({
+      observer: w.orgs.mosela,
+      holder: w.orgs.kopano,
+      kind: 1,
+    });
+    const after = decodeManifestBatch(w.svm.getAccount(batch) as never).data;
+    expect(after.holder).toBe(w.orgs.kopano);
+    expect(after.observationCount).toBe(1);
+  });
+
+  it("a Border observation by a custodian reaches the chain and fails as WrongRole", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const { args } = await observationArgs(w, "kopano", batch, "Border");
+    const before = w.chain.sent.length;
+    const view = await run(w, "kopano", "record_observation", args, {
+      observer: kopanoObserver(),
+    });
+    failedWith(view, "WrongRole");
+    expect(w.chain.sent.length).toBe(before + 1);
+    expect(decodeManifestBatch(w.svm.getAccount(batch) as never).data.observationCount).toBe(0);
+  });
+
+  it("an observer whose linked wallet has no Authority is AUTHORITY_INVALID and nothing is sent", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const { args } = await observationArgs(w, "mosela", batch);
+    const created = await create(w, "mosela", "record_observation", args);
+    const before = w.chain.sent.length;
+    const response = await signText(w, "mosela", created, "observer", wallets.moselaNoAuthority);
+    expect(response.statusCode).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "AUTHORITY_INVALID",
+      detail: "no authority for this wallet",
+    });
+    expect(w.chain.sent.length).toBe(before);
+    const view = data<CommandView>(
+      await call(w, "GET", `/v1/commands/${created.id}`, people.mosela),
+    );
+    expect(view.status).toBe("awaiting_signatures");
+    expect(view.transaction).toBeNull();
+  });
+
+  it("a second observation prepared at the same count fails as StaleRevision once the first lands", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const first = await create(
+      w,
+      "mosela",
+      "record_observation",
+      (await observationArgs(w, "mosela", batch)).args,
+    );
+    const second = await create(
+      w,
+      "mosela",
+      "record_observation",
+      (await observationArgs(w, "mosela", batch)).args,
+    );
+    confirmed(
+      data<CommandView>(await signText(w, "mosela", first, "observer", wallets.mosela)),
+      "ObservationRecorded",
+    );
+    const view = data<CommandView>(await signText(w, "mosela", second, "observer", wallets.mosela));
+    failedWith(view, "StaleRevision");
+    expect(decodeManifestBatch(w.svm.getAccount(batch) as never).data.observationCount).toBe(1);
+  });
+
+  it("an observation of a batch whose shipment was cancelled fails as ShipmentNotOpen", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    await cancelShipment(w, batch);
+    const { args } = await observationArgs(w, "mosela", batch);
+    const view = await run(w, "mosela", "record_observation", args, {
+      observer: moselaObserver(),
+    });
+    failedWith(view, "ShipmentNotOpen");
+    expect(decodeManifestBatch(w.svm.getAccount(batch) as never).data.observationCount).toBe(0);
+  });
+
+  it("refuses an initiator that can't observe, evidence that is not this batch's transport record, and a time after chain time, sending nothing", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const before = w.chain.sent.length;
+    const exporter = await transportEvidence(w, "khunou", batch);
+    const notObserver = await call(w, "POST", "/v1/commands", people.khunou, {
+      kind: "record_observation",
+      organisationId: orgIds.khunou,
+      args: {
+        batch,
+        kind: "Checkpoint",
+        locationCode: "BORDER-1",
+        evidenceVersionId: exporter.versionId,
+        observedAt: String(w.svm.getClock().unixTimestamp - 60n),
+      },
+    });
+    expect(notObserver.statusCode).toBe(403);
+    expect(errorOf(notObserver).code).toBe("NOT_AUTHORISED");
+
+    const { args } = await observationArgs(w, "mosela", batch);
+    const post = (body: Record<string, string>) =>
+      call(w, "POST", "/v1/commands", people.mosela, {
+        kind: "record_observation",
+        organisationId: orgIds.mosela,
+        args: { ...args, ...body },
+      });
+    for (const evidence of [
+      await transportEvidence(w, "mosela", batch, { purpose: "loading" }),
+      await transportEvidence(w, "mosela", batch, { subjectRef: w.lot }),
+      await transportEvidence(w, "kopano", batch),
+    ]) {
+      const response = await post({ evidenceVersionId: evidence.versionId });
+      expect(response.statusCode, response.body).toBe(409);
+      expect(errorOf(response)).toMatchObject({
+        code: "EVIDENCE_INVALID",
+        detail: "transport evidence of this batch",
+      });
+    }
+    const future = await post({ observedAt: String(w.svm.getClock().unixTimestamp + 1n) });
+    expect(future.statusCode).toBe(400);
+    expect(errorOf(future)).toMatchObject({ code: "VALIDATION", detail: "observedAt" });
+    expect(w.chain.sent.length).toBe(before);
   });
 });
