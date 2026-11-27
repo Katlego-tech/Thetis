@@ -13,8 +13,9 @@ import { Txt } from "../components/Txt";
 import { useApp } from "../context";
 import { readSignerLinks } from "../data/reads";
 import { useSigning } from "../data/useSigning";
-import { formatTimeOfDay, shortAddress, unixOf } from "../format";
+import { formatClock, formatTimeOfDay, shortAddress, unixOf } from "../format";
 import { encodeBase64 } from "../lib/encoding";
+import { checkLinkChallenge } from "../link-challenge";
 import { scopeWords as scopeLine } from "../readiness";
 import {
   connectWallet,
@@ -125,11 +126,27 @@ export function Wallet() {
     };
   }
 
+  /** The message is data.md §5's, for this wallet, organisation and person, or it is not signed. */
+  function linkMessageOk(challenge: Challenge, address: string): boolean {
+    return checkLinkChallenge(challenge.message, {
+      wallet: address,
+      organisationSlug: app.organisation.slug,
+      userId: app.user.id,
+    });
+  }
+
+  const NOT_A_LINK: Step = {
+    kind: "link_error",
+    message: `This message from Thetis is not a wallet link for this wallet and ${org}. Your wallet was not opened. Nothing was linked.`,
+    action: null,
+  };
+
   async function prepare() {
     if (!app.wallet) return;
     setStep({ kind: "preparing" });
     try {
       const challenge = await app.walletLinks.challenge(orgId, app.wallet.address);
+      if (!linkMessageOk(challenge, app.wallet.address)) return setStep(NOT_A_LINK);
       setStep({ kind: "challenge", challenge, note: "ready" });
     } catch (error) {
       setStep(linkError(error));
@@ -138,6 +155,7 @@ export function Wallet() {
 
   async function signLink(challenge: Challenge) {
     if (!app.wallet) return;
+    if (!linkMessageOk(challenge, app.wallet.address)) return setStep(NOT_A_LINK);
     const connection = sessionConnection(app.wallet, app.connection);
     setStep({ kind: "challenge", challenge, note: "signing" });
     let result: Awaited<ReturnType<typeof signText>>;
@@ -156,7 +174,8 @@ export function Wallet() {
         setStep({ kind: "challenge", challenge, note: "refused" });
         return;
       }
-      throw error;
+      setStep(linkError(error));
+      return;
     }
     if (result.kind !== "signed") {
       setStep(
@@ -302,7 +321,11 @@ export function Wallet() {
       )}
 
       {wallet && !app.online ? (
-        <Note>Offline. The link and authority can't be checked until you are back online.</Note>
+        <Note>
+          {signing.asOf
+            ? `Offline. The link and authority below are as this phone last read them, at ${formatClock(unixOf(signing.asOf))}. They can't be checked until you are back online.`
+            : "Offline. The link and authority can't be checked until you are back online."}
+        </Note>
       ) : null}
 
       {wallet && signing.link === "linked_elsewhere" && !challengeStep ? (
@@ -348,7 +371,7 @@ export function Wallet() {
         </Txt>
       ) : null}
 
-      {wallet && app.online && authority && !challengeStep ? (
+      {wallet && (app.online || signing.asOf) && authority && !challengeStep ? (
         <Section title="Thetis authority">
           {authority.kind === "none" ? (
             <Txt style={{ fontSize: 14 }}>
@@ -388,10 +411,16 @@ export function Wallet() {
               ) : null}
             </>
           )}
-          <Freshness
-            lastSuccessAt={app.protocol.lastSuccessAt}
-            halted={app.protocol.indexStatus === "halted"}
-          />
+          {signing.asOf ? (
+            <Txt variant="small" tone="ink2">
+              {`As of ${formatClock(unixOf(signing.asOf))}, offline`}
+            </Txt>
+          ) : (
+            <Freshness
+              lastSuccessAt={app.protocol.lastSuccessAt}
+              halted={app.protocol.indexStatus === "halted"}
+            />
+          )}
         </Section>
       ) : null}
 

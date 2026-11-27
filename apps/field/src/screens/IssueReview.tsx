@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { AppState, View } from "react-native";
 import { ApiError, ApiShapeError, ApiTimeout, ApiUnreachable } from "../api/client";
 import type { CommandView } from "../api/commands";
 import { Cert, Head, Rows, Section } from "../components/Blocks";
@@ -14,7 +14,14 @@ import { useApp } from "../context";
 import { REFETCH_CODES, RELAY_TIMEOUT, type RelayPhase, relayErrorCopy } from "../copy";
 import { type Owner, readOwners, readSites, type Site } from "../data/reads";
 import { useSigning } from "../data/useSigning";
-import { applyCommand, backToEditing, type IntakeDraft, resumeDraft } from "../drafts/store";
+import {
+  applyCommand,
+  backToEditing,
+  CommandMismatch,
+  checkBelongs,
+  type IntakeDraft,
+  resumeDraft,
+} from "../drafts/store";
 import { formatKg, formatTimeOfDay, formatTonnes, parseTonnes, shortAddress } from "../format";
 import { expectedIssueText, issueArgs, textLine } from "../intake";
 import { intakeDigest, normaliseTicket } from "../intake-digest";
@@ -27,20 +34,29 @@ import { checkMessageText, type TextMismatch, verifyCommandText } from "../text"
 import { sessionConnection, signText, WalletAccountError, WalletRefused } from "../wallet";
 import { duplicateCopy, useDuplicateCheck } from "./Intake";
 
+/** A wallet signature held in memory with the SHA-256 of the exact text it was made over. */
+interface HeldSignature {
+  signatureBase58: string;
+  messageSha256: string;
+}
+
 type Phase =
   | { kind: "loading" }
+  | { kind: "checking" }
   | { kind: "preparing" }
   | { kind: "ready" }
   | { kind: "wallet" }
   | { kind: "sending" }
-  | { kind: "not_sent"; signatureBase58: string }
+  | { kind: "not_sent"; held: HeldSignature }
   | { kind: "renewing" };
 
 type Problem =
   | { kind: "relay"; text: string }
   | { kind: "timeout" }
   | { kind: "offline_before" }
+  | { kind: "offline_checking" }
   | { kind: "offline_waiting" }
+  | { kind: "signature_stale" }
   | { kind: "wallet_refused" }
   | { kind: "wrong_account" }
   | { kind: "text_changed" }
@@ -61,6 +77,7 @@ export function IssueReview(props: { draftId: string }) {
   const draftRef = useRef<IntakeDraft | null>(null);
   const viewRef = useRef<CommandView | null>(null);
   const started = useRef(false);
+  const checking = useRef(false);
   const orgId = app.organisation.organisationId;
   const org = app.organisation.name;
   const duplicate = useDuplicateCheck(draft);
@@ -74,11 +91,13 @@ export function IssueReview(props: { draftId: string }) {
     [app.store],
   );
 
+  /** Shows a relay answer and maps it onto the draft; throws CommandMismatch for another draft's. */
   const show = useCallback(
     async (next: CommandView) => {
+      const current = draftRef.current;
+      if (current) checkBelongs(current, next);
       viewRef.current = next;
       setView(next);
-      const current = draftRef.current;
       if (current) await save(applyCommand(current, next));
     },
     [save],
@@ -130,7 +149,8 @@ export function IssueReview(props: { draftId: string }) {
           text: relayErrorCopy(error.code, phaseName, vars(error.detail)) ?? "",
         });
       }
-      const code = error instanceof ApiShapeError ? "UNEXPECTED_ANSWER" : "INTERNAL";
+      const unreadable = error instanceof ApiShapeError || error instanceof CommandMismatch;
+      const code = unreadable ? "UNEXPECTED_ANSWER" : "INTERNAL";
       setProblem({ kind: "relay", text: relayErrorCopy(code, phaseName, vars()) ?? "" });
     },
     [app, show, vars],
@@ -158,30 +178,66 @@ export function IssueReview(props: { draftId: string }) {
           // The review still works from the draft; the relay reads the chain itself.
         }
       }
-      if (stored.command || stored.status === "preparing") {
+      if (stored.command) return checkCommand();
+      if (stored.status === "preparing") {
+        // Killed during the create: back to editing; any command made then expires unsigned.
         const resumed = await resumeDraft(stored, app.commands.get);
         await save(resumed.draft);
-        if (resumed.view) {
-          viewRef.current = resumed.view;
-          setView(resumed.view);
-          setPhase({ kind: "ready" });
-          return;
-        }
-        if (resumed.offline) {
-          setProblem({ kind: "offline_waiting" });
-          setPhase({ kind: "ready" });
-          return;
-        }
-        if (resumed.draft.status === "editing")
-          return app.navigate({ name: "intake", draftId: stored.id });
+        return app.navigate({ name: "intake", draftId: stored.id });
       }
       await prepare();
     })();
   }, []);
 
+  /**
+   * Reads the command this draft already holds. Until a view loads, the screen stays in "Checking
+   * this command": Prepare is never offered, so no second issue_lot is created. Only a 404 sends
+   * the draft back to editing.
+   */
+  async function checkCommand() {
+    const stored = draftRef.current;
+    if (!stored?.command || viewRef.current || checking.current) return;
+    checking.current = true;
+    setProblem(null);
+    setPhase({ kind: "checking" });
+    const resumed = await resumeDraft(stored, app.commands.get);
+    checking.current = false;
+    if (resumed.view) {
+      await save(resumed.draft);
+      viewRef.current = resumed.view;
+      setView(resumed.view);
+      setPhase({ kind: "ready" });
+      return;
+    }
+    if (resumed.error === null) {
+      await save(resumed.draft);
+      return app.navigate({ name: "intake", draftId: stored.id });
+    }
+    setPhase({ kind: "ready" });
+    const error = resumed.error;
+    if (error instanceof ApiUnreachable) return setProblem({ kind: "offline_checking" });
+    await relayFailed(error, "get");
+  }
+
+  // Check again on reconnect and on return to the foreground, while no view has loaded.
+  const wasOnline = useRef(app.online);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: check reads refs; runs on the network edge
+  useEffect(() => {
+    if (app.online && !wasOnline.current) void checkCommand();
+    wasOnline.current = app.online;
+  }, [app.online]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: check reads refs; one listener per screen
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void checkCommand();
+    });
+    return () => subscription.remove();
+  }, []);
+
   async function prepare() {
     const current = draftRef.current;
-    if (!current?.ownerOrgId) return;
+    // A draft that holds a command is checked, never prepared again (§5.1, fold 9).
+    if (!current?.ownerOrgId || current.command) return;
     if (!app.online) {
       setProblem({ kind: "offline_before" });
       setPhase({ kind: "ready" });
@@ -221,7 +277,7 @@ export function IssueReview(props: { draftId: string }) {
         .then((next) => {
           if (!live) return;
           if (problem?.kind === "offline_waiting") setProblem(null);
-          void show(next);
+          show(next).catch((error: unknown) => relayFailed(error, "get"));
         })
         .catch((error: unknown) => {
           if (!live) return;
@@ -302,14 +358,45 @@ export function IssueReview(props: { draftId: string }) {
     signing.link === "linked" &&
     !isReadyToIssue(readinessInput);
 
+  /**
+   * Every check that decides whether a view may be signed, run on the view itself rather than on
+   * what was last rendered: this instance, this draft's issue, and the §6.4 text check.
+   */
+  function signable(candidate: CommandView): boolean {
+    const current = draftRef.current;
+    if (!current || !candidate.text || !chain) return false;
+    if (!isSameProtocol(candidate, app.protocol)) return false;
+    try {
+      checkBelongs(current, candidate);
+      return verifyCommandText(
+        candidate.text,
+        expectedIssueText(
+          current,
+          {
+            program: app.config.program,
+            protocolInstanceHex: app.protocol.instanceIdHex,
+            classLabel: current.classLabel ?? "",
+            custodianName: chain.displayName,
+            originRequired: site?.originRequired ?? false,
+          },
+          BigInt(candidate.text.validUntil),
+        ),
+      ).ok;
+    } catch {
+      return false;
+    }
+  }
+
   async function stillSame(): Promise<boolean> {
     const current = viewRef.current;
     if (!current?.text) return false;
     try {
       const fresh = await app.commands.get(current.id);
       const same =
+        fresh.id === current.id &&
         fresh.status === "awaiting_signatures" &&
-        fresh.text?.messageSha256 === current.text.messageSha256;
+        fresh.text?.messageSha256 === current.text.messageSha256 &&
+        signable(fresh);
       if (!same) await show(fresh);
       return same;
     } catch {
@@ -321,24 +408,29 @@ export function IssueReview(props: { draftId: string }) {
     const current = viewRef.current;
     if (!current?.text || !app.wallet) return;
     setProblem(null);
+    if (!signable(current)) {
+      // The view changed after the screen drew it: draw it again, with its mismatch, and stop.
+      setView({ ...current });
+      return;
+    }
+    const text = current.text;
     setPhase({ kind: "wallet" });
     let result: Awaited<ReturnType<typeof signText>>;
     try {
       result = await signText(
         sessionConnection(app.wallet, app.connection),
-        { expectedAddress: app.wallet.address, messageBase64: current.text.messageBase64 },
+        { expectedAddress: app.wallet.address, messageBase64: text.messageBase64 },
         app.setConnection,
         stillSame,
       );
     } catch (error) {
       setPhase({ kind: "ready" });
-      setProblem(
-        error instanceof WalletAccountError
-          ? { kind: "wrong_account" }
-          : { kind: "wallet_refused" },
-      );
-      if (!(error instanceof WalletAccountError) && !(error instanceof WalletRefused)) throw error;
-      return;
+      if (error instanceof WalletAccountError) return setProblem({ kind: "wrong_account" });
+      if (error instanceof WalletRefused) return setProblem({ kind: "wallet_refused" });
+      return setProblem({
+        kind: "relay",
+        text: relayErrorCopy("INTERNAL", "signatures", vars()) ?? "",
+      });
     }
     if (result.kind === "not_asked") {
       setPhase({ kind: "ready" });
@@ -350,20 +442,26 @@ export function IssueReview(props: { draftId: string }) {
       setProblem({ kind: "payload", bytes: result.receivedBytes });
       return;
     }
-    await send(result.signatureBase58);
+    await send({ signatureBase58: result.signatureBase58, messageSha256: text.messageSha256 });
   }
 
-  async function send(signatureBase58: string) {
+  async function send(held: HeldSignature) {
     const current = viewRef.current;
     if (!current?.text || !app.wallet) return;
     setProblem(null);
+    if (current.text.messageSha256 !== held.messageSha256 || !signable(current)) {
+      // An old signature never matches a new text: it is dropped, not sent.
+      setPhase({ kind: "ready" });
+      setProblem({ kind: "signature_stale" });
+      return;
+    }
     setPhase({ kind: "sending" });
     try {
       const answer = await app.commands.sign(current.id, {
         role: "custodian",
         wallet: app.wallet.address,
-        messageSha256: current.text.messageSha256,
-        signature: signatureBase58,
+        messageSha256: held.messageSha256,
+        signature: held.signatureBase58,
       });
       await show(answer);
       setPhase({ kind: "ready" });
@@ -376,9 +474,9 @@ export function IssueReview(props: { draftId: string }) {
             fresh.status === "awaiting_signatures" &&
             !fresh.signers.find((s) => s.role === "custodian")?.signed;
           await show(fresh);
-          setPhase(unsigned ? { kind: "not_sent", signatureBase58 } : { kind: "ready" });
+          setPhase(unsigned ? { kind: "not_sent", held } : { kind: "ready" });
         } catch {
-          setPhase({ kind: "not_sent", signatureBase58 });
+          setPhase({ kind: "not_sent", held });
         }
         return;
       }
@@ -405,11 +503,14 @@ export function IssueReview(props: { draftId: string }) {
     const stored = draftRef.current;
     if (!stored) return;
     if (!current) {
+      // A draft that holds a command goes back to editing only after the relay answers.
+      if (stored.command) return;
       await save(backToEditing(stored, new Date().toISOString()));
       return app.navigate({ name: "intake", draftId: stored.id });
     }
     try {
       const fresh = await app.commands.get(current.id);
+      checkBelongs(stored, fresh);
       const abandoned =
         (fresh.status === "awaiting_signatures" && fresh.signers.every((s) => s.signed === null)) ||
         fresh.status === "failed" ||
@@ -445,16 +546,29 @@ export function IssueReview(props: { draftId: string }) {
 
   let footer = null;
   if (!settled) {
-    if (phase.kind === "preparing")
+    if (phase.kind === "checking")
+      footer = <Button label="Checking this command" disabled onPress={() => {}} />;
+    else if (phase.kind === "preparing")
       footer = <Button label="Preparing text" disabled onPress={() => {}} />;
     else if (phase.kind === "wallet")
       footer = <Button label="Waiting for your wallet" disabled onPress={() => {}} />;
     else if (phase.kind === "sending")
       footer = <Button label="Sending signature" disabled onPress={() => {}} />;
     else if (phase.kind === "not_sent") {
-      const pending = phase.signatureBase58;
+      const pending = phase.held;
       footer = (
         <Button label="Send signature" disabled={!app.online} onPress={() => void send(pending)} />
+      );
+    } else if (!view && draft.command) {
+      footer = (
+        <>
+          <Button label="Check again" disabled={!app.online} onPress={() => void checkCommand()} />
+          {!app.online ? (
+            <Txt variant="small" tone="ink2">
+              Needs a connection.
+            </Txt>
+          ) : null}
+        </>
       );
     } else if (!view) {
       footer = (
@@ -501,7 +615,13 @@ export function IssueReview(props: { draftId: string }) {
         {settled ? null : (
           <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
             <RegistryMark
-              mark={view ? markFor(view.status, view.confirmedCommitment) : "Not on chain"}
+              mark={
+                view
+                  ? markFor(view.status, view.confirmedCommitment)
+                  : draft.command
+                    ? markFor(draft.command.lastStatus, draft.command.commitment)
+                    : "Not on chain"
+              }
             />
           </View>
         )}
@@ -532,6 +652,21 @@ export function IssueReview(props: { draftId: string }) {
         <>
           {duplicateLine ? <ErrorBlock>{duplicateLine}</ErrorBlock> : null}
 
+          {phase.kind === "checking" ? (
+            <Note>Checking this command with Thetis. Nothing new is prepared meanwhile.</Note>
+          ) : null}
+          {problem?.kind === "offline_checking" ? (
+            <Note>
+              {draft.status === "awaiting_signature"
+                ? "Offline. Thetis already prepared a text for this draft. This phone checks it again when you are back online."
+                : "Offline. The mark above is the last status Thetis reported for this draft. This phone checks it again when you are back online."}
+            </Note>
+          ) : null}
+          {problem?.kind === "signature_stale" ? (
+            <Note>
+              The text changed after you signed it. Your signature was not sent. Sign the new text.
+            </Note>
+          ) : null}
           {problem?.kind === "offline_before" ? (
             <Note>
               Offline. Your draft is saved on this phone. Preparing the text needs a connection,

@@ -19,6 +19,16 @@ export function keepLocalCopy(
   return target.uri;
 }
 
+/** The local copy's real size, or null when it can't be read. */
+export function sizeOfLocalCopy(uri: string): number | null {
+  try {
+    const file = new File(uri);
+    return file.exists ? file.size : null;
+  } catch {
+    return null;
+  }
+}
+
 export function removeLocalCopy(uri: string): void {
   const file = new File(uri);
   if (file.exists) file.delete();

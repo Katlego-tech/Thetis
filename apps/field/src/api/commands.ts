@@ -196,7 +196,34 @@ function readSigner(value: unknown, path: string): CommandSigner {
   };
 }
 
+/** The single event each field kind's confirmed transaction must hold, when the relay read it. */
+const OUTCOME_EVENT: Partial<Record<CommandKind, string>> = { issue_lot: "LotIssued" };
+
+/**
+ * Rules across fields: a confirmed view names its transaction and commitment, a failed view its
+ * error, and an outcome is the kind's event. Nothing is shown as done without the chain's facts.
+ */
+function checkFacts(view: CommandView): CommandView {
+  if (view.status === "confirmed") {
+    if (view.transaction === null) throw new ShapeError("transaction", "missing on confirmed");
+    if (view.confirmedCommitment === null)
+      throw new ShapeError("confirmedCommitment", "missing on confirmed");
+  }
+  if (view.status === "failed" && view.error === null) {
+    throw new ShapeError("error", "missing on failed");
+  }
+  const event = OUTCOME_EVENT[view.kind];
+  if (view.outcome !== null && event !== undefined && view.outcome.event !== event) {
+    throw new ShapeError("outcome.event", `not ${event}`);
+  }
+  return view;
+}
+
 export function parseCommandView(value: unknown): CommandView {
+  return checkFacts(readView(value));
+}
+
+function readView(value: unknown): CommandView {
   const v = record(value, "command", VIEW_KEYS);
   return {
     id: string(v.id, "id", UUID),

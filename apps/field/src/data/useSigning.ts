@@ -31,6 +31,8 @@ export interface SigningFacts {
   linkOtherOrgId: string | null;
   authorityRow: AuthorityView | null;
   authority: AuthorityState | null;
+  /** Set when these facts are this phone's last read, shown offline: the time they were read. */
+  asOf: string | null;
   reload: () => void;
 }
 
@@ -45,18 +47,43 @@ export function useSigning(): SigningFacts {
     linkOtherOrgId: null,
     authorityRow: null,
     authority: null,
+    asOf: null,
   });
   const reload = useCallback(() => setTick((t) => t + 1), []);
   const orgId = app.organisation.organisationId;
   const wallet = app.wallet?.address ?? null;
-  const { db, protocol, user, memberships, online } = app;
+  const { db, protocol, user, memberships, online, cache } = app;
+  const nameOf = useCallback(
+    (id: string) => memberships.find((m) => m.organisationId === id)?.name ?? null,
+    [memberships],
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read
   useEffect(() => {
     let live = true;
     if (!online) {
-      setState((s) => ({ ...s, loading: false }));
-      return;
+      // Offline: the last facts read for this organisation, marked with their time. The link and
+      // authority count only for the wallet they were read for.
+      void cache.signing(user.id, orgId).then((cached) => {
+        if (!live) return;
+        if (!cached) return setState((s) => ({ ...s, loading: false }));
+        const facts = cached.value;
+        const sameWallet = wallet !== null && facts.wallet === wallet;
+        const now = BigInt(Math.floor(Date.now() / 1_000));
+        setState({
+          loading: false,
+          error: null,
+          chainOrganisation: facts.chainOrganisation,
+          link: sameWallet ? facts.link : null,
+          linkOtherOrgId: sameWallet ? facts.linkOtherOrgId : null,
+          authorityRow: sameWallet ? facts.authorityRow : null,
+          authority: sameWallet ? authorityState(facts.authorityRow, orgId, nameOf, now) : null,
+          asOf: cached.savedAt,
+        });
+      });
+      return () => {
+        live = false;
+      };
     }
     setState((s) => ({ ...s, loading: true, error: null }));
     (async () => {
@@ -73,14 +100,7 @@ export function useSigning(): SigningFacts {
         authorityRow = await readAuthority(db, protocol.protocol, wallet);
       }
       const now = BigInt(Math.floor(Date.now() / 1_000));
-      const authority = wallet
-        ? authorityState(
-            authorityRow,
-            orgId,
-            (id) => memberships.find((m) => m.organisationId === id)?.name ?? null,
-            now,
-          )
-        : null;
+      const authority = wallet ? authorityState(authorityRow, orgId, nameOf, now) : null;
       if (live) {
         setState({
           loading: false,
@@ -90,7 +110,14 @@ export function useSigning(): SigningFacts {
           linkOtherOrgId,
           authorityRow,
           authority,
+          asOf: null,
         });
+        void cache.setSigning(
+          user.id,
+          orgId,
+          { wallet, chainOrganisation, link, linkOtherOrgId, authorityRow },
+          new Date().toISOString(),
+        );
       }
     })().catch((error: unknown) => {
       if (live) {
@@ -104,7 +131,7 @@ export function useSigning(): SigningFacts {
     return () => {
       live = false;
     };
-  }, [db, protocol.protocol, orgId, wallet, user.id, memberships, online, tick]);
+  }, [db, protocol.protocol, orgId, wallet, user.id, nameOf, online, cache, tick]);
 
   return { ...state, reload };
 }

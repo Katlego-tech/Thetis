@@ -14,13 +14,14 @@ import { type LotRow, ReadError, readLotsAtSites, readSites } from "../data/read
 import { useSigning } from "../data/useSigning";
 import { removeDraftFiles } from "../drafts/files";
 import { type IntakeDraft, isEarlierRun, newDraft } from "../drafts/store";
-import { formatTonnes, parseTonnes, shortAddress } from "../format";
+import { formatClock, formatTonnes, parseTonnes, shortAddress, unixOf } from "../format";
 import { requiredPurposes } from "../intake";
 import { type RegistryMark as Mark, markFor } from "../marks";
 import { readinessLines } from "../readiness";
 
 function draftMark(draft: IntakeDraft): Mark {
-  if (draft.command && draft.status !== "editing") return markFor(draft.command.lastStatus, null);
+  if (draft.command && draft.status !== "editing")
+    return markFor(draft.command.lastStatus, draft.command.commitment);
   return "Draft";
 }
 
@@ -222,6 +223,11 @@ export function Home() {
             {!app.wallet ? (
               <TextLink label="Connect a wallet" onPress={() => app.navigate({ name: "wallet" })} />
             ) : null}
+            {signing.asOf ? (
+              <Txt variant="small" tone="ink2">
+                {`As of ${formatClock(unixOf(signing.asOf))}, offline`}
+              </Txt>
+            ) : null}
           </>
         )}
         {signing.error ? (
@@ -348,19 +354,18 @@ export function Home() {
                       ? `${draft.command.transactionSignature.slice(0, 8)}…${draft.command.transactionSignature.slice(-8)}`
                       : "",
                   ].filter(Boolean)}
-                  right={<RegistryMark mark="Confirmed" />}
+                  right={<RegistryMark mark={draftMark(draft)} />}
                   last={index === issued.length - 1}
                   onPress={() => app.navigate({ name: "issue", draftId: draft.id })}
                 />
-                {draft.command?.transactionSignature ? (
+                {draft.command?.explorerUrl ? (
                   <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
                     <TextLink
                       label="View on Solana Explorer (devnet)"
-                      onPress={() =>
-                        void Linking.openURL(
-                          `https://explorer.solana.com/tx/${draft.command?.transactionSignature}?cluster=devnet`,
-                        )
-                      }
+                      onPress={() => {
+                        const url = draft.command?.explorerUrl;
+                        if (url) void Linking.openURL(url);
+                      }}
                     />
                   </View>
                 ) : null}

@@ -3,6 +3,7 @@
 import { ApiError } from "../api/client";
 import type { CommandStatus, CommandView } from "../api/commands";
 import type { EvidenceItem } from "../evidence/upload";
+import { LOT_ID } from "../intake";
 import type { KeyValueStorage } from "../secure-session";
 
 export type DraftStatus =
@@ -20,6 +21,9 @@ export interface DraftCommand {
   textVersion: number;
   transactionSignature: string | null;
   lot: string | null;
+  /** The relay's explorer link for the transaction; the phone never builds one. */
+  explorerUrl: string | null;
+  commitment: "confirmed" | "finalized" | null;
 }
 
 export interface IntakeDraft {
@@ -37,6 +41,8 @@ export interface IntakeDraft {
   ownerName: string | null;
   lotId: string;
   lotIdLocked: boolean;
+  /** The person finished typing the lot id (blur or Done): only then do uploads start. */
+  lotIdCommitted: boolean;
   grade: string | null;
   quantityText: string;
   weighbridgeTicket: string;
@@ -80,6 +86,7 @@ export function newDraft(init: {
     ownerName: null,
     lotId: "",
     lotIdLocked: false,
+    lotIdCommitted: false,
     grade: null,
     quantityText: "",
     weighbridgeTicket: "",
@@ -104,14 +111,22 @@ export function editDraft(draft: IntakeDraft, edit: DraftEdit, now: string): Int
   if (edit.lotId !== undefined && edit.lotId !== draft.lotId && draft.lotIdLocked) {
     throw new DraftLocked("the lot id is fixed once a file is registered");
   }
+  const lotIdChanged = edit.lotId !== undefined && edit.lotId !== draft.lotId;
   return {
     ...draft,
     ...edit,
+    lotIdCommitted: lotIdChanged ? false : draft.lotIdCommitted,
     revision: draft.revision + 1,
     updatedAt: now,
     command: null,
     status: "editing",
   };
+}
+
+/** The lot id field lost focus or Done was pressed: a valid lot id is now final for uploads. */
+export function commitLotId(draft: IntakeDraft): IntakeDraft {
+  if (draft.lotIdCommitted || !LOT_ID.test(draft.lotId)) return draft;
+  return { ...draft, lotIdCommitted: true };
 }
 
 /** Upload progress: not a person's edit, so the revision stays; locks the lot id once registered. */
@@ -140,8 +155,26 @@ export function draftStatusFor(status: CommandStatus): DraftStatus {
   }
 }
 
+/** A relay answer that is not this draft's issue: never mapped onto it. */
+export class CommandMismatch extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "CommandMismatch";
+  }
+}
+
+/** Whether a view is this draft's issue: the kind, the lot id, and the command it already holds. */
+export function checkBelongs(draft: IntakeDraft, view: CommandView): void {
+  if (view.kind !== "issue_lot") throw new CommandMismatch(`kind ${view.kind}`);
+  if (view.args.lotId !== draft.lotId) throw new CommandMismatch("another lot id");
+  if (draft.command && draft.command.commandId !== view.id) {
+    throw new CommandMismatch("another command");
+  }
+}
+
 /** Applies a relay answer. `issued` is reached only here, from a relay `confirmed`. */
 export function applyCommand(draft: IntakeDraft, view: CommandView): IntakeDraft {
+  checkBelongs(draft, view);
   return {
     ...draft,
     status: draftStatusFor(view.status),
@@ -151,6 +184,8 @@ export function applyCommand(draft: IntakeDraft, view: CommandView): IntakeDraft
       textVersion: view.text?.version ?? 0,
       transactionSignature: view.transaction?.signature ?? null,
       lot: view.lot,
+      explorerUrl: view.transaction?.explorerUrl ?? null,
+      commitment: view.confirmedCommitment,
     },
   };
 }
@@ -166,23 +201,28 @@ export function backToEditing(draft: IntakeDraft, now: string): IntakeDraft {
   };
 }
 
+/**
+ * Reconciles a stored draft with the relay. `error` is set when no view could be applied (offline,
+ * timeout, an unreadable answer, a view of another draft): the draft keeps its stored state and
+ * its command, and the caller keeps checking. Only a 404 forgets the command.
+ */
 export async function resumeDraft(
   draft: IntakeDraft,
   get: (commandId: string) => Promise<CommandView>,
-): Promise<{ draft: IntakeDraft; view: CommandView | null; offline: boolean }> {
+): Promise<{ draft: IntakeDraft; view: CommandView | null; error: unknown }> {
   if (!draft.command) {
     if (draft.status === "preparing")
-      return { draft: { ...draft, status: "editing" }, view: null, offline: false };
-    return { draft, view: null, offline: false };
+      return { draft: { ...draft, status: "editing" }, view: null, error: null };
+    return { draft, view: null, error: null };
   }
   try {
     const view = await get(draft.command.commandId);
-    return { draft: applyCommand(draft, view), view, offline: false };
+    return { draft: applyCommand(draft, view), view, error: null };
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
-      return { draft: backToEditing(draft, draft.updatedAt), view: null, offline: false };
+      return { draft: backToEditing(draft, draft.updatedAt), view: null, error: null };
     }
-    return { draft, view: null, offline: true };
+    return { draft, view: null, error };
   }
 }
 
@@ -201,13 +241,32 @@ export interface StoredWallet {
   walletUriBase: string;
 }
 
+/** A draft stored before a field existed reads that field's default. */
+function restore(stored: IntakeDraft): IntakeDraft {
+  const command = stored.command
+    ? {
+        ...stored.command,
+        explorerUrl: stored.command.explorerUrl ?? null,
+        commitment: stored.command.commitment ?? null,
+      }
+    : null;
+  return { ...stored, lotIdCommitted: stored.lotIdCommitted ?? stored.lotIdLocked, command };
+}
+
 export function createDraftStore(storage: KeyValueStorage) {
-  async function list(userId: string, organisationId: string): Promise<IntakeDraft[]> {
+  // Every read-modify-write runs after the one before it, so two saves can't land out of order.
+  let queue: Promise<unknown> = Promise.resolve();
+  function serial<T>(task: () => Promise<T>): Promise<T> {
+    const run = queue.then(task, task);
+    queue = run.catch(() => undefined);
+    return run;
+  }
+  async function read(userId: string, organisationId: string): Promise<IntakeDraft[]> {
     const raw = await storage.getItem(draftsKey(userId, organisationId));
     if (!raw) return [];
     try {
       const parsed: unknown = JSON.parse(raw);
-      return Array.isArray(parsed) ? (parsed as IntakeDraft[]) : [];
+      return Array.isArray(parsed) ? (parsed as IntakeDraft[]).map(restore) : [];
     } catch {
       return [];
     }
@@ -215,23 +274,29 @@ export function createDraftStore(storage: KeyValueStorage) {
   async function write(userId: string, organisationId: string, drafts: IntakeDraft[]) {
     await storage.setItem(draftsKey(userId, organisationId), JSON.stringify(drafts));
   }
+  const list = (userId: string, organisationId: string) =>
+    serial(() => read(userId, organisationId));
   return {
     list,
     async get(userId: string, organisationId: string, id: string) {
       return (await list(userId, organisationId)).find((draft) => draft.id === id) ?? null;
     },
-    async save(draft: IntakeDraft) {
-      const drafts = await list(draft.userId, draft.organisationId);
-      const others = drafts.filter((d) => d.id !== draft.id);
-      await write(draft.userId, draft.organisationId, [...others, draft]);
+    save(draft: IntakeDraft): Promise<void> {
+      return serial(async () => {
+        const drafts = await read(draft.userId, draft.organisationId);
+        const others = drafts.filter((d) => d.id !== draft.id);
+        await write(draft.userId, draft.organisationId, [...others, draft]);
+      });
     },
-    async remove(draft: IntakeDraft) {
-      const drafts = await list(draft.userId, draft.organisationId);
-      await write(
-        draft.userId,
-        draft.organisationId,
-        drafts.filter((d) => d.id !== draft.id),
-      );
+    remove(draft: IntakeDraft): Promise<void> {
+      return serial(async () => {
+        const drafts = await read(draft.userId, draft.organisationId);
+        await write(
+          draft.userId,
+          draft.organisationId,
+          drafts.filter((d) => d.id !== draft.id),
+        );
+      });
     },
     async wallet(userId: string, organisationId: string): Promise<StoredWallet | null> {
       const raw = await storage.getItem(walletKey(userId, organisationId));

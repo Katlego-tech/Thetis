@@ -99,7 +99,12 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       if (!isRecord(parsed) || !("data" in parsed) || Object.keys(parsed).length !== 1) {
         throw new ApiShapeError("The answer is not a {data} envelope.");
       }
-      return parse(parsed.data);
+      try {
+        return parse(parsed.data);
+      } catch (error) {
+        // A body the route's parser refuses is the relay answering wrongly, not the network.
+        throw new ApiShapeError(error instanceof Error ? error.message : String(error));
+      }
     },
   };
 }

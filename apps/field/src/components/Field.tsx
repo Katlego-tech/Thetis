@@ -22,6 +22,8 @@ export function Field(
     | "inputMode"
     | "maxLength"
     | "onBlur"
+    | "onSubmitEditing"
+    | "returnKeyType"
   >,
 ) {
   const palette = usePalette();

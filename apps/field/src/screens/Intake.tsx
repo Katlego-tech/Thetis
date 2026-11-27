@@ -23,8 +23,15 @@ import {
   type Site,
 } from "../data/reads";
 import { useSigning } from "../data/useSigning";
-import { keepLocalCopy, removeDraftFiles, removeLocalCopy } from "../drafts/files";
-import { type DraftEdit, editDraft, type IntakeDraft, withEvidence } from "../drafts/store";
+import { keepLocalCopy, removeDraftFiles, removeLocalCopy, sizeOfLocalCopy } from "../drafts/files";
+import {
+  commitLotId,
+  type DraftEdit,
+  editDraft,
+  type IntakeDraft,
+  withEvidence,
+} from "../drafts/store";
+import { captureEvidence } from "../evidence/capture";
 import { uploadDeps } from "../evidence/deps";
 import { advanceUpload, type EvidenceItem, type Purpose } from "../evidence/upload";
 import { formatClock, formatKg, formatTonnes, parseTonnes, unixOf } from "../format";
@@ -45,12 +52,6 @@ type Duplicate =
   | { kind: "intake"; lotId: string | null }
   | { kind: "lot_id" }
   | { kind: "unavailable" };
-
-const EXTENSIONS: Record<string, string> = {
-  "application/pdf": "pdf",
-  "image/jpeg": "jpg",
-  "image/png": "png",
-};
 
 export function duplicateCopy(duplicate: Duplicate, draft: IntakeDraft): string | null {
   switch (duplicate.kind) {
@@ -116,6 +117,7 @@ export function Intake(props: { draftId: string }) {
   const [picker, setPicker] = useState<"site" | "owner" | "grade" | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [cameraDenied, setCameraDenied] = useState(false);
+  const [unreadableFile, setUnreadableFile] = useState(false);
   const [quantityTouched, setQuantityTouched] = useState(false);
   const [tick, setTick] = useState(0);
   const draftRef = useRef<IntakeDraft | null>(null);
@@ -188,7 +190,8 @@ export function Intake(props: { draftId: string }) {
     async (retryFailed: boolean) => {
       if (uploading.current || !app.online) return;
       const start = draftRef.current;
-      if (!start || !LOT_ID.test(start.lotId)) return;
+      // Files are filed under the lot id, so nothing registers until the person has finished it.
+      if (!start?.lotIdCommitted || !LOT_ID.test(start.lotId)) return;
       uploading.current = true;
       try {
         const deps = uploadDeps(app.db, app.evidence);
@@ -204,12 +207,16 @@ export function Intake(props: { draftId: string }) {
             (retryFailed && (item.upload === "failed" || item.upload === "rejected")),
         );
         for (const pending of waiting) {
+          // Each step's save waits for the one before it; the final save waits for them all.
+          let saved: Promise<void> = Promise.resolve();
           const done = await advanceUpload(pending, subject, deps, (item) => {
             const current = draftRef.current;
             if (!current) return;
             const evidence = current.evidence.map((e) => (e.localId === item.localId ? item : e));
-            void persist(withEvidence(current, evidence, new Date().toISOString()));
+            const next = withEvidence(current, evidence, new Date().toISOString());
+            saved = saved.then(() => persist(next));
           });
+          await saved;
           const current = draftRef.current;
           if (current) {
             const evidence = current.evidence.map((e) => (e.localId === done.localId ? done : e));
@@ -223,10 +230,14 @@ export function Intake(props: { draftId: string }) {
     [app.online, app.db, app.evidence, app.user.id, orgId, persist],
   );
 
+  // A draft opened with a committed lot id and files still on the phone carries on uploading.
+  // Uploads never start from an edit: only from a commit, a new file, the network or Retry.
+  const resumed = useRef(false);
   useEffect(() => {
-    if (draft && app.online && draft.evidence.some((item) => item.upload === "local"))
-      void runUploads(false);
-  }, [draft, app.online, runUploads]);
+    if (resumed.current || !draft) return;
+    resumed.current = true;
+    if (draft.evidence.some((item) => item.upload === "local")) void runUploads(false);
+  }, [draft, runUploads]);
 
   const wasOnline = useRef(app.online);
   useEffect(() => {
@@ -263,28 +274,35 @@ export function Intake(props: { draftId: string }) {
     await persist(editDraft(current, patch, now()));
   }
 
-  async function addFile(purpose: Purpose, uri: string, mime: string, size: number) {
+  async function addFile(purpose: Purpose, uri: string, mime: string) {
     const current = draftRef.current;
     if (!current) return;
-    const localId = Crypto.randomUUID();
-    const localUri = keepLocalCopy(current.id, uri, localId, EXTENSIONS[mime] ?? "bin");
-    const item: EvidenceItem = {
-      localId,
-      purpose,
-      localUri,
-      mime,
-      sizeBytes: size,
-      capturedAt: now(),
-      objectId: null,
-      versionId: null,
-      version: null,
-      supersedesId: null,
-      storagePath: null,
-      upload: "local",
-      sha256: null,
-      error: null,
-    };
-    await edit({ evidence: [...current.evidence, item] });
+    // The size checked against the limit is the copy's own, never the picker's.
+    const captured = captureEvidence(
+      {
+        draftId: current.id,
+        purpose,
+        sourceUri: uri,
+        mime,
+        localId: Crypto.randomUUID(),
+        capturedAt: now(),
+      },
+      { keepLocalCopy, sizeOf: sizeOfLocalCopy, removeLocalCopy },
+    );
+    setUnreadableFile(captured.kind === "unreadable");
+    if (captured.kind !== "kept") return;
+    await edit({ evidence: [...current.evidence, captured.item] });
+    void runUploads(false);
+  }
+
+  /** Blur or Done on the lot id: a valid one is committed, and waiting files start uploading. */
+  async function commitLot() {
+    const current = draftRef.current;
+    if (!current) return;
+    const next = commitLotId(current);
+    if (next === current) return;
+    await persist(next);
+    void runUploads(false);
   }
 
   async function takePhoto(purpose: Purpose) {
@@ -296,8 +314,7 @@ export function Intake(props: { draftId: string }) {
     setCameraDenied(false);
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.8 });
     const asset = result.canceled ? null : result.assets[0];
-    if (asset)
-      await addFile(purpose, asset.uri, asset.mimeType ?? "image/jpeg", asset.fileSize ?? 0);
+    if (asset) await addFile(purpose, asset.uri, asset.mimeType ?? "image/jpeg");
   }
 
   async function chooseFile(purpose: Purpose) {
@@ -306,13 +323,7 @@ export function Intake(props: { draftId: string }) {
       copyToCacheDirectory: true,
     });
     const asset = result.canceled ? null : result.assets[0];
-    if (asset)
-      await addFile(
-        purpose,
-        asset.uri,
-        asset.mimeType ?? "application/octet-stream",
-        asset.size ?? 0,
-      );
+    if (asset) await addFile(purpose, asset.uri, asset.mimeType ?? "application/octet-stream");
   }
 
   async function removeFile(item: EvidenceItem) {
@@ -431,6 +442,9 @@ export function Intake(props: { draftId: string }) {
         maxLength={16}
         locked={!editable || draft.lotIdLocked}
         onChangeText={(text) => void edit({ lotId: text.toUpperCase() })}
+        onBlur={() => void commitLot()}
+        onSubmitEditing={() => void commitLot()}
+        returnKeyType="done"
         error={lotIdError(draft.lotId)}
         help={
           draft.lotIdLocked
@@ -508,6 +522,12 @@ export function Intake(props: { draftId: string }) {
       {duplicate.kind === "unavailable" && duplicateLine ? <Note>{duplicateLine}</Note> : null}
 
       <Section title="Files">
+        {unreadableFile ? (
+          <ErrorBlock>
+            This phone could not read the size of that file, so it can't be checked. Choose it
+            again.
+          </ErrorBlock>
+        ) : null}
         {cameraDenied ? (
           <ErrorBlock>
             Thetis can't use the camera because permission was refused. Allow it in Android

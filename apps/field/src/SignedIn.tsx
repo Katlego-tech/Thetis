@@ -10,8 +10,9 @@ import { evidenceApi } from "./api/evidence";
 import { walletLinksApi } from "./api/walletLinks";
 import type { FieldConfig } from "./config";
 import { AppContext, type AppContextValue, type Route } from "./context";
-import { type Membership, readMemberships, readProtocol } from "./data/reads";
+import { type Membership, ReadError, readMemberships, readProtocol } from "./data/reads";
 import { createDraftStore, type StoredWallet } from "./drafts/store";
+import { createOfflineCache } from "./offline-cache";
 import type { ProtocolContext } from "./protocol";
 import {
   ChooseOrganisation,
@@ -24,10 +25,26 @@ import { Home } from "./screens/Home";
 import { Intake } from "./screens/Intake";
 import { IssueReview } from "./screens/IssueReview";
 import { Wallet } from "./screens/Wallet";
-import type { createSupabase } from "./supabase";
+import { type createSupabase, sessionStorage } from "./supabase";
 import type { WalletConnection } from "./wallet";
 
 const store = createDraftStore(AsyncStorage);
+const cache = createOfflineCache(sessionStorage);
+
+/** A read that failed because the phone could not reach Supabase, not because it refused. */
+function unreachable(error: unknown, online: boolean): boolean {
+  if (!online) return true;
+  if (error instanceof ReadError)
+    return error.timeout || /Network request failed|fetch/i.test(error.message);
+  return error instanceof TypeError;
+}
+
+/** The older of two cache times, or the one that is set. */
+function earliest(a: string | null, b: string | null): string | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
+}
 
 export function SignedIn(props: {
   config: FieldConfig;
@@ -48,6 +65,11 @@ export function SignedIn(props: {
   const [connection, setConnection] = useState<WalletConnection | null>(null);
   const [routes, setRoutes] = useState<Route[]>([{ name: "home" }]);
   const [tick, setTick] = useState(0);
+  // Set while the gates run on what this phone read before (offline cold start); cleared by the
+  // next successful read.
+  const [membershipsCachedAt, setMembershipsCachedAt] = useState<string | null>(null);
+  const [protocolCachedAt, setProtocolCachedAt] = useState<string | null>(null);
+  const offlineSince = earliest(membershipsCachedAt, protocolCachedAt);
 
   const client = useMemo(
     () =>
@@ -62,25 +84,53 @@ export function SignedIn(props: {
   useEffect(() => {
     let live = true;
     setMembershipError(false);
-    Promise.all([readMemberships(db, userId), store.organisation(userId)])
-      .then(([rows, stored]) => {
+    const choose = (rows: Membership[], stored: string | null) => {
+      setMemberships(rows);
+      const only = rows.length === 1 ? rows[0]?.organisationId : undefined;
+      setChosen(only ?? (rows.some((m) => m.organisationId === stored) ? stored : null));
+    };
+    (async () => {
+      const stored = await store.organisation(userId);
+      try {
+        const rows = await readMemberships(db, userId);
         if (!live) return;
-        setMemberships(rows);
-        const only = rows.length === 1 ? rows[0]?.organisationId : undefined;
-        setChosen(only ?? (rows.some((m) => m.organisationId === stored) ? stored : null));
-      })
-      .catch(() => live && setMembershipError(true));
+        choose(rows, stored);
+        setMembershipsCachedAt(null);
+        await cache.setMemberships(userId, rows, new Date().toISOString());
+      } catch (error) {
+        const cached = unreachable(error, online) ? await cache.memberships(userId) : null;
+        if (!live) return;
+        if (!cached) return setMembershipError(true);
+        choose(cached.value, stored);
+        setMembershipsCachedAt(cached.savedAt);
+      }
+    })();
     return () => {
       live = false;
     };
   }, [db, userId, tick]);
 
+  // Back online after an offline start: read everything again, which leaves offline mode.
+  useEffect(() => {
+    if (online && offlineSince !== null) setTick((t) => t + 1);
+  }, [online, offlineSince]);
+
   const loadProtocol = useCallback(() => {
     setProtocolError(false);
     readProtocol(db, config.program)
-      .then((result) => setProtocol(result.kind === "ready" ? result.context : "none"))
-      .catch(() => setProtocolError(true));
-  }, [db, config.program]);
+      .then((result) => {
+        setProtocol(result.kind === "ready" ? result.context : "none");
+        setProtocolCachedAt(null);
+        if (result.kind === "ready")
+          void cache.setProtocol(userId, result.context, new Date().toISOString());
+      })
+      .catch(async (error: unknown) => {
+        const cached = unreachable(error, online) ? await cache.protocol(userId) : null;
+        if (!cached) return setProtocolError(true);
+        setProtocol(cached.value);
+        setProtocolCachedAt(cached.savedAt);
+      });
+  }, [db, config.program, userId, online]);
 
   useEffect(() => {
     if (memberships && memberships.length > 0) loadProtocol();
@@ -120,6 +170,7 @@ export function SignedIn(props: {
       walletLinks: walletLinksApi(client),
       evidence: evidenceApi(client),
       store,
+      cache,
       user: { id: userId, email: props.session.user.email ?? "" },
       memberships,
       organisation,
@@ -130,7 +181,9 @@ export function SignedIn(props: {
       },
       protocol,
       refreshProtocol: loadProtocol,
-      online,
+      // Offline mode: nothing that needs the network is offered until the reads succeed again.
+      online: online && offlineSince === null,
+      offlineSince,
       wallet,
       setWallet: async (next) => {
         setWalletState(next);
@@ -155,6 +208,7 @@ export function SignedIn(props: {
     props.session.user.email,
     loadProtocol,
     online,
+    offlineSince,
     wallet,
     connection,
     props.sessionExpired,
@@ -184,7 +238,9 @@ export function SignedIn(props: {
     );
   }
   if (protocolError) {
-    return <LoadFailed offline={!online} what="The Thetis instance" onRetry={loadProtocol} />;
+    return (
+      <LoadFailed offline={!online} what="The Thetis instance details" onRetry={loadProtocol} />
+    );
   }
   if (protocol === "none")
     return <NoInstance organisation={organisation.name} onRetry={loadProtocol} />;

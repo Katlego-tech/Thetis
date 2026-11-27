@@ -74,18 +74,19 @@ export function outcomeView(command: CommandView, ctx: OutcomeContext): OutcomeV
         polling: true,
       };
     case "failed": {
-      const code = command.error?.code ?? "TransactionError";
+      // The parser refuses a failed view without an error, so the code is the program's own.
+      const code = command.error?.code ?? null;
       return {
         ...base,
         lines: [
-          failedCommandCopy(code, {
+          failedCommandCopy(code ?? "", {
             org: ctx.org,
             owner: ctx.ownerName,
             site: ctx.signed.site,
             quantity: ctx.signed.quantity,
           }),
         ],
-        refusal: `Refused by the Thetis program: ${code}`,
+        refusal: code === null ? null : `Refused by the Thetis program: ${code}`,
         after: transaction
           ? "Nothing was recorded. The refusal is on devnet:"
           : "Nothing was recorded.",

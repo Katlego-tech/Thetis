@@ -82,7 +82,7 @@ export function LoadFailed(props: { onRetry: () => void; offline: boolean; what:
       <Panel>
         <Txt style={{ fontSize: 14 }}>
           {props.offline
-            ? `Offline. ${props.what} load when you are back online. Your drafts are still on this phone.`
+            ? `Offline. ${props.what} load when you are back online. This phone has not loaded them before, so drafts open once it has.`
             : `Thetis could not load ${props.what.toLowerCase()}. Nothing changed.`}
         </Txt>
       </Panel>
