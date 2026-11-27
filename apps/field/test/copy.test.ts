@@ -91,7 +91,7 @@ describe("record_observation copy (field-app.md §6.7 observation rows, §7.8)",
       "Another observation of this batch was recorded first. Prepare the text again.",
     );
     expect(failedCommandCopy("ShipmentNotOpen", vars, "issue_lot")).toBe(
-      "See the transaction on the explorer for the program's message.",
+      "This batch can't be handed over now (ShipmentNotOpen).",
     );
     // Codes without an observation row fall back to the shared table.
     expect(failedCommandCopy("InvalidField", vars, "record_observation")).toBe(

@@ -26,6 +26,19 @@ export interface DraftCommand {
   commitment: "confirmed" | "finalized" | null;
 }
 
+/** The border observation being prepared: one per user and organisation. */
+export interface ObservationDraft {
+  id: string;
+  userId: string;
+  organisationId: string;
+  protocol: string;
+  batch: string | null;
+  locationCode: string;
+  evidence: EvidenceItem | null;
+  command: DraftCommand | null;
+  updatedAt: string;
+}
+
 export interface IntakeDraft {
   id: string;
   userId: string;
@@ -232,6 +245,8 @@ export function isEarlierRun(draft: IntakeDraft, protocol: string): boolean {
 
 export const draftsKey = (userId: string, organisationId: string) =>
   `thetis.field.drafts.${userId}.${organisationId}`;
+export const observationKey = (userId: string, organisationId: string) =>
+  `thetis.field.observations.${userId}.${organisationId}`;
 export const organisationKey = (userId: string) => `thetis.field.org.${userId}`;
 export const walletKey = (userId: string, organisationId: string) =>
   `thetis.field.wallet.${userId}.${organisationId}`;
@@ -297,6 +312,28 @@ export function createDraftStore(storage: KeyValueStorage) {
           drafts.filter((d) => d.id !== draft.id),
         );
       });
+    },
+    observation(userId: string, organisationId: string): Promise<ObservationDraft | null> {
+      return serial(async () => {
+        const raw = await storage.getItem(observationKey(userId, organisationId));
+        if (!raw) return null;
+        try {
+          const parsed: unknown = JSON.parse(raw);
+          return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as ObservationDraft)
+            : null;
+        } catch {
+          return null;
+        }
+      });
+    },
+    saveObservation(draft: ObservationDraft): Promise<void> {
+      return serial(() =>
+        storage.setItem(observationKey(draft.userId, draft.organisationId), JSON.stringify(draft)),
+      );
+    },
+    removeObservation(userId: string, organisationId: string): Promise<void> {
+      return serial(() => storage.removeItem(observationKey(userId, organisationId)));
     },
     async wallet(userId: string, organisationId: string): Promise<StoredWallet | null> {
       const raw = await storage.getItem(walletKey(userId, organisationId));

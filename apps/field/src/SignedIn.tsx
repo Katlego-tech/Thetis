@@ -7,6 +7,7 @@ import { AppState, BackHandler } from "react-native";
 import { createApiClient } from "./api/client";
 import { commandsApi } from "./api/commands";
 import { evidenceApi } from "./api/evidence";
+import { fieldApi } from "./api/field";
 import { walletLinksApi } from "./api/walletLinks";
 import type { FieldConfig } from "./config";
 import { AppContext, type AppContextValue, type Route } from "./context";
@@ -14,6 +15,7 @@ import { type Membership, ReadError, readMemberships, readProtocol } from "./dat
 import { createDraftStore, type StoredWallet } from "./drafts/store";
 import { createOfflineCache } from "./offline-cache";
 import type { ProtocolContext } from "./protocol";
+import { Batches } from "./screens/Batches";
 import {
   ChooseOrganisation,
   LoadFailed,
@@ -21,9 +23,13 @@ import {
   NoInstance,
   NoOrganisation,
 } from "./screens/Gates";
+import { Handover } from "./screens/Handover";
 import { Home } from "./screens/Home";
 import { Intake } from "./screens/Intake";
 import { IssueReview } from "./screens/IssueReview";
+import { Loading as LoadingIntent } from "./screens/Loading";
+import { Loadings } from "./screens/Loadings";
+import { Observation } from "./screens/Observation";
 import { Wallet } from "./screens/Wallet";
 import { type createSupabase, sessionStorage } from "./supabase";
 import type { WalletConnection } from "./wallet";
@@ -169,6 +175,7 @@ export function SignedIn(props: {
       commands: commandsApi(client),
       walletLinks: walletLinksApi(client),
       evidence: evidenceApi(client),
+      field: fieldApi(client),
       store,
       cache,
       user: { id: userId, email: props.session.user.email ?? "" },
@@ -255,8 +262,18 @@ export function SignedIn(props: {
         <Wallet />
       ) : route.name === "intake" ? (
         <Intake key={route.draftId} draftId={route.draftId} />
-      ) : (
+      ) : route.name === "issue" ? (
         <IssueReview key={`${route.draftId}-${routes.length}`} draftId={route.draftId} />
+      ) : route.name === "batches" ? (
+        <Batches key={routes.length} />
+      ) : route.name === "handover" ? (
+        <Handover key={`${route.commandId}-${routes.length}`} commandId={route.commandId} />
+      ) : route.name === "loadings" ? (
+        <Loadings key={routes.length} />
+      ) : route.name === "loading" ? (
+        <LoadingIntent key={`${route.intent}-${routes.length}`} intent={route.intent} />
+      ) : (
+        <Observation key={routes.length} />
       )}
     </AppContext.Provider>
   );

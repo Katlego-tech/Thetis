@@ -8,11 +8,19 @@ export interface CopyVars {
   to?: string;
   /** The lender of the loan a loading refusal names, when the screen knows it. */
   lender?: string;
+  /** Who holds the batch now, for a handover that did not land. */
+  holder?: string;
 }
 
 const AUTHORITY = "A signer's authority does not allow this action.";
 const SIGNATURE = "The signature did not match what Thetis expected.";
 const WINDOW = "The signed text was no longer valid when it reached devnet.";
+const NO_ACCOUNT =
+  "An authority or record this action needs does not exist on this Thetis instance.";
+const ANOTHER_HANDOVER =
+  "Another handover of this batch was recorded first. Nothing was recorded for this one. Open the batch again to see who holds it.";
+const cantHandOver = (code: string) => `This batch can't be handed over now (${code}).`;
+const cantRecordLoading = (code: string) => `This loading can't be recorded now (${code}).`;
 
 /** Program errors a failed command can carry, by `error.code`. */
 export const FAILED_COMMAND_MESSAGES: Record<string, (v: CopyVars & { code: string }) => string> = {
@@ -38,13 +46,39 @@ export const FAILED_COMMAND_MESSAGES: Record<string, (v: CopyVars & { code: stri
   WrongSignatureCount: () => SIGNATURE,
   CrossInstructionReference: () => SIGNATURE,
   MessageMismatch: () => SIGNATURE,
+  RecipientNotApproved: (v) => `${v.to} is not the next holder this batch allows.`,
+  StaleRevision: () =>
+    "Another change reached this record first. Start again from the current state.",
+  Anchor3012: () => NO_ACCOUNT,
+  ManifestMismatch: (v) => cantHandOver(v.code),
+  StageOutOfOrder: (v) => cantHandOver(v.code),
+  ShipmentNotOpen: (v) => cantHandOver(v.code),
+  ShipmentIncomplete: (v) => cantHandOver(v.code),
+  DepartureDocumentInvalid: (v) => cantHandOver(v.code),
+  Restricted: (v) => cantHandOver(v.code),
+  AcceptanceMissing: (v) => cantRecordLoading(v.code),
+  AcceptanceStale: (v) => cantRecordLoading(v.code),
+  LoadingExpired: (v) => cantRecordLoading(v.code),
+  LoadingNotOpen: (v) => cantRecordLoading(v.code),
+  LotNotStored: (v) => cantRecordLoading(v.code),
 };
 
 /**
- * Codes whose messages belong to the custody screens. They name program errors that are added
- * with those screens, so the program-error check skips them until then. Empty for now.
+ * Codes that are not Thetis program errors besides Anchor0: the program-error check skips them.
+ * Anchor3012 is the framework's own "account not initialized" refusal.
  */
-export const LATER_FAILED_CODES: ReadonlySet<string> = new Set<string>();
+export const LATER_FAILED_CODES: ReadonlySet<string> = new Set<string>(["Anchor3012"]);
+
+/**
+ * A handover's own wording, where the shared message would not say who still holds the batch.
+ * Anchor0 here means a second handover tried to create a record the first already made.
+ */
+export const HANDOVER_FAILED_MESSAGES: Record<string, (v: CopyVars & { code: string }) => string> =
+  {
+    StaleRevision: () => ANOTHER_HANDOVER,
+    Anchor0: () => ANOTHER_HANDOVER,
+    Anchor3012: (v) => `${NO_ACCOUNT} ${v.holder} still holds the batch.`,
+  };
 
 /**
  * A border or checkpoint observation's own wording for program errors whose shared message names
@@ -80,14 +114,16 @@ function inRecovery(lender: string | undefined): string {
   return `${lender ? `${lender}'s loan` : "A loan on this lot"} is in recovery; the lot cannot be loaded until it is settled.`;
 }
 
-/** `kind` is the command's kind; an observation's or a loading's own rows win over the shared table. */
+/** `kind` is the command's kind; a handover's, an observation's or a loading's own rows win over the shared table. */
 export function failedCommandCopy(code: string, vars: CopyVars, kind?: string): string {
   const own =
-    kind === "record_observation"
-      ? OBSERVATION_FAILED_MESSAGES[code]
-      : kind === "record_loading"
-        ? LOADING_FAILED_MESSAGES[code]
-        : undefined;
+    kind === "handover"
+      ? HANDOVER_FAILED_MESSAGES[code]
+      : kind === "record_observation"
+        ? OBSERVATION_FAILED_MESSAGES[code]
+        : kind === "record_loading"
+          ? LOADING_FAILED_MESSAGES[code]
+          : undefined;
   const message = own ?? FAILED_COMMAND_MESSAGES[code];
   return message
     ? message({ ...vars, code })

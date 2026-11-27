@@ -5,6 +5,7 @@ import { createContext, useContext } from "react";
 import type { ApiClient } from "./api/client";
 import type { CommandsApi } from "./api/commands";
 import type { evidenceApi } from "./api/evidence";
+import type { FieldApi } from "./api/field";
 import type { walletLinksApi } from "./api/walletLinks";
 import type { FieldConfig } from "./config";
 import type { Membership } from "./data/reads";
@@ -17,7 +18,14 @@ export type Route =
   | { name: "home" }
   | { name: "wallet" }
   | { name: "intake"; draftId: string }
-  | { name: "issue"; draftId: string };
+  | { name: "issue"; draftId: string }
+  // Custody flows: the holder's batches, one handover command (either side), the terminal's
+  // loadings, one loading intent, and a border observation.
+  | { name: "batches" }
+  | { name: "handover"; commandId: string }
+  | { name: "loadings" }
+  | { name: "loading"; intent: string }
+  | { name: "observation" };
 
 export interface AppContextValue {
   config: FieldConfig;
@@ -26,6 +34,7 @@ export interface AppContextValue {
   commands: CommandsApi;
   walletLinks: ReturnType<typeof walletLinksApi>;
   evidence: ReturnType<typeof evidenceApi>;
+  field: FieldApi;
   store: DraftStore;
   cache: OfflineCache;
   user: { id: string; email: string };

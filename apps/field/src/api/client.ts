@@ -117,4 +117,5 @@ export const TIMEOUTS = {
   get: 30_000,
   walletLink: 8_000,
   finalize: 8_000,
+  fieldRead: 8_000,
 } as const;

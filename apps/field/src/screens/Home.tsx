@@ -10,7 +10,15 @@ import { Picker } from "../components/Picker";
 import { CustodyMark, RegistryMark } from "../components/RegistryMark";
 import { Txt } from "../components/Txt";
 import { useApp } from "../context";
-import { type LotRow, ReadError, readLotsAtSites, readSites } from "../data/reads";
+import { shortCode } from "../custody";
+import {
+  type LotRow,
+  ReadError,
+  readLotsAtSites,
+  readSites,
+  readWaiting,
+  type WaitingCommand,
+} from "../data/reads";
 import { useSigning } from "../data/useSigning";
 import { removeDraftFiles } from "../drafts/files";
 import { type IntakeDraft, isEarlierRun, newDraft } from "../drafts/store";
@@ -18,6 +26,11 @@ import { formatClock, formatTonnes, parseTonnes, shortAddress, unixOf } from "..
 import { requiredPurposes } from "../intake";
 import { type RegistryMark as Mark, markFor } from "../marks";
 import { readinessLines } from "../readiness";
+
+/** The value of a labelled line in a waiting command's fields, or null. */
+function fieldOf(row: WaitingCommand, label: string): string | null {
+  return row.fields.find((f) => f.label === label)?.value ?? null;
+}
 
 function draftMark(draft: IntakeDraft): Mark {
   if (draft.command && draft.status !== "editing")
@@ -47,6 +60,9 @@ export function Home() {
   const [lots, setLots] = useState<LotRow[] | null>(null);
   const [lotsError, setLotsError] = useState<ReadError | null>(null);
   const [tick, setTick] = useState(0);
+  const [waiting, setWaiting] = useState<WaitingCommand[] | null>(null);
+  const [waitingFailed, setWaitingFailed] = useState(false);
+  const [waitingTick, setWaitingTick] = useState(0);
   const [choosing, setChoosing] = useState(false);
   const orgId = app.organisation.organisationId;
   const orgName = app.organisation.name;
@@ -78,6 +94,24 @@ export function Home() {
     };
   }, [app.db, app.protocol.protocol, orgId, app.online, tick]);
 
+  // Read on mount and on Retry only: what is waiting for this organisation's signature.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: waitingTick forces a re-read
+  useEffect(() => {
+    if (!app.online) return;
+    let live = true;
+    setWaitingFailed(false);
+    readWaiting(app.db, app.protocol.protocol, orgId)
+      .then((rows) => {
+        if (live) setWaiting(rows);
+      })
+      .catch(() => {
+        if (live) setWaitingFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [app.db, app.protocol.protocol, orgId, app.online, waitingTick]);
+
   async function startIntake() {
     const draft = newDraft({
       id: Crypto.randomUUID(),
@@ -107,6 +141,10 @@ export function Home() {
   const halted = app.protocol.indexStatus === "halted";
   const notAccredited = app.online && !signing.loading && !signing.error && chain === null;
   const custodian = chain?.role === "Custodian";
+  const transporter = chain?.role === "Transporter";
+  const terminal = chain?.role === "Terminal";
+  // A record_loading without an intent cannot be opened, so it is not listed.
+  const waitingRows = (waiting ?? []).filter((w) => w.kind === "handover" || w.intent !== null);
   const lines = readinessLines({
     org: orgName,
     chainOrganisation: chain,
@@ -154,7 +192,30 @@ export function Home() {
     <Frame
       organisation={orgName}
       footer={
-        custodian ? <Button label="New intake" onPress={() => void startIntake()} /> : undefined
+        custodian ? (
+          <>
+            <Button label="New intake" onPress={() => void startIntake()} />
+            <Button
+              label="Batches you hold"
+              kind="quiet"
+              onPress={() => app.navigate({ name: "batches" })}
+            />
+          </>
+        ) : transporter ? (
+          <>
+            <Button label="Batches you hold" onPress={() => app.navigate({ name: "batches" })} />
+            <Button
+              label="Record border crossing"
+              kind="quiet"
+              onPress={() => app.navigate({ name: "observation" })}
+            />
+          </>
+        ) : terminal ? (
+          <Button
+            label="Arrivals and loadings"
+            onPress={() => app.navigate({ name: "loadings" })}
+          />
+        ) : undefined
       }
     >
       {!app.online ? (
@@ -271,6 +332,64 @@ export function Home() {
                 }
               />
             ))}
+          </ListBox>
+        )}
+      </Section>
+
+      <Section title="Waiting for you">
+        {!app.online ? (
+          <Txt variant="small" tone="ink2">
+            Offline. Handovers waiting for you load when you are back online.
+          </Txt>
+        ) : waitingFailed ? (
+          <>
+            <ErrorBlock>Thetis could not load what is waiting for you. Nothing changed.</ErrorBlock>
+            <Button
+              label="Retry"
+              kind="quiet"
+              inline
+              onPress={() => setWaitingTick((t) => t + 1)}
+            />
+          </>
+        ) : waiting === null ? (
+          <ListBox>
+            <View style={{ padding: 12, gap: 8 }}>
+              <Skeleton width="40%" />
+              <Skeleton width="60%" />
+            </View>
+          </ListBox>
+        ) : waitingRows.length === 0 ? (
+          <Txt variant="small" tone="ink2">
+            Nothing is waiting for your signature.
+          </Txt>
+        ) : (
+          <ListBox>
+            {waitingRows.map((row, index) => {
+              const code = shortCode(row.id);
+              const lot = fieldOf(row, "Lot");
+              const handover = row.kind === "handover";
+              const party = handover ? fieldOf(row, "From") : fieldOf(row, "Owner");
+              return (
+                <ListItem
+                  key={row.id}
+                  title={lot ?? `Command ${code}`}
+                  titleMono
+                  lines={[
+                    `${handover ? "Hand over custody" : "Record loading"}, code ${code}`,
+                    ...(party ? [`${handover ? "From" : "Owner"} ${party}`] : []),
+                  ]}
+                  right={<RegistryMark mark="Awaiting signatures" />}
+                  last={index === waitingRows.length - 1}
+                  onPress={() =>
+                    app.navigate(
+                      handover
+                        ? { name: "handover", commandId: row.id }
+                        : { name: "loading", intent: row.intent ?? "" },
+                    )
+                  }
+                />
+              );
+            })}
           </ListBox>
         )}
       </Section>

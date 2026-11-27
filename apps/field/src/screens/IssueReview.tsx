@@ -106,6 +106,7 @@ export function IssueReview(props: { draftId: string }) {
   const vars = useCallback(
     (detail: string | null = null) => ({
       org,
+      kind: "issue_lot",
       detail,
       signBefore: viewRef.current?.text
         ? formatTimeOfDay(BigInt(viewRef.current.text.validUntil) - 30n)

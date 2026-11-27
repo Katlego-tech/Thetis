@@ -197,7 +197,12 @@ function readSigner(value: unknown, path: string): CommandSigner {
 }
 
 /** The single event each field kind's confirmed transaction must hold, when the relay read it. */
-const OUTCOME_EVENT: Partial<Record<CommandKind, string>> = { issue_lot: "LotIssued" };
+const OUTCOME_EVENT: Partial<Record<CommandKind, string>> = {
+  issue_lot: "LotIssued",
+  handover: "CustodyHandedOver",
+  record_observation: "ObservationRecorded",
+  record_loading: "LoadingRecorded",
+};
 
 /**
  * Rules across fields: a confirmed view names its transaction and commitment, a failed view its
