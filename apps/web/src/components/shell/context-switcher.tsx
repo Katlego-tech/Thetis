@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Context } from "@/data/types";
-import { type RailItem, RailNav } from "./rail-nav";
+import { type RailItem, RailNav, type RailSegment } from "./rail-nav";
 
 export function ContextSwitcher({
   current,
@@ -20,7 +20,7 @@ export function ContextSwitcher({
   current: Context;
   contexts: Context[];
   items: RailItem[];
-  segment?: string | undefined;
+  segment?: RailSegment | undefined;
 }) {
   return (
     <>

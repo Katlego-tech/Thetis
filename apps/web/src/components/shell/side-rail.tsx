@@ -2,7 +2,7 @@ import type { ScreenReader } from "@/data/live/types";
 import type { ThetisReader } from "@/data/reader";
 import type { Context } from "@/data/types";
 import { ContextSwitcher } from "./context-switcher";
-import type { RailItem } from "./rail-nav";
+import type { RailItem, RailSegment } from "./rail-nav";
 import { ThemeToggle } from "./theme-toggle";
 
 function referenceItems(reader: ThetisReader, organisationId: string): RailItem[] {
@@ -45,13 +45,14 @@ export function SideRail({
 }: {
   current: Context;
   reader: ScreenReader;
-  segment?: string;
+  segment?: RailSegment;
 }) {
   const { organisationId } = current;
   const base = `/${organisationId}`;
   let items: RailItem[];
   if (reader.mode === "live") {
     const [firstLot] = reader.lots(organisationId);
+    const releases = reader.releases(organisationId);
     items = [
       {
         segment: "queue",
@@ -65,7 +66,12 @@ export function SideRail({
         count: reader.lots(organisationId).length,
         href: firstLot ? `${base}/lots/${encodeURIComponent(firstLot.id)}` : null,
       },
-      { segment: "releases", label: "Releases", count: 0, href: null },
+      {
+        segment: "releases",
+        label: "Releases",
+        count: releases.length,
+        href: releases[0] ? `${base}/releases/${releases[0].address}` : null,
+      },
       {
         segment: "exceptions",
         label: "Exceptions",

@@ -10,14 +10,23 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ThemeMenu } from "./theme-toggle";
 
+/** The workspace sections a live page names as its own (live-lending.md §6.9.1). */
+export type RailSegment = "queue" | "lots" | "releases" | "exceptions";
+
 export interface RailItem {
-  segment: string;
+  segment: RailSegment;
   label: string;
   count: number;
   href: string | null;
 }
 
-export function RailNav({ items, segment }: { items: RailItem[]; segment?: string | undefined }) {
+export function RailNav({
+  items,
+  segment,
+}: {
+  items: RailItem[];
+  segment?: RailSegment | undefined;
+}) {
   // A page passes its own segment: the layout segment is not visible from inside a page.
   const layoutSegment = useSelectedLayoutSegment();
   const activeSegment = segment ?? layoutSegment;
