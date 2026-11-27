@@ -45,8 +45,10 @@ import {
   getRelationshipDeclaredEventDecoder,
   getReleaseIntentCreatedEventDecoder,
   getRepaidEventDecoder,
+  getRestrictionSetEventDecoder,
   getShipmentCancelledEventDecoder,
   getShipmentPreparedEventDecoder,
+  getShortfallAttestedEventDecoder,
   getUnitsRedeemedEventDecoder,
   getUnitsTransferredEventDecoder,
   getValuationSetEventDecoder,
@@ -58,6 +60,7 @@ import {
   ObservationKind,
   PaymentPurpose,
   parseThetisInstruction,
+  Restriction,
   Role,
   ShipmentStatus,
   THETIS_PROGRAM_ADDRESS,
@@ -110,6 +113,8 @@ export const HANDLED_INSTRUCTIONS = [
   "CreateLoadingIntent",
   "AcceptLoading",
   "RecordLoading",
+  "AttestShortfall",
+  "SetRestriction",
 ] as const;
 
 export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
@@ -153,6 +158,8 @@ export const HANDLED_EVENTS = [
   "LoadingAccepted",
   "LoadingRecorded",
   "LoanHandedOff",
+  "ShortfallAttested",
+  "RestrictionSet",
 ] as const;
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
@@ -247,6 +254,8 @@ const EMITS: Record<
   RecordObservation: { event: "ObservationRecorded", required: true },
   CreateLoadingIntent: { event: "LoadingIntentCreated", required: true },
   AcceptLoading: { event: "LoadingAccepted", required: true },
+  AttestShortfall: { event: "ShortfallAttested", required: true },
+  SetRestriction: { event: "RestrictionSet", required: true },
 };
 
 /** The program's MAX_LOADING_LOANS (state.rs): at most four accepted loans per loading. */
@@ -442,6 +451,14 @@ const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
   ],
   // The loan is the triple's (decodeTransaction below): remaining[3i + 1] for the i-th hand-off.
   LoanHandedOff: [["intent", "intent"]],
+  // `batch` is an option on both sides: undefined when the attestation names the whole lot.
+  ShortfallAttested: [
+    ["incident", "incident"],
+    ["lot", "lot"],
+    ["inspector", "inspectorOrg"],
+    ["batch", "batch"],
+  ],
+  RestrictionSet: [["lot", "lot"]],
 };
 
 const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
@@ -483,6 +500,8 @@ const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
   LoadingAccepted: getLoadingAcceptedEventDecoder,
   LoadingRecorded: getLoadingRecordedEventDecoder,
   LoanHandedOff: getLoanHandedOffEventDecoder,
+  ShortfallAttested: getShortfallAttestedEventDecoder,
+  RestrictionSet: getRestrictionSetEventDecoder,
 };
 
 /** Event fields that hold an enum, by event, with the generated name table of each. */
@@ -496,6 +515,11 @@ const ENUM_FIELDS: Partial<Record<HandledEvent, Record<string, Record<number, st
     lotState: LotState as unknown as Record<number, string>,
   },
   ObservationRecorded: { kind: ObservationKind as unknown as Record<number, string> },
+  ShortfallAttested: { restriction: Restriction as unknown as Record<number, string> },
+  RestrictionSet: {
+    from: Restriction as unknown as Record<number, string>,
+    to: Restriction as unknown as Record<number, string>,
+  },
 };
 
 /**
@@ -520,6 +544,16 @@ function handoverInconsistency(value: Record<string, unknown>): string | null {
   }
   if (shipment === "InTransit" && lot === "InTransit") return null;
   return `CustodyHandedOver leaves the shipment ${shipment} and the lot ${lot}; expected InTransit and InTransit`;
+}
+
+/**
+ * The shortfall consistency rule (live-custody.md §4.1.2): outside tolerance a Normal lot always
+ * becomes ReviewRequired, so an outside-tolerance shortfall that leaves the lot Normal contradicts
+ * the program, and the indexer could not tell whether it moved the lot revision.
+ */
+function shortfallInconsistency(value: Record<string, unknown>): string | null {
+  if (value.withinTolerance === true || value.restriction !== Restriction.Normal) return null;
+  return "ShortfallAttested is outside tolerance but leaves the lot Normal; expected ReviewRequired or a stricter restriction";
 }
 
 export type DecodedEvent = {
@@ -954,6 +988,10 @@ export function decodeTransaction(
       }
       if (event.name === "CustodyHandedOver") {
         const inconsistency = handoverInconsistency(event.value);
+        if (inconsistency !== null) throw halt("EVENT_MISMATCH", signature, inconsistency);
+      }
+      if (event.name === "ShortfallAttested") {
+        const inconsistency = shortfallInconsistency(event.value);
         if (inconsistency !== null) throw halt("EVENT_MISMATCH", signature, inconsistency);
       }
       if (event.name === "LoadingRecorded") {

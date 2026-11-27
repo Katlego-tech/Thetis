@@ -25,6 +25,7 @@ import {
   decodeFacility,
   decodeHandoffAcceptance,
   decodeHandoverRecord,
+  decodeIncident,
   decodeIntakeIdentity,
   decodeLoadingIntent,
   decodeLoan,
@@ -45,6 +46,8 @@ import {
   type HandoffAcceptance,
   type HandoverRecord,
   HandoverStage,
+  type Incident,
+  IncidentStatus,
   type IntakeIdentity,
   IntentStatus,
   type LoadingIntent,
@@ -107,7 +110,8 @@ export type Kind =
   | "ManifestBatch"
   | "HandoverRecord"
   | "LoadingIntent"
-  | "HandoffAcceptance";
+  | "HandoffAcceptance"
+  | "Incident";
 
 export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   Protocol: "chain_protocols",
@@ -132,6 +136,7 @@ export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   HandoverRecord: "chain_handovers",
   LoadingIntent: "chain_loading_intents",
   HandoffAcceptance: "chain_handoff_acceptances",
+  Incident: "chain_incidents",
 };
 
 export const TABLE_KIND = Object.fromEntries(
@@ -160,7 +165,8 @@ export type AccountData =
   | { kind: "ManifestBatch"; data: ManifestBatch }
   | { kind: "HandoverRecord"; data: HandoverRecord }
   | { kind: "LoadingIntent"; data: LoadingIntent }
-  | { kind: "HandoffAcceptance"; data: HandoffAcceptance };
+  | { kind: "HandoffAcceptance"; data: HandoffAcceptance }
+  | { kind: "Incident"; data: Incident };
 
 type GuardedDecoder = (account: MaybeEncodedAccount) => { exists: boolean; data?: unknown };
 
@@ -187,6 +193,7 @@ const DECODERS: Record<Kind, GuardedDecoder> = {
   HandoverRecord: decodeHandoverRecord as unknown as GuardedDecoder,
   LoadingIntent: decodeLoadingIntent as unknown as GuardedDecoder,
   HandoffAcceptance: decodeHandoffAcceptance as unknown as GuardedDecoder,
+  Incident: decodeIncident as unknown as GuardedDecoder,
 };
 
 export type DecodeFailure = { address: string; enumError: boolean; message: string };
@@ -667,6 +674,25 @@ export function accountColumns(account: AccountData, resolver: Resolver): Row {
         version: data.version,
       };
     }
+    case "Incident": {
+      const { data } = account;
+      return {
+        incident_id_hex: hex(data.incidentId),
+        lot: data.lot,
+        batch: unwrapOption(data.batch) ?? null,
+        inspector: data.inspector,
+        inspector_org_id: resolver.organisationId(data.inspector),
+        method_code: data.methodCode,
+        expected_kg: toU64String(data.expectedKg),
+        observed_kg: toU64String(data.observedKg),
+        tolerance_bps: data.toleranceBps,
+        within_tolerance: data.withinTolerance,
+        evidence_digest_hex: hex(data.evidenceDigest),
+        observed_at: toI64String(data.observedAt),
+        restriction_after: variant("Restriction", Restriction, data.restrictionAfter),
+        status: variant("IncidentStatus", IncidentStatus, data.status),
+      };
+    }
   }
 }
 
@@ -736,7 +762,15 @@ type Plan = {
   transaction: SlotTransaction;
   invocation: Invocation;
   event: DecodedEvent;
-  scope: "registry" | "organisation" | "lot" | "facility" | "pool" | "shipment" | "loading";
+  scope:
+    | "registry"
+    | "organisation"
+    | "lot"
+    | "facility"
+    | "pool"
+    | "shipment"
+    | "loading"
+    | "incident";
   lot: string | null;
   revision: bigint | null;
   keys: LendingKeys;
@@ -1268,7 +1302,39 @@ async function planEvent(
         ],
       };
     }
+    case "ShortfallAttested": {
+      // Keyed by the incident only: its lot revision may repeat or advance (live-custody.md §4.1.3,
+      // §4.1.4); the lot check reads it from the event's own fields.
+      const planned = { address: text("incident"), kind: "Incident" as const };
+      const batch = value.batch as string | undefined;
+      return {
+        ...base,
+        scope: "incident",
+        keys: { ...NO_KEYS, created: planned.address, batch: batch ?? null },
+        fetch: [planned, { address: text("lot"), kind: "Lot" }],
+        creates: [planned],
+      };
+    }
+    case "RestrictionSet": {
+      const lot = text("lot");
+      return {
+        ...base,
+        scope: "lot",
+        lot,
+        revision: value.revision as bigint,
+        fetch: [{ address: lot, kind: "Lot" }],
+      };
+    }
   }
+}
+
+/**
+ * How a ShortfallAttested names its lot's revision (live-custody.md §4.1.4): outside tolerance and
+ * ReviewRequired it is a candidate (it advanced a Normal lot or repeated a ReviewRequired one, and
+ * the event alone can't tell); otherwise it repeats the lot's revision.
+ */
+function isShortfallCandidate(value: Record<string, unknown>): boolean {
+  return value.withinTolerance === false && value.restriction === Restriction.ReviewRequired;
 }
 
 /**
@@ -1285,6 +1351,8 @@ type LotEntry = {
   revisions: { revision: bigint; plan: Plan }[];
   /** Events that name the lot's revision without advancing it (live-custody.md §4.1.4 repeats). */
   repeats: { revision: bigint; plan: Plan }[];
+  /** Shortfalls that advanced the lot or repeated it, resolved by the slot's revisions (§4.1.4). */
+  candidates: { revision: bigint; plan: Plan }[];
 };
 
 /**
@@ -1345,7 +1413,7 @@ export async function projectSlot(
   const entryOf = (lot: string) => {
     let entry = lots.get(lot);
     if (!entry) {
-      entry = { creators: [], revisions: [], repeats: [] };
+      entry = { creators: [], revisions: [], repeats: [], candidates: [] };
       lots.set(lot, entry);
     }
     return entry;
@@ -1377,6 +1445,15 @@ export async function projectSlot(
           plan,
         });
         break;
+      case "RestrictionSet":
+        entryOf(value.lot as string).revisions.push({ revision: value.revision as bigint, plan });
+        break;
+      case "ShortfallAttested": {
+        const item = { revision: value.lotRevision as bigint, plan };
+        if (isShortfallCandidate(value)) entryOf(value.lot as string).candidates.push(item);
+        else entryOf(value.lot as string).repeats.push(item);
+        break;
+      }
       case "CustodyHandedOver": {
         const item = { revision: value.lotRevision as bigint, plan };
         if (plan.scope === "lot") entryOf(value.lot as string).revisions.push(item);
@@ -1396,6 +1473,7 @@ export async function projectSlot(
           ...entry.creators,
           ...entry.revisions.map((item) => item.plan),
           ...entry.repeats.map((item) => item.plan),
+          ...entry.candidates.map((item) => item.plan),
         ].map((p) => p.transaction.signature),
       ),
     ].sort(sortText);
@@ -1429,7 +1507,35 @@ export async function projectSlot(
       }
       base = BigInt(row.event_revision as string);
     }
-    const revisions = entry.revisions.map((item) => item.revision).sort(sortBig);
+    // D: the keyed revisions, distinct; U: D and every candidate above the base. U, sorted, must be
+    // exactly base + 1 … base + |U|, and every candidate and repeat must lie between the floor and
+    // the lot's new event_revision (live-custody.md §4.1.4).
+    const floor = base < 0n ? 0n : base;
+    const keyed = entry.revisions.map((item) => item.revision).sort(sortBig);
+    for (const [index, revision] of keyed.entries()) {
+      if (index > 0 && revision === keyed[index - 1]) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} carries revision ${revision} twice: [${keyed.join(", ")}]`,
+        );
+      }
+    }
+    for (const { revision } of entry.candidates) {
+      if (revision < floor) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named}: a shortfall names revision ${revision}, below ${floor}`,
+        );
+      }
+    }
+    const revisions = [
+      ...new Set([
+        ...keyed,
+        ...entry.candidates.map((item) => item.revision).filter((revision) => revision > base),
+      ]),
+    ].sort(sortBig);
     for (const [index, revision] of revisions.entries()) {
       const expected = base + 1n + BigInt(index);
       if (revision !== expected) {
@@ -1441,13 +1547,13 @@ export async function projectSlot(
       }
     }
     const next = revisions.at(-1) ?? base;
-    const floor = base < 0n ? 0n : base;
-    for (const { revision } of entry.repeats) {
+    for (const { revision, plan } of [...entry.repeats, ...entry.candidates]) {
       if (revision < floor || revision > next) {
+        const what = plan.event.name === "ShortfallAttested" ? "a shortfall" : "a handover";
         throw stepHalt(
           "sequence",
           "REVISION_SEQUENCE",
-          `${named}: a handover repeats revision ${revision}, outside ${floor} to ${next}`,
+          `${named}: ${what} repeats revision ${revision}, outside ${floor} to ${next}`,
         );
       }
     }
