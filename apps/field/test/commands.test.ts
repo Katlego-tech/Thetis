@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, ApiTimeout, ApiUnreachable, createApiClient } from "../src/api/client";
+import {
+  ApiError,
+  ApiShapeError,
+  ApiTimeout,
+  ApiUnreachable,
+  createApiClient,
+} from "../src/api/client";
 import { type CommandStatus, commandsApi, parseCommandView } from "../src/api/commands";
 import { REFETCH_CODES, relayErrorCopy } from "../src/copy";
 import { commandView } from "./fixtures";
@@ -57,6 +63,47 @@ describe("parseCommandView", () => {
 
   it("accepts the relay core's lender kinds too", () => {
     expect(parseCommandView({ ...commandView("submitted"), kind: "pledge" }).kind).toBe("pledge");
+  });
+});
+
+describe("no confirmed or failed state without the chain's facts (F5)", () => {
+  it("refuses confirmed with no transaction", () => {
+    expect(() => parseCommandView({ ...commandView("confirmed"), transaction: null })).toThrow(
+      /transaction/,
+    );
+  });
+
+  it("refuses confirmed with no commitment", () => {
+    expect(() =>
+      parseCommandView({ ...commandView("confirmed"), confirmedCommitment: null }),
+    ).toThrow(/confirmedCommitment/);
+  });
+
+  it("refuses finalized with no transaction", () => {
+    expect(() =>
+      parseCommandView({
+        ...commandView("confirmed"),
+        confirmedCommitment: "finalized",
+        transaction: null,
+      }),
+    ).toThrow(/transaction/);
+  });
+
+  it("refuses an issue_lot outcome that is not LotIssued", () => {
+    const view = commandView("confirmed");
+    if (!view.outcome) throw new Error("fixture");
+    expect(() =>
+      parseCommandView({ ...view, outcome: { ...view.outcome, event: "LotRedeemed" } }),
+    ).toThrow(/outcome/);
+  });
+
+  it("accepts a confirmed issue with the outcome still unread (OUTCOME_UNREADABLE)", () => {
+    const view = commandView("confirmed", { outcome: null });
+    expect(parseCommandView(view)).toStrictEqual(view);
+  });
+
+  it("refuses failed with no error", () => {
+    expect(() => parseCommandView({ ...commandView("failed"), error: null })).toThrow(/error/);
   });
 });
 
@@ -243,5 +290,17 @@ describe("the client", () => {
       createApiClient({ baseUrl: "http://h", getToken: async () => "t", fetch }),
     );
     await expect(api.get("6a1f0c3e-8b2d-4e5f-9a7b-1c2d3e4f5a6b")).rejects.toThrow();
+  });
+
+  it("a view that fails the parser is ApiShapeError, never a plain error (F6)", async () => {
+    const fetch = vi.fn(async () =>
+      json(200, { data: { ...commandView("submitted"), status: "landed" } }),
+    );
+    const api = commandsApi(
+      createApiClient({ baseUrl: "http://h", getToken: async () => "t", fetch }),
+    );
+    await expect(api.get("6a1f0c3e-8b2d-4e5f-9a7b-1c2d3e4f5a6b")).rejects.toBeInstanceOf(
+      ApiShapeError,
+    );
   });
 });
