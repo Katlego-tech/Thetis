@@ -186,6 +186,15 @@ const SPONSORED: readonly {
     maxAccounts: 29,
     step: 3,
   },
+  // accept_loading (field-app.md T067r.4 fold 57): the lender signs, the sponsor pays as `payer`.
+  {
+    name: "accept_loading",
+    discriminator: [90, 171, 147, 76, 57, 142, 187, 88],
+    accounts: 13,
+    protocol: 2,
+    sponsorSlots: [1],
+    maxAccounts: 13,
+  },
 ];
 
 export const SPONSORED_INSTRUCTIONS = SPONSORED;

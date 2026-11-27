@@ -55,6 +55,7 @@ import {
   findPositionPda,
   findSharePda,
   findVaultAuthorityPda,
+  getAcceptLoadingInstruction,
   getBorrowInstruction,
   getCloseLoanInstruction,
   getConfirmPaymentInstruction,
@@ -77,6 +78,7 @@ import {
   type HandoffAcceptance,
   LOCK_ALLOCATION_DISCRIMINATOR,
   type LoadingIntent,
+  LoadingStatus,
   type Loan,
   LoanStatus,
   type LockAllocation,
@@ -101,6 +103,7 @@ import {
   formatBps,
   formatMoney,
   formatSast,
+  formatTonnes,
   handoverStage,
   intakeDigest,
   issueLotMessage,
@@ -348,6 +351,15 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     signers: [text("owner", "SHIP")],
     event: "LoadingIntentCreated",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+  },
+  accept_loading: {
+    mode: "both",
+    args: ["intent", "loan"],
+    // field-app.md owner decision 1 (27 Nov): a transaction kind as confirm_payment, the sponsor
+    // as `payer`; the lender's LEND is pre-checked.
+    signers: [tx("lender", "LEND")],
+    event: "LoadingAccepted",
+    textWindowSecs: TEXT_WINDOW_SECS,
   },
   record_loading: {
     mode: "both",
@@ -949,6 +961,74 @@ const PREPARE: Record<CommandKind, Preparer> = {
       facility: null,
       loan: null,
       intent,
+      payment: null,
+    };
+  },
+
+  /** field-app.md T067r.4 pre-check folds 52–55: the lender of the loan's facility accepts the
+   * hand-off of one open loading intent; every value is read from the chain. */
+  async accept_loading(context) {
+    const { args } = context;
+    const intentAddress = args.intent as Address;
+    const { address, loan, facility: f, lock } = await readLoan(context, args.loan as Address);
+    requireInitiator(context, f.data.lender);
+    const intent = (await context.reader.read(
+      "intent",
+      intentAddress,
+      decodeLoadingIntent as never,
+      "LoadingIntent",
+    )) as LoadingIntent;
+    // Fold 53: what the program would refuse and the relay can know, refused before any signing.
+    if (intent.status !== LoadingStatus.Open) {
+      throw new RelayError("LOADING_NOT_OPEN", `intent: ${intentAddress}`);
+    }
+    if (context.chainTime >= intent.expiresAt) {
+      throw new RelayError("LOADING_EXPIRED", `intent: ${intentAddress}`);
+    }
+    if (loan.position !== intent.position) throw new RelayError("VALIDATION", "args.loan");
+    if (loan.status !== LoanStatus.Active)
+      throw new RelayError("LOAN_NOT_ACTIVE", `loan: ${address}`);
+    const locked = (await context.reader.read(
+      "lock",
+      lock,
+      decodeLockAllocation as never,
+      "LockAllocation",
+    )) as LockAllocation;
+    if (locked.loan !== address || locked.quantityKg === 0n) {
+      throw new RelayError("VALIDATION", "args.loan");
+    }
+    const lot = await readLot(context, loan.lot);
+    const terminal = await context.reader.organisation("terminalOrg", intent.terminal);
+    const [acceptance] = await findAcceptancePda({ intent: intentAddress, loan: address });
+    return {
+      plan: {
+        lenderOrg: f.data.lender,
+        facility: f.address,
+        loan: address,
+        lock,
+        lot: loan.lot,
+        position: loan.position,
+        intent: intentAddress,
+        acceptance,
+        expectedRevision: String(loan.revision),
+      },
+      fields: [
+        { label: "Lender", value: f.lender.name },
+        { label: "Lot", value: lot.lotId },
+        { label: "Loan", value: loanLabel(f, loan.index) },
+        { label: "Locked", value: formatTonnes(locked.quantityKg) },
+        { label: "Terminal", value: terminal.name },
+        { label: "Intent", value: String(intent.nonce) },
+        { label: "Expires", value: formatSast(intent.expiresAt) },
+        { label: "Revision", value: String(loan.revision) },
+      ],
+      text: null,
+      validUntil: null,
+      signers: stored("accept_loading", [f.lender]),
+      lot: loan.lot,
+      facility: f.address,
+      loan: address,
+      intent: intentAddress,
       payment: null,
     };
   },
@@ -2414,6 +2494,22 @@ export async function buildInstruction(input: BuildInput): Promise<Instruction> 
         buyerVault: a(plan.buyerVault),
         expectedRevision: n(plan.expectedRevision),
         validUntil: n(plan.validUntil),
+      });
+    case "accept_loading":
+      return getAcceptLoadingInstruction({
+        lender: signer("lender"),
+        payer: sponsor,
+        protocol,
+        authority: await authority(protocol, wallets.lender),
+        lenderOrg: a(plan.lenderOrg),
+        facility: a(plan.facility),
+        loan: a(plan.loan),
+        lock: a(plan.lock),
+        lot: a(plan.lot),
+        position: a(plan.position),
+        intent: a(plan.intent),
+        acceptance: a(plan.acceptance),
+        expectedRevision: n(plan.expectedRevision),
       });
     case "liquidate":
       return getLiquidateInstruction({

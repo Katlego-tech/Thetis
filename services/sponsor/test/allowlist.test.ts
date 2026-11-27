@@ -75,6 +75,7 @@ const SPONSORED_NAMES = [
   "record_observation",
   "create_loading_intent",
   "record_loading",
+  "accept_loading",
 ];
 const TEXT_SIGNED = new Set([
   "pledge",
@@ -362,6 +363,17 @@ describe("sponsor allowlist", () => {
     );
     const intent = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === "create_loading_intent");
     expect(intent).toMatchObject({ accounts: 11, protocol: 1, sponsorSlots: [0] });
+  });
+
+  it("signs accept_loading with the sponsor as payer at slot 1 and exactly its 13 accounts (field-app.md T067r.4 fold 57)", () => {
+    const shape = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === "accept_loading");
+    expect(shape).toMatchObject({ accounts: 13, protocol: 2, sponsorSlots: [1], maxAccounts: 13 });
+    expect(() =>
+      checkSponsorTransaction(wire([limit(), thetis("accept_loading")]), context),
+    ).not.toThrow();
+    refused(wire([limit(), thetis("accept_loading", { sponsorAt: "acceptance" })]), /sponsor/);
+    refused(wire([limit(), thetis("accept_loading", { extra: [filler] })]), /too many accounts/);
+    refused(wire([limit(), thetis("accept_loading", { drop: 1 })]), /too few accounts/);
   });
 
   it("refuses a protocol through the table, foreign lookup-table authorities, another table, an Ed25519 instruction with accounts, a compute price, a trailing instruction and short lookup-table data", () => {
