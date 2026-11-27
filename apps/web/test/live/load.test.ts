@@ -23,6 +23,12 @@ const chainTables = [
   "chain_positions",
   "chain_intakes",
   "chain_documents",
+  "chain_facilities",
+  "chain_valuations",
+  "chain_loans",
+  "chain_locks",
+  "chain_payments",
+  "chain_release_intents",
 ];
 
 function liveEnvironment() {
@@ -54,6 +60,13 @@ describe("loadLiveSnapshot", () => {
       positions: [],
       intakes: [],
       documents: [],
+      facilities: [],
+      valuations: [],
+      loans: [],
+      locks: [],
+      payments: [],
+      intents: [],
+      commands: [],
       intakeEvents: [],
     };
 
@@ -69,6 +82,7 @@ describe("loadLiveSnapshot", () => {
     expect(missing.calls.map(({ table }) => table)).toEqual([
       "organisations",
       "indexer_checkpoints",
+      "commands",
     ]);
 
     const unreported = fakeSupabase(issuedSnapshot());
@@ -83,6 +97,7 @@ describe("loadLiveSnapshot", () => {
     expect(unreported.calls.map(({ table }) => table)).toEqual([
       "organisations",
       "indexer_checkpoints",
+      "commands",
     ]);
 
     // A reset that begins while the rows are read: the checkpoint is read again last.
@@ -93,7 +108,7 @@ describe("loadLiveSnapshot", () => {
       indexed_through_slot: null,
     });
     reset.respond = (call, index) =>
-      call.table === "indexer_checkpoints" && index > 1
+      call.table === "indexer_checkpoints" && index > 2
         ? { data: [{ ...afterReset }], error: null, count: 1 }
         : undefined;
     const duringReset = await loadLiveSnapshot(reset.client, ENV);
@@ -103,7 +118,7 @@ describe("loadLiveSnapshot", () => {
 
     const gone = fakeSupabase(issuedSnapshot());
     gone.respond = (call, index) =>
-      call.table === "indexer_checkpoints" && index > 1
+      call.table === "indexer_checkpoints" && index > 2
         ? { data: [], error: null, count: 0 }
         : undefined;
     expect(await loadLiveSnapshot(gone.client, ENV)).toMatchObject({ ...empty, checkpoint: null });
@@ -114,7 +129,7 @@ describe("loadLiveSnapshot", () => {
       code: "BAD_ROW",
       path: "checkpoint.last_success_at",
     });
-    expect(malformed.calls).toHaveLength(2);
+    expect(malformed.calls).toHaveLength(3);
   });
 
   test("loadLiveSnapshot throws TOO_MANY_ROWS when count exceeds the rows, READ_FAILED when it is below or missing, and filters by network and protocol", async () => {
@@ -123,9 +138,9 @@ describe("loadLiveSnapshot", () => {
     expect(snapshot).toEqual(issuedSnapshot());
 
     const tables = fake.calls.map(({ table }) => table);
-    expect(tables.slice(0, 2)).toEqual(["organisations", "indexer_checkpoints"]);
+    expect(tables.slice(0, 3)).toEqual(["organisations", "indexer_checkpoints", "commands"]);
     expect(tables.at(-1)).toBe("indexer_checkpoints");
-    expect(tables.slice(2, -1).toSorted()).toEqual([...chainTables, "chain_events"].toSorted());
+    expect(tables.slice(3, -1).toSorted()).toEqual([...chainTables, "chain_events"].toSorted());
     for (const call of fake.calls) {
       expect(call.options).toEqual({ count: "exact" });
       expect(call.range).toEqual([0, 999]);
@@ -197,6 +212,57 @@ describe("loadLiveSnapshot", () => {
       "program_id",
       "protocol",
     ]);
+    expect(byTable("commands")).toMatchObject({
+      columns: [
+        "id",
+        "kind",
+        "status",
+        "initiator_org",
+        "parties",
+        "lot",
+        "facility",
+        "loan",
+        "intent",
+        "payment",
+        "args",
+        "fields",
+        "valid_until",
+        "signers",
+        "signatures",
+        "transaction_signature",
+        "error_code",
+        "created_at",
+        "updated_at",
+      ],
+      filters: [
+        ["network", "devnet"],
+        ["program_id", PROGRAM_ID],
+        ["protocol", PROTOCOL],
+        ["status", ["awaiting_signatures", "submitted", "outcome_unknown"], "in"],
+        [
+          "kind",
+          [
+            "open_facility",
+            "set_valuation",
+            "pledge",
+            "record_advance",
+            "confirm_payment",
+            "correct_payment",
+            "repay",
+            "create_release_intent",
+            "sell_pledged",
+            "liquidate",
+            "close_loan",
+            "deposit",
+            "withdraw",
+            "borrow",
+            "repay_simulated",
+          ],
+          "in",
+        ],
+      ],
+    });
+    expect(byTable("commands")?.orders.map(({ column }) => column)).toEqual(["created_at", "id"]);
 
     async function refusal(
       table: string,

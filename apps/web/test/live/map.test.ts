@@ -207,10 +207,7 @@ describe("live mapping", () => {
     }
   });
 
-  test("liveReader refuses a position with locked_kg above zero", () => {
-    const locked = issuedSnapshot();
-    locked.positions = [position(KHUNOU_POSITION, "khunou", "5000000", { locked_kg: "1" })];
-    refused(locked, "BAD_ROW", "positions[0].locked_kg");
+  test("liveReader refuses a position with reserved_kg above zero", () => {
 
     const reserved = issuedSnapshot();
     reserved.positions = [position(KHUNOU_POSITION, "khunou", "5000000", { reserved_kg: "1000" })];
