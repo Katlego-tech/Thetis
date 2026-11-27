@@ -8,6 +8,121 @@
   },
   "instructions": [
     {
+      "name": "accept_loading",
+      "discriminator": [
+        90,
+        171,
+        147,
+        76,
+        57,
+        142,
+        187,
+        88
+      ],
+      "accounts": [
+        {
+          "name": "lender",
+          "signer": true
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "account",
+                "path": "lender"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lender_org"
+        },
+        {
+          "name": "facility"
+        },
+        {
+          "name": "loan"
+        },
+        {
+          "name": "lock"
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "position"
+        },
+        {
+          "name": "intent"
+        },
+        {
+          "name": "acceptance",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  97,
+                  110,
+                  100,
+                  111,
+                  102,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "intent"
+              },
+              {
+                "kind": "account",
+                "path": "loan"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "accredit_custodian_class",
       "discriminator": [
         89,
@@ -647,6 +762,111 @@
         },
         {
           "name": "observed_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "create_loading_intent",
+      "discriminator": [
+        138,
+        182,
+        30,
+        209,
+        196,
+        170,
+        77,
+        2
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "owner_org"
+        },
+        {
+          "name": "owner_authority"
+        },
+        {
+          "name": "lot"
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "custodian_class"
+        },
+        {
+          "name": "terminal_org"
+        },
+        {
+          "name": "intent",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  111,
+                  97,
+                  100,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "document_sha256",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
           "type": "i64"
         }
       ]
@@ -2159,6 +2379,130 @@
       ]
     },
     {
+      "name": "record_loading",
+      "discriminator": [
+        165,
+        64,
+        173,
+        141,
+        18,
+        237,
+        27,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "owner_org"
+        },
+        {
+          "name": "owner_authority"
+        },
+        {
+          "name": "terminal_org"
+        },
+        {
+          "name": "terminal_authority"
+        },
+        {
+          "name": "custodian_class",
+          "writable": true
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "root",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "intake",
+          "writable": true
+        },
+        {
+          "name": "mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "lot"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "intent",
+          "writable": true
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "record_observation",
       "discriminator": [
         37,
@@ -3641,6 +3985,19 @@
       ]
     },
     {
+      "name": "HandoffAcceptance",
+      "discriminator": [
+        156,
+        88,
+        134,
+        156,
+        213,
+        172,
+        165,
+        20
+      ]
+    },
+    {
       "name": "HandoverRecord",
       "discriminator": [
         169,
@@ -3664,6 +4021,19 @@
         190,
         158,
         74
+      ]
+    },
+    {
+      "name": "LoadingIntent",
+      "discriminator": [
+        74,
+        172,
+        254,
+        50,
+        130,
+        206,
+        21,
+        253
       ]
     },
     {
@@ -4020,6 +4390,45 @@
       ]
     },
     {
+      "name": "LoadingAccepted",
+      "discriminator": [
+        135,
+        68,
+        167,
+        201,
+        76,
+        229,
+        201,
+        152
+      ]
+    },
+    {
+      "name": "LoadingIntentCreated",
+      "discriminator": [
+        78,
+        79,
+        157,
+        166,
+        138,
+        229,
+        83,
+        144
+      ]
+    },
+    {
+      "name": "LoadingRecorded",
+      "discriminator": [
+        143,
+        1,
+        71,
+        122,
+        64,
+        214,
+        63,
+        254
+      ]
+    },
+    {
       "name": "LoanClosed",
       "discriminator": [
         224,
@@ -4030,6 +4439,19 @@
         185,
         224,
         107
+      ]
+    },
+    {
+      "name": "LoanHandedOff",
+      "discriminator": [
+        48,
+        112,
+        106,
+        47,
+        255,
+        122,
+        178,
+        255
       ]
     },
     {
@@ -5336,6 +5758,62 @@
       }
     },
     {
+      "name": "HandoffAcceptance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "lock",
+            "type": "pubkey"
+          },
+          {
+            "name": "lender",
+            "type": "pubkey"
+          },
+          {
+            "name": "lock_quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "loan_revision",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "accepted_at",
+            "type": "i64"
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "HandoverRecord",
       "type": {
         "kind": "struct",
@@ -5501,6 +5979,253 @@
       }
     },
     {
+      "name": "LoadingAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "acceptance",
+            "type": "pubkey"
+          },
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "lender",
+            "type": "pubkey"
+          },
+          {
+            "name": "lock_quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "loan_revision",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "version",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoadingIntent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "terminal",
+            "type": "pubkey"
+          },
+          {
+            "name": "custodian_class",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "locked_kg",
+            "type": "u64"
+          },
+          {
+            "name": "document_sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "position_revision",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "LoadingStatus"
+              }
+            }
+          },
+          {
+            "name": "executed_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoadingIntentCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "terminal",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "locked_kg",
+            "type": "u64"
+          },
+          {
+            "name": "document_sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "position_revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoadingRecorded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "terminal",
+            "type": "pubkey"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "document_sha256",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "loans_accepted",
+            "type": "u8"
+          },
+          {
+            "name": "lot_loaded",
+            "type": "bool"
+          },
+          {
+            "name": "lot_revision",
+            "type": "u64"
+          },
+          {
+            "name": "position_revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoadingStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "Executed"
+          }
+        ]
+      }
+    },
+    {
       "name": "Loan",
       "type": {
         "kind": "struct",
@@ -5592,6 +6317,42 @@
           {
             "name": "released_kg",
             "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoanHandedOff",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": "pubkey"
+          },
+          {
+            "name": "intent",
+            "type": "pubkey"
+          },
+          {
+            "name": "released_kg",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "booked_interest",
+            "type": "u64"
+          },
+          {
+            "name": "external_handoff",
+            "type": "bool"
           },
           {
             "name": "revision",
