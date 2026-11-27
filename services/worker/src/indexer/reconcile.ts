@@ -59,6 +59,7 @@ const SCANNED_KINDS: readonly Kind[] = [
   "HandoverRecord",
   "LoadingIntent",
   "HandoffAcceptance",
+  "Incident",
 ];
 
 /** A PoolShare's size: discriminator, pool, organisation, shares, lent_minor, bump. */
