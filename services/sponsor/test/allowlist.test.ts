@@ -28,6 +28,7 @@ import { THETIS_PROGRAM_ADDRESS } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import {
   checkSponsorTransaction,
+  SPONSORED_INSTRUCTIONS,
   SponsorRefusedError,
   type SponsorContext,
 } from "../src/allowlist.ts";
@@ -160,6 +161,18 @@ function refused(wireBase64: string, detail?: RegExp) {
 
 describe("sponsor allowlist", () => {
   it("signs each allowlisted command shape and both lookup-table shapes", async () => {
+    // The hard-coded table is the IDL's: discriminator, account count, protocol and sponsor slots.
+    expect(SPONSORED_INSTRUCTIONS.map((entry) => entry.name).sort()).toEqual([...PHASE_2].sort());
+    for (const entry of SPONSORED_INSTRUCTIONS) {
+      const definition = idlInstruction(entry.name);
+      const names = definition.accounts.map((account) => account.name);
+      expect(entry.discriminator, entry.name).toEqual(definition.discriminator);
+      expect(entry.accounts, entry.name).toBe(names.length);
+      expect(entry.protocol, entry.name).toBe(names.indexOf("protocol"));
+      expect(entry.sponsorSlots, entry.name).toEqual(
+        names.flatMap((name, index) => (name === "sponsor" || name === "payer" ? [index] : [])),
+      );
+    }
     for (const name of PHASE_2) {
       const instructions = TEXT_SIGNED.has(name)
         ? [limit(), ed25519(), thetis(name)]
