@@ -3,14 +3,18 @@
 import { apiPost } from "@/lib/api";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 
-// The bank confirmation upload (live-lending.md §6.9.5 "Bank file upload"): the evidence rows, the
-// original in storage and the API's finalize, all before any command is created.
+// The evidence uploads (live-lending.md §6.9.5 "Bank file upload", §6.10.3 "The loading document
+// upload"): the evidence rows, the original in storage and the API's finalize, all before any
+// command is created.
 
 export const BANK_FILE_TYPES = ["application/pdf", "image/jpeg", "image/png"] as const;
 export const BANK_FILE_MAX_BYTES = 20 * 1024 * 1024;
 export const bankFileRefused = "Choose a PDF, JPEG or PNG file of at most 20 MiB.";
 export const bankUploadFailed =
   "Thetis could not store the bank confirmation. Nothing was recorded.";
+
+export const loadingUploadFailed =
+  "Thetis could not store the loading document. Nothing was recorded.";
 
 export function bankFileProblem(file: File | null): string | null {
   if (!file) return bankFileRefused;
@@ -19,14 +23,16 @@ export function bankFileProblem(file: File | null): string | null {
 }
 
 /** Stores and finalizes the file; returns the evidence version id, or null when any step failed. */
-export async function uploadBankFile(input: {
+export async function uploadEvidenceFile(input: {
   file: File;
   ownerOrganisationId: string;
-  lotId: string;
+  /** bank: the lot_id; loading: the lot's chain address (§6.10.3) */
+  purpose: "bank" | "loading";
+  subjectRef: string;
   userId: string;
   token: string;
 }): Promise<string | null> {
-  const { file, ownerOrganisationId, lotId, userId, token } = input;
+  const { file, ownerOrganisationId, purpose, subjectRef, userId, token } = input;
   try {
     const supabase = supabaseBrowser();
     const object = await supabase
@@ -34,8 +40,8 @@ export async function uploadBankFile(input: {
       .insert({
         owner_organisation_id: ownerOrganisationId,
         subject_kind: "lot",
-        subject_ref: lotId,
-        purpose: "bank",
+        subject_ref: subjectRef,
+        purpose,
         created_by: userId,
       })
       .select("id")
@@ -69,4 +75,16 @@ export async function uploadBankFile(input: {
   } catch {
     return null;
   }
+}
+
+/** The bank confirmation: subject the lot_id, purpose bank (§6.9.5, unchanged). */
+export function uploadBankFile(input: {
+  file: File;
+  ownerOrganisationId: string;
+  lotId: string;
+  userId: string;
+  token: string;
+}): Promise<string | null> {
+  const { lotId, ...rest } = input;
+  return uploadEvidenceFile({ ...rest, purpose: "bank", subjectRef: lotId });
 }

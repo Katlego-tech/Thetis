@@ -11,10 +11,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import bs58 from "bs58";
 import type {
   ChainDocumentRow,
-  ChainHandoffAcceptanceRow,
-  ChainLoadingIntentRow,
   ChainEventRow,
   ChainFacilityRow,
+  ChainHandoffAcceptanceRow,
+  ChainLoadingIntentRow,
   ChainLoanRow,
   ChainLockRow,
   ChainLotRow,

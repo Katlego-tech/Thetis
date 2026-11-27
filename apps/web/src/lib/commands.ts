@@ -18,7 +18,10 @@ export type CommandKind =
   | "deposit"
   | "withdraw"
   | "borrow"
-  | "repay_simulated";
+  | "repay_simulated"
+  | "create_loading_intent"
+  | "record_loading"
+  | "accept_loading";
 export type CommandStatus =
   | "awaiting_signatures"
   | "submitted"
@@ -26,7 +29,15 @@ export type CommandStatus =
   | "failed"
   | "outcome_unknown"
   | "expired";
-export type SignerRole = "borrower" | "lender" | "seller" | "buyer" | "depositor" | "payer";
+export type SignerRole =
+  | "borrower"
+  | "lender"
+  | "seller"
+  | "buyer"
+  | "depositor"
+  | "payer"
+  | "owner"
+  | "terminal";
 export interface CommandView {
   id: string;
   kind: CommandKind;
@@ -131,6 +142,9 @@ export const kindTitles: Record<CommandKind, string> = {
   withdraw: "Withdraw test tokens",
   borrow: "Borrow test tokens",
   repay_simulated: "Repay with test tokens",
+  create_loading_intent: "Create loading intent",
+  record_loading: "Record loading",
+  accept_loading: "Accept loading",
 };
 
 export const roleLabels: Record<SignerRole, string> = {
@@ -140,6 +154,8 @@ export const roleLabels: Record<SignerRole, string> = {
   buyer: "Buyer",
   depositor: "Depositor",
   payer: "Payer",
+  owner: "Owner",
+  terminal: "Terminal",
 };
 
 const authority = "A signer's authority does not allow this action.";
@@ -175,7 +191,33 @@ const explanations: Record<string, string> = {
   WindowTooLong: outOfTime,
 };
 
-export function failureExplanation(code: string): string {
+// live-lending.md §6.10.6: the chain's refusals of the three loading kinds, preferred for them.
+const loadingKinds: readonly CommandKind[] = [
+  "create_loading_intent",
+  "record_loading",
+  "accept_loading",
+];
+const loadingExplanations: Record<string, string> = {
+  AcceptanceMissing:
+    "Not every lender with a lock on this lot had accepted when the transaction reached devnet. Ask each lender to accept, then record the loading again.",
+  AcceptanceStale:
+    "A loan changed after its lender accepted. Ask that lender to accept again, then record the loading again.",
+  LoanNotActive:
+    "A loan on this lot is in recovery, so the lot can't be loaded until the recovery is settled.",
+  LoadingExpired: "The loading intent expired. Create a new loading intent.",
+  LoadingNotOpen: "The loading intent is no longer open.",
+  LotNotStored: "The lot is not stored at the terminal, so it can't be loaded.",
+  Restricted: "The lot is restricted, so it can't be loaded until the restriction is lifted.",
+  StaleRevision:
+    "The position or loan changed after this was prepared. Create a new loading intent, or accept again.",
+};
+const notATerminal = "The lot's custodian is not a terminal, so the lot can't be loaded there.";
+
+export function failureExplanation(code: string, kind?: CommandKind): string {
+  if (kind !== undefined && loadingKinds.includes(kind)) {
+    if (code === "WrongRole" && kind === "create_loading_intent") return notATerminal;
+    if (Object.hasOwn(loadingExplanations, code)) return loadingExplanations[code] as string;
+  }
   return Object.hasOwn(explanations, code)
     ? (explanations[code] as string)
     : "See the transaction on the explorer for the program's message.";

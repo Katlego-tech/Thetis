@@ -6,7 +6,8 @@ import { formatClockTime } from "@/lib/format";
 import type { SigningWallet } from "@/lib/wallets";
 import { shortened } from "./status";
 
-// Each signer, and for the user's own unsigned roles the wallet picker (live-lending.md §6.9.4).
+// Each signer, and for the user's own unsigned roles the wallet picker (live-lending.md §6.9.4). A
+// terminal signs on the field app, never in the web (§6.10.6, L5): its row offers no wallet.
 
 export type Connection = { address: string | null }; // null: connected, but no account linked here
 
@@ -45,7 +46,9 @@ export function SignersPanel({
       <div>
         {view.signers.map(({ role, organisationId, method, signed }) => {
           const name = organisationName(organisationId);
+          const field = role === "terminal";
           const mine =
+            !field &&
             signed === null &&
             view.status === "awaiting_signatures" &&
             memberships.includes(organisationId);
@@ -69,6 +72,7 @@ export function SignersPanel({
               ) : (
                 <div className="text-(--ink-2)">Waiting</div>
               )}
+              {field && signed === null && <p>{name} signs this on the Thetis field app.</p>}
               {mine && links !== null && !linked?.size && (
                 <p className="text-(--ink-2)">
                   Link a wallet for {name} on your{" "}

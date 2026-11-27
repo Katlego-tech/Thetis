@@ -71,6 +71,7 @@ export interface LiveLoan {
   asOf: string;
   openExceptions: bigint;
   revision: bigint;
+  position: string; // the loan row's position (live-lending.md §6.10.8)
   lock: { address: string; quantityKg: bigint; control: "Pledged" | "Recovery" };
   valuation: LiveValuation | null;
   payments: LivePayment[];
@@ -116,6 +117,57 @@ export interface LiveLending {
   classPolicy: string;
   grade: string;
   custodianClass: string;
+  loading: LiveLoading;
+}
+// live-lending.md §6.10.8: a loading intent as the web shows it.
+export type LoadingState = "open" | "ready" | "recorded" | "expired" | "cancelled" | "outdated";
+export interface LiveLoadingRow {
+  loan: string;
+  loanIndex: bigint;
+  lender: Organisation;
+  lockedKg: bigint;
+  state: "accepted" | "stale" | "missing" | "recovery";
+  acceptedAt: string | null; // ISO of accepted_at, when a row exists
+  registry: Registry | null; // the acceptance row's commitment
+  openCommand: LiveCommandSummary | null; // an open accept_loading for (intent, loan)
+}
+export interface LiveHandOff {
+  loan: string;
+  loanIndex: bigint;
+  lender: Organisation;
+  status: LiveLoan["status"];
+  debtMinor: bigint;
+  currency: string;
+  currencyDecimals: number;
+}
+export interface LiveLoadingIntent {
+  address: string;
+  nonce: bigint;
+  owner: Organisation;
+  terminal: Organisation;
+  position: string;
+  quantityKg: bigint;
+  lockedKg: bigint;
+  documentSha256Hex: string;
+  positionRevision: bigint;
+  expiresAt: string;
+  executedAt: string | null;
+  cancelledBy: string | null;
+  state: LoadingState;
+  live: boolean;
+  rows: LiveLoadingRow[]; // by loan index, then address
+  accepted: number;
+  required: number | null; // null when the viewer can't see every lock
+  handOffs: LiveHandOff[]; // state "recorded" only; else []
+  lotLoaded: boolean; // state "recorded" only; else false
+  openCommand: LiveCommandSummary | null; // an open record_loading for this intent
+  registry: Registry;
+}
+export interface LiveLoading {
+  terminal: Organisation | null; // the lot's custodian when its chain role is Terminal
+  site: string; // the lot's custodian class site_code
+  positionQuantityKg: bigint; // the shown position's quantity_kg
+  intents: LiveLoadingIntent[]; // newest first (T064b.4 pre-check fold 10 for which)
 }
 export interface LiveReleaseView {
   intent: LiveIntent;

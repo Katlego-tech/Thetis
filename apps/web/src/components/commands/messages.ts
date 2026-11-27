@@ -2,6 +2,7 @@
 // §6.5.2 and T064b.3 fold 8), so a failed call shows the same words the API returns.
 
 import type { ApiErrorCode } from "@/lib/api";
+import type { CommandKind } from "@/lib/commands";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 
 export const apiMessages: Record<ApiErrorCode | "NETWORK", string> = {
@@ -41,6 +42,11 @@ export const apiMessages: Record<ApiErrorCode | "NETWORK", string> = {
   CHAIN_UNAVAILABLE: "Thetis could not reach devnet. Nothing was changed.",
   SPONSOR_UNAVAILABLE: "The fee sponsor did not answer. Nothing was sent.",
   LOOKUP_TABLE_FULL: "The instance's address table is full.",
+  ACCEPTANCE_MISSING: "A lender with a lock on this lot has not accepted this loading.",
+  LOAN_NOT_ACTIVE: "A loan with a lock on this lot is not active, so the lot can't be loaded.",
+  LOADING_NOT_OPEN: "This loading intent is no longer open.",
+  LOADING_EXPIRED: "This loading intent has expired.",
+  TOO_MANY_LOANS: "More than four loans hold locks on this lot; one loading takes at most four.",
   NETWORK: "Thetis could not reach its API. Nothing was changed.",
 };
 
@@ -51,6 +57,53 @@ export function failureMessage(result: {
 }): string {
   const message = apiMessages[result.code];
   return result.detail ? `${message} ${result.detail}` : message;
+}
+
+/** The names a loading refusal reads: each visible loan's lender and index, and the intent's owner. */
+export type FailureNames = {
+  lenders?: Record<string, { name: string; index: string }>;
+  owner?: string;
+};
+
+/**
+ * live-lending.md §6.10.6's relay refusals at create for the loading kinds, naming the lender of the
+ * detail's `loan: <address>` (for accept_loading, of `args.loan`, T064b.4 pre-check fold 3); every
+ * other kind and code reads failureMessage.
+ */
+export function commandFailureMessage(
+  kind: CommandKind,
+  result: { code: ApiErrorCode | "NETWORK"; detail?: string },
+  names: FailureNames,
+  args: Record<string, string> = {},
+): string {
+  const sent = "Nothing was sent.";
+  const detailLoan = /^loan: (\S+)$/.exec(result.detail ?? "")?.[1];
+  const named = (loan: string | undefined) =>
+    loan === undefined ? undefined : names.lenders?.[loan];
+  if (kind === "record_loading") {
+    const lender = named(detailLoan);
+    if (result.code === "ACCEPTANCE_MISSING")
+      return `Not every lender with a lock on this lot has accepted this loading. Ask ${lender ? lender.name : "each lender with a lock on this lot"} to accept the loading in Thetis. ${sent}`;
+    if (result.code === "LOAN_NOT_ACTIVE")
+      return `${lender ? `${lender.name}'s loan on this lot is` : "A loan on this lot is"} in recovery, so the lot can't be loaded until the recovery is settled. ${sent}`;
+    if (result.code === "TOO_MANY_LOANS")
+      return `More than four loans hold locks on this lot, and one loading takes at most four. Repay and close a loan first. ${sent}`;
+  }
+  if (kind === "accept_loading") {
+    const index = named(args.loan)?.index;
+    const loan = index === undefined ? "This loan" : `Loan ${index}`;
+    if (result.code === "LOAN_NOT_ACTIVE")
+      return `${loan} is not active, so it can't accept a loading. ${sent}`;
+    if (result.code === "LOADING_NOT_OPEN")
+      return `This loading intent is no longer open, so there is nothing to accept. ${sent}`;
+    if (result.code === "LOADING_EXPIRED")
+      return `This loading intent has expired. Ask ${names.owner ?? "the owner"} to create a new one. ${sent}`;
+    if (result.code === "VALIDATION" && result.detail === "args.loan")
+      return `${loan} has no lock on the position this intent loads, so it has nothing to accept. ${sent}`;
+  }
+  if (kind === "create_loading_intent" && result.code === "EVIDENCE_INVALID")
+    return `The loading document is not stored for this lot. Upload it again. ${sent}`;
+  return failureMessage(result);
 }
 
 /** The browser session's access token and user id; null when there is none. */

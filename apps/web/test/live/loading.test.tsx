@@ -142,7 +142,11 @@ const actionsOf = (context: Slug): LendingActions => ({
 
 function renderSection(snapshot: LiveSnapshot, context: Slug) {
   return render(
-    <LoadingSection lot={lotOf(snapshot, context)} context={context} actions={actionsOf(context)} />,
+    <LoadingSection
+      lot={lotOf(snapshot, context)}
+      context={context}
+      actions={actionsOf(context)}
+    />,
   );
 }
 
@@ -353,9 +357,7 @@ describe("loading reads", () => {
     expect(empty.loadingIntents).toEqual([]);
     expect(empty.acceptances).toEqual([]);
     expect(unreported.calls.map(({ table }) => table)).not.toContain("chain_loading_intents");
-    expect(unreported.calls.map(({ table }) => table)).not.toContain(
-      "chain_handoff_acceptances",
-    );
+    expect(unreported.calls.map(({ table }) => table)).not.toContain("chain_handoff_acceptances");
   });
 
   test("the commands read and the command page take the lending and loading kinds, and an issue_lot, handover or record_observation command stays out and is notFound", async () => {
@@ -425,12 +427,15 @@ describe("loading reads", () => {
   });
 
   test("liveReader maps the shown position's loading intents newest first, with a row per loan holding a positive lock", () => {
-    const snapshot = loadingSnapshot(["khunou"], [
-      loadingIntent({ address: LOADING_INTENT_OLD, nonce: "7", position_revision: "2" }),
-      loadingIntent(),
-      // An intent of another position is not shown.
-      loadingIntent({ address: orgAccount("mosela"), position: BUYER_POSITION, nonce: "9" }),
-    ]);
+    const snapshot = loadingSnapshot(
+      ["khunou"],
+      [
+        loadingIntent({ address: LOADING_INTENT_OLD, nonce: "7", position_revision: "2" }),
+        loadingIntent(),
+        // An intent of another position is not shown.
+        loadingIntent({ address: orgAccount("mosela"), position: BUYER_POSITION, nonce: "9" }),
+      ],
+    );
     snapshot.positions = [
       position(KHUNOU_POSITION, "khunou", "3000000", { locked_kg: "3000000", revision: "3" }),
       position(BUYER_POSITION, "buyer-smelter", "2000000"),
@@ -480,7 +485,12 @@ describe("loading reads", () => {
       openCommand: null,
     });
     expect(newest?.rows).toEqual([
-      expect.objectContaining({ loan: LOAN_ONE, loanIndex: 0n, lockedKg: 2_000_000n, state: "missing" }),
+      expect.objectContaining({
+        loan: LOAN_ONE,
+        loanIndex: 0n,
+        lockedKg: 2_000_000n,
+        state: "missing",
+      }),
       expect.objectContaining({
         loan: LOAN_TWO,
         loanIndex: 1n,
@@ -562,11 +572,17 @@ describe("loading reads", () => {
     ).toMatchObject({ state: "stale", registry: { status: "confirmed" } });
     expect(
       rowOf(
-        loadingSnapshot(["khunou"], [loadingIntent()], [acceptance({ lock_quantity_kg: "2000000" })]),
+        loadingSnapshot(
+          ["khunou"],
+          [loadingIntent()],
+          [acceptance({ lock_quantity_kg: "2000000" })],
+        ),
       ),
     ).toMatchObject({ state: "stale" });
     const recovery = loadingSnapshot(["khunou"], [loadingIntent()], [acceptance()]);
-    recovery.loans = [loan(LOAN_ONE, FACILITY_ONE, "lender-one", { status: "Recovery", revision: "2" })];
+    recovery.loans = [
+      loan(LOAN_ONE, FACILITY_ONE, "lender-one", { status: "Recovery", revision: "2" }),
+    ];
     recovery.locks = [lock(LOCK_ONE, LOAN_ONE, "3000000", { control: "Recovery" })];
     expect(rowOf(recovery)).toMatchObject({ state: "recovery" });
     expect(loadingOf(recovery, "khunou").intents[0]).toMatchObject({ state: "open", accepted: 0 });
@@ -649,7 +665,10 @@ describe("loading actions", () => {
     expect(screen.queryByRole("heading", { name: "Loading" })).not.toBeInTheDocument();
     cleanup();
     // The owner, lot no longer stored: no create.
-    const prepared = loadingSnapshot(["khunou"], [loadingIntent({ expires_at: String(NOW_SECONDS - 1) })]);
+    const prepared = loadingSnapshot(
+      ["khunou"],
+      [loadingIntent({ expires_at: String(NOW_SECONDS - 1) })],
+    );
     prepared.lots = [
       lotRow({
         custodian: orgAccount("port-t1"),
@@ -691,9 +710,7 @@ describe("loading actions", () => {
       target: { files: [file] },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Create loading intent" }));
-    await waitFor(() =>
-      expect(mocks.push).toHaveBeenCalledWith(`/khunou/commands/${COMMAND_ID}`),
-    );
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(`/khunou/commands/${COMMAND_ID}`));
     expect(mocks.log).toEqual([
       "insert evidence_objects",
       "insert evidence_versions",
@@ -875,7 +892,12 @@ describe("loading actions", () => {
         { label: "Revision", value: "2" },
       ],
       signers: [
-        { role: "lender", organisationId: orgId("lender-one"), method: "transaction", signed: null },
+        {
+          role: "lender",
+          organisationId: orgId("lender-one"),
+          method: "transaction",
+          signed: null,
+        },
       ],
     });
     replies.push(() => json(200, { data: acceptView }));
@@ -903,10 +925,15 @@ describe("loading actions", () => {
     renderSection(loadingSnapshot(["lender-one"], [loadingIntent()], [acceptance()]), "lender-one");
     expect(screen.queryByRole("button", { name: "Record loading" })).not.toBeInTheDocument();
     cleanup();
-    renderSection(loadingSnapshot(["khunou"], [loadingIntent({ position_revision: "2" })]), "khunou");
+    renderSection(
+      loadingSnapshot(["khunou"], [loadingIntent({ position_revision: "2" })]),
+      "khunou",
+    );
     expect(screen.queryByRole("button", { name: "Record loading" })).not.toBeInTheDocument();
     expect(
-      screen.getByText("The position changed after this intent was prepared, so it can't be recorded."),
+      screen.getByText(
+        "The position changed after this intent was prepared, so it can't be recorded.",
+      ),
     ).toBeInTheDocument();
     cleanup();
 
@@ -982,11 +1009,12 @@ describe("loading actions", () => {
     expect(
       within(signers).getByText("Port Terminal T1 signs this on the Thetis field app."),
     ).toBeInTheDocument();
-    expect(within(signers).getAllByRole("button", { name: "Connect Solflare" })).toHaveLength(1);
-    fireEvent.click(within(signers).getByRole("button", { name: "Connect Solflare" }));
-    expect(await within(signers).findAllByRole("button", { name: "Sign with Solflare" })).toHaveLength(
-      1,
-    );
+    const connect = await within(signers).findAllByRole("button", { name: "Connect Solflare" });
+    expect(connect).toHaveLength(1);
+    fireEvent.click(connect[0] as HTMLElement);
+    expect(
+      await within(signers).findAllByRole("button", { name: "Sign with Solflare" }),
+    ).toHaveLength(1);
     const terminalRow = within(signers)
       .getByText("Port Terminal T1 signs this on the Thetis field app.")
       .closest(".signer-row") as HTMLElement;
@@ -1004,7 +1032,13 @@ describe("loading actions", () => {
       code: string,
       detail?: string,
       args?: Record<string, string>,
-    ) => commandFailureMessage(kind, { code: code as never, detail }, names, args);
+    ) =>
+      commandFailureMessage(
+        kind,
+        { code: code as never, ...(detail === undefined ? {} : { detail }) },
+        names,
+        args,
+      );
     expect(line("record_loading", "ACCEPTANCE_MISSING", `loan: ${LOAN_ONE}`)).toBe(
       "Not every lender with a lock on this lot has accepted this loading. Ask Lender One Bank to accept the loading in Thetis. Nothing was sent.",
     );
@@ -1036,7 +1070,9 @@ describe("loading actions", () => {
     expect(line("create_loading_intent", "EVIDENCE_INVALID", "loading document of this lot")).toBe(
       "The loading document is not stored for this lot. Upload it again. Nothing was sent.",
     );
-    expect(line("record_loading", "NOT_AUTHORISED", "the organisation is not this action's initiator")).toBe(
+    expect(
+      line("record_loading", "NOT_AUTHORISED", "the organisation is not this action's initiator"),
+    ).toBe(
       "The caller is not authorised for this action. the organisation is not this action's initiator",
     );
     // Other kinds keep §6.5.2's message.
@@ -1055,6 +1091,7 @@ describe("loading actions", () => {
     );
     expect(mocks.push).not.toHaveBeenCalled();
     cleanup();
+    replies = [];
     renderSection(loadingSnapshot(["lender-one"]), "lender-one");
     refusedWith("VALIDATION", "args.loan");
     fireEvent.click(screen.getByRole("button", { name: "Accept loading" }));

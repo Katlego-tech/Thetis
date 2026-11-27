@@ -43,8 +43,10 @@ export function liveEnv(): LiveSnapshot["env"] {
   return { network, programId, protocol };
 }
 
-// The second read batch: fifteen fields, read together once the checkpoint allows it.
-type Fifteen = [
+// The second read batch: seventeen fields, read together once the checkpoint allows it.
+type Seventeen = [
+  unknown[],
+  unknown[],
   unknown[],
   unknown[],
   unknown[],
@@ -116,7 +118,7 @@ async function read(
       query = query.eq("program_id", env.programId);
     if (spec.filter !== "none") query = query.eq("protocol", env.protocol);
     if (spec.filter === "commands") {
-      // Open commands of the lending kinds only (live-lending.md T064b.3 fold 1).
+      // Open commands of the lending and loading kinds only (live-lending.md §6.10.7).
       query = query.in("status", [...OPEN_COMMAND_STATUSES]).in("kind", [...COMMAND_KINDS]);
     }
     for (const column of spec.key) query = query.order(column, { ascending: true });
@@ -193,6 +195,8 @@ export async function loadLiveSnapshot(
     payments: [],
     intents: [],
     commands: commands as LiveSnapshot["commands"],
+    loadingIntents: [],
+    acceptances: [],
     intakeEvents: [],
     checkpoint,
   });
@@ -214,8 +218,10 @@ export async function loadLiveSnapshot(
     locks,
     payments,
     intents,
+    loadingIntents,
+    acceptances,
     intakeEvents,
-  ] = await settled<Fifteen>([
+  ] = await settled<Seventeen>([
     read(supabase, "organisations", env),
     read(supabase, "protocol", env),
     read(supabase, "classPolicies", env),
@@ -230,6 +236,8 @@ export async function loadLiveSnapshot(
     read(supabase, "locks", env),
     read(supabase, "payments", env),
     read(supabase, "intents", env),
+    read(supabase, "loadingIntents", env),
+    read(supabase, "acceptances", env),
     read(supabase, "intakeEvents", env),
   ]);
   // Read last: a reset that began while the rows were read empties the snapshot.
@@ -254,6 +262,8 @@ export async function loadLiveSnapshot(
     payments: payments as LiveSnapshot["payments"],
     intents: intents as LiveSnapshot["intents"],
     commands: commands as LiveSnapshot["commands"],
+    loadingIntents: loadingIntents as LiveSnapshot["loadingIntents"],
+    acceptances: acceptances as LiveSnapshot["acceptances"],
     intakeEvents: intakeEvents as LiveSnapshot["intakeEvents"],
     checkpoint,
   };

@@ -79,7 +79,16 @@ function liveItems(reader: LiveReader, organisationId: string): QueueItem[] {
     const opensRelease = item.href.startsWith(`/${organisationId}/releases/`);
     const money = reader.workItemMoney(organisationId, item.id);
     const deadline = item.deadline === null ? null : Date.parse(item.deadline);
-    const quantityBasis = command ? "in this command" : opensRelease ? "of the release" : undefined;
+    // live-lending.md §6.10.8: the loading items' quantity bases.
+    const quantityBasis = command
+      ? "in this command"
+      : opensRelease
+        ? "of the release"
+        : item.id.startsWith("accept-loading:")
+          ? "locked to your loan"
+          : item.id.startsWith("record-loading:")
+            ? "of the position"
+            : undefined;
     const amountBasis = command
       ? "in this command"
       : opensRelease

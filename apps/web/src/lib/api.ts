@@ -34,6 +34,12 @@ const apiErrorCodes = [
   "CHAIN_UNAVAILABLE",
   "SPONSOR_UNAVAILABLE",
   "LOOKUP_TABLE_FULL",
+  // live-lending.md T064b.4 pre-check fold 1: the relay's loading refusals
+  "ACCEPTANCE_MISSING",
+  "LOAN_NOT_ACTIVE",
+  "LOADING_NOT_OPEN",
+  "LOADING_EXPIRED",
+  "TOO_MANY_LOANS",
 ] as const;
 
 export type ApiErrorCode = (typeof apiErrorCodes)[number];
