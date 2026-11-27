@@ -12,12 +12,34 @@ const apiErrorCodes = [
   "BAD_SIGNATURE",
   "WALLET_INVALID",
   "INTERNAL",
+  // live-lending.md §6.5.2
+  "WRONG_SETTLEMENT_MODE",
+  "ACCOUNT_MISSING",
+  "PAYMENT_ALREADY_RECORDED",
+  "PAYMENT_NOT_CONFIRMED",
+  "EVIDENCE_INVALID",
+  "WALLET_NOT_LINKED",
+  "AUTHORITY_INVALID",
+  "ALREADY_SIGNED",
+  "COMMAND_STATE",
+  "STALE_TEXT",
+  "TEXT_EXPIRED",
+  "BLOCKHASH_EXPIRED",
+  "TOKEN_ACCOUNT_MISSING",
+  "ROLE_INVALID",
+  "TRANSACTION_TOO_LARGE",
+  "TRANSACTION_MISMATCH",
+  "TOO_MANY_OPEN_COMMANDS",
+  "COMMANDS_UNAVAILABLE",
+  "CHAIN_UNAVAILABLE",
+  "SPONSOR_UNAVAILABLE",
+  "LOOKUP_TABLE_FULL",
 ] as const;
 
 export type ApiErrorCode = (typeof apiErrorCodes)[number];
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; code: ApiErrorCode | "NETWORK"; status: number };
+  | { ok: false; code: ApiErrorCode | "NETWORK"; status: number; detail?: string };
 export type WalletChallenge = { challengeId: string; message: string; expiresAt: string };
 export type WalletLink = { linkId: string; wallet: string; organisationId: string };
 
@@ -30,19 +52,30 @@ export async function apiPost<T>(
   body: unknown,
   accessToken: string,
 ): Promise<ApiResult<T>> {
+  return request<T>(path, accessToken, { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function apiGet<T>(path: string, accessToken: string): Promise<ApiResult<T>> {
+  return request<T>(path, accessToken, { method: "GET" });
+}
+
+async function request<T>(
+  path: string,
+  accessToken: string,
+  init: { method: "GET" | "POST"; body?: string },
+): Promise<ApiResult<T>> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL;
   if (!baseUrl) throw new Error("NEXT_PUBLIC_API_URL is not set");
 
-  const json = JSON.stringify(body);
   let response: Response;
   try {
     response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
-      method: "POST",
+      method: init.method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
       },
-      body: json,
+      ...(init.body === undefined ? {} : { body: init.body }),
     });
   } catch {
     return { ok: false, code: "NETWORK", status: 0 };
@@ -56,7 +89,10 @@ export async function apiPost<T>(
     if (!response.ok && "error" in payload) {
       const { error } = payload;
       if (error && typeof error === "object" && "code" in error && isApiErrorCode(error.code)) {
-        return { ok: false, code: error.code, status: response.status };
+        const detail = "detail" in error && typeof error.detail === "string" ? error.detail : null;
+        return detail === null
+          ? { ok: false, code: error.code, status: response.status }
+          : { ok: false, code: error.code, status: response.status, detail };
       }
     }
   }

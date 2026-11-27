@@ -3,8 +3,10 @@ import { PageHeader } from "@/components/thetis/page-header";
 import { RegistryMark } from "@/components/thetis/registry-mark";
 import { StateMark } from "@/components/thetis/state-mark";
 import type { LiveLotView } from "@/data/live/types";
-import type { WorkItemView } from "@/data/types";
+import type { LotView, WorkItemView } from "@/data/types";
 import { formatMoney, formatTonnes } from "@/lib/format";
+import { FinancingLive } from "./financing-live";
+import type { LendingActions } from "./lending-copy";
 import { LotStaleNote } from "./lot-stale-note";
 import { NextPanel, overviewColumns, QuantityPanel } from "./overview-panels";
 import {
@@ -32,6 +34,8 @@ export function LotDossier({
   minorDigits,
   source = "reference",
   stale = null,
+  role = null,
+  actions = null,
 }: {
   lot: LiveLotView;
   context: string;
@@ -41,15 +45,25 @@ export function LotDossier({
   minorDigits: number | null;
   source?: "reference" | "live";
   stale?: "halted" | "skew" | null;
+  /** live: the context's membership kind */
+  role?: string | null;
+  /** live: what the lending forms send; null renders the records without actions */
+  actions?: LendingActions | null;
 }) {
   const activeTab = tabs.find(({ id }) => id === tab)?.id ?? "overview";
+  const money =
+    currency !== null && minorDigits !== null
+      ? (minor: bigint) => formatMoney(minor, currency, minorDigits)
+      : null;
   let financial: FinancialRecord;
-  if (lot.loan === null) {
-    financial = { lot, money: null };
-  } else if (currency !== null && minorDigits !== null) {
-    financial = { lot, money: (minor: bigint) => formatMoney(minor, currency, minorDigits) };
+  if (source === "live") {
+    if (money === null && (lot.loan !== null || lot.valuation !== null))
+      throw new Error(`Lot ${lot.id} has a loan but no facility currency to show it in`);
+    financial = { source, lot, money };
+  } else if (money !== null && lot.loan !== null && lot.valuation !== null) {
+    financial = { source, lot: lot as LotView, money };
   } else {
-    throw new Error(`Lot ${lot.id} has a loan but no facility currency to show it in`);
+    throw new Error(`Lot ${lot.id} has no reference loan or facility currency to show it in`);
   }
   // On chain, a lot whose positions are all empty has no current holder.
   const unheld = source === "live" && lot.position.positionQuantityKg === 0n;
@@ -108,12 +122,21 @@ export function LotDossier({
         </div>
       )}
       {activeTab === "evidence" && <EvidenceTable evidence={lot.evidence} source={source} />}
-      {activeTab === "financing" && (
-        <>
-          <FinancialResults {...financial} />
-          <ReleaseTable releases={lot.releases} context={context} />
-        </>
-      )}
+      {activeTab === "financing" &&
+        (financial.source === "live" ? (
+          <FinancingLive
+            lot={lot}
+            financial={financial}
+            context={context}
+            role={role}
+            actions={actions}
+          />
+        ) : (
+          <>
+            <FinancialResults {...financial} />
+            <ReleaseTable releases={financial.lot.releases} context={context} />
+          </>
+        ))}
       {activeTab === "custody" && <CustodyEvents events={lot.custodyTimeline} />}
       {activeTab === "activity" && <CustodyEvents events={lot.custodyTimeline} activity />}
     </>

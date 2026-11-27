@@ -1,22 +1,60 @@
-import { availableQuantity, parseU64 } from "@thetis/domain";
-import type { Context, CustodyState, Organisation, RestrictionState, Site } from "../types";
+import {
+  accrueSimple,
+  availableQuantity,
+  DomainError,
+  parseU64,
+  previewRelease,
+  type ReleaseInput,
+} from "@thetis/domain";
+import { type CommandKind, kindTitles, type SignerRole } from "@/lib/commands";
+import { formatClockTime, formatDateTime, formatMoney } from "@/lib/format";
+import type {
+  Context,
+  CustodyState,
+  Organisation,
+  Registry,
+  RestrictionState,
+  Site,
+  WorkItemView,
+} from "../types";
 import { freshnessOf } from "./freshness";
 import {
   type ChainDocumentRow,
   type ChainEventRow,
+  type ChainFacilityRow,
+  type ChainLoanRow,
   type ChainLotRow,
   type ChainOrganisationRow,
+  type ChainPaymentRow,
   type ChainPositionRow,
   type ChainProtocolRow,
+  type ChainReleaseIntentRow,
+  type ChainValuationRow,
+  type CommandRow,
   checkRow,
   type LiveSnapshot,
   type OrganisationRow,
   parseI64,
+  parseU64At,
   type RowField,
   type RowsOf,
   SLUG,
 } from "./rows";
-import { LiveDataError, type LiveDataErrorCode, type LiveLotView, type LiveReader } from "./types";
+import {
+  type LiveCommandSummary,
+  LiveDataError,
+  type LiveDataErrorCode,
+  type LiveFacility,
+  type LiveIntent,
+  type LiveLending,
+  type LiveLoan,
+  type LiveLotView,
+  type LivePayment,
+  type LivePaymentState,
+  type LiveReader,
+  type LiveReleaseView,
+  type LiveValuation,
+} from "./types";
 
 type Indexed<T> = { row: T; index: number };
 
@@ -70,6 +108,13 @@ function validate(snapshot: LiveSnapshot) {
   const allPositions = list("positions", snapshot.positions, env);
   const intakes = list("intakes", snapshot.intakes, env);
   const allDocuments = list("documents", snapshot.documents, env);
+  const allFacilities = list("facilities", snapshot.facilities, env);
+  const allValuations = list("valuations", snapshot.valuations, env);
+  const allLoans = list("loans", snapshot.loans, env);
+  const allLocks = list("locks", snapshot.locks, env);
+  const allPayments = list("payments", snapshot.payments, env);
+  const allIntents = list("intents", snapshot.intents, env);
+  const commands = list("commands", snapshot.commands, env);
   const allEvents = list("intakeEvents", snapshot.intakeEvents, env);
   const checkpoint = one("checkpoint", snapshot.checkpoint, env);
 
@@ -85,6 +130,16 @@ function validate(snapshot: LiveSnapshot) {
     }),
   );
   const documents = allDocuments.filter(({ row }) => lotDigests.has(row.subject_hex));
+  // Lending rows of lots that were not selected are dropped too (live-lending.md §4.5.1).
+  const loans = allLoans.filter(({ row }) => lotAddresses.has(row.lot));
+  const loanLot = new Map(allLoans.map(({ row }) => [row.address, row.lot]));
+  const locks = allLocks.filter(({ row }) => lotAddresses.has(loanLot.get(row.loan) ?? ""));
+  const intents = allIntents.filter(({ row }) => lotAddresses.has(row.lot));
+  const intentLot = new Map(allIntents.map(({ row }) => [row.address, row.lot]));
+  const payments = allPayments.filter(({ row }) => {
+    if (lotAddresses.has(loanLot.get(row.loan) ?? "")) return true;
+    return row.purpose === "Release" && lotAddresses.has(intentLot.get(row.subject) ?? "");
+  });
 
   // (3) references and the ids copied from them
   const organisationByAddress = byAddress(organisations);
@@ -113,12 +168,21 @@ function validate(snapshot: LiveSnapshot) {
     if (!positions.some((position) => position.row.lot === row.address))
       fail("BAD_ROW", at, "has no position");
   }
+  const loanByAddress = byAddress(loans);
+  const openLockedOn = (positionAddress: string) =>
+    locks
+      .filter(({ row }) => {
+        const owner = loanByAddress.get(row.loan)?.row;
+        return row.position === positionAddress && owner !== undefined && owner.status !== "Closed";
+      })
+      .reduce((sum, { row }) => sum + parseU64(row.quantity_kg), 0n);
   for (const { row, index } of positions) {
     const at = `positions[${index}]`;
     sameOrg(organisationAt(row.owner, `${at}.owner`).row, row.owner_org_id, `${at}.owner_org_id`);
-    if (row.locked_kg !== "0") fail("BAD_ROW", `${at}.locked_kg`, "locks need the Phase 2 adapter");
     if (row.reserved_kg !== "0")
-      fail("BAD_ROW", `${at}.reserved_kg`, "reservations need the Phase 2 adapter");
+      fail("BAD_ROW", `${at}.reserved_kg`, "reservations need the Phase 3 adapter");
+    if (parseU64(row.locked_kg) < openLockedOn(row.address))
+      fail("BAD_ROW", `${at}.locked_kg`, "below the visible locks on this position");
   }
   for (const { row, index } of documents) {
     const at = `documents[${index}]`;
@@ -135,10 +199,73 @@ function validate(snapshot: LiveSnapshot) {
     }
   }
 
+  // Lending references (live-lending.md §4.5.1).
+  const facilityByAddress = byAddress(allFacilities);
+  const memberIds = new Set(memberships.map(({ row }) => row.id));
+  const lockByLoan = new Map(locks.map((entry) => [entry.row.loan, entry]));
+  for (const { row, index } of allFacilities) {
+    const at = `facilities[${index}]`;
+    sameOrg(
+      organisationAt(row.lender, `${at}.lender`).row,
+      row.lender_org_id,
+      `${at}.lender_org_id`,
+    );
+    sameOrg(
+      organisationAt(row.borrower, `${at}.borrower`).row,
+      row.borrower_org_id,
+      `${at}.borrower_org_id`,
+    );
+  }
+  for (const { row, index } of loans) {
+    const at = `loans[${index}]`;
+    if (!facilityByAddress.has(row.facility))
+      fail("BAD_ROW", `${at}.facility`, "names no facility");
+    if (!lockByLoan.has(row.address)) fail("BAD_ROW", at, "has no lock");
+    sameOrg(
+      organisationAt(row.borrower, `${at}.borrower`).row,
+      row.borrower_org_id,
+      `${at}.borrower_org_id`,
+    );
+  }
+  const buyerOnly = (row: ChainReleaseIntentRow) =>
+    memberIds.has(row.buyer_org_id) &&
+    !memberIds.has(row.lender_org_id) &&
+    !memberIds.has(row.seller_org_id);
+  for (const { row, index } of intents) {
+    const at = `intents[${index}]`;
+    if (!loanByAddress.has(row.loan) && !buyerOnly(row))
+      fail("BAD_ROW", `${at}.loan`, "names no loan");
+    sameOrg(
+      organisationAt(row.seller, `${at}.seller`).row,
+      row.seller_org_id,
+      `${at}.seller_org_id`,
+    );
+    sameOrg(organisationAt(row.buyer, `${at}.buyer`).row, row.buyer_org_id, `${at}.buyer_org_id`);
+    sameOrg(
+      organisationAt(row.lender, `${at}.lender`).row,
+      row.lender_org_id,
+      `${at}.lender_org_id`,
+    );
+  }
+  const intentByAddress = byAddress(intents);
+  for (const { row, index } of payments) {
+    const at = `payments[${index}]`;
+    const subject = intentByAddress.get(row.subject)?.row;
+    const exempt = row.purpose === "Release" && subject !== undefined && buyerOnly(subject);
+    if (!loanByAddress.has(row.loan) && !exempt) fail("BAD_ROW", `${at}.loan`, "names no loan");
+  }
+
   return {
     env,
     memberships,
     organisationByAddress,
+    facilities: allFacilities.map(({ row }) => row),
+    valuations: allValuations.map(({ row }) => row),
+    loans: loans.map(({ row }) => row),
+    locks: locks.map(({ row }) => row),
+    payments: payments.map(({ row }) => row),
+    intents: intents.map(({ row }) => row),
+    commands: commands.map(({ row }) => row),
     protocol,
     classPolicyByAddress,
     custodianClassByAddress,
@@ -153,9 +280,18 @@ function validate(snapshot: LiveSnapshot) {
 
 type Valid = ReturnType<typeof validate>;
 
-function belongsTo(lot: ChainLotRow, positions: ChainPositionRow[], orgId: string): boolean {
+/** A lot the organisation reads (live-lending.md §4.5.2 `lots(org)`). */
+function belongsTo(data: Valid, lot: ChainLotRow, orgId: string): boolean {
+  const positions = data.positions.filter((position) => position.lot === lot.address);
   return (
-    lot.custodian_org_id === orgId || positions.some((position) => position.owner_org_id === orgId)
+    lot.custodian_org_id === orgId ||
+    positions.some((position) => position.owner_org_id === orgId) ||
+    data.facilities.some(
+      (facility) =>
+        facility.lender_org_id === orgId &&
+        positions.some((position) => position.owner === facility.borrower),
+    ) ||
+    data.intents.some((intent) => intent.lot === lot.address && intent.buyer_org_id === orgId)
   );
 }
 
@@ -191,10 +327,29 @@ function checkSynthetic(data: Valid) {
   const rendered = new Set<string>();
   for (const { row: lot } of data.lots) {
     const positions = data.positions.filter((position) => position.lot === lot.address);
-    if (!memberIds.some((id) => belongsTo(lot, positions, id))) continue;
+    if (!memberIds.some((id) => belongsTo(data, lot, id))) continue;
     rendered.add(lot.custodian);
     for (const position of positions) rendered.add(position.owner);
     for (const document of evidenceOf(data, lot)) rendered.add(document.issuer);
+  }
+  // The live lending views render these too (live-lending.md §4.5.1 synthetic check).
+  for (const facility of data.facilities) {
+    rendered.add(facility.lender);
+    rendered.add(facility.borrower);
+  }
+  for (const intent of data.intents) {
+    rendered.add(intent.seller);
+    rendered.add(intent.buyer);
+    rendered.add(intent.lender);
+  }
+  for (const { row } of data.organisationByAddress.values()) {
+    if (row.role === "Buyer" || row.role === "Exporter") rendered.add(row.address);
+  }
+  const signerOrgs = new Set(
+    data.commands.flatMap(({ signers }) => signers.map(({ organisationId }) => organisationId)),
+  );
+  for (const { row } of data.organisationByAddress.values()) {
+    if (signerOrgs.has(row.org_id)) rendered.add(row.address);
   }
   const shown = [...rendered]
     .map((address) => data.organisationByAddress.get(address))
@@ -240,11 +395,30 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
     positionsOf(lot).reduce((sum, position) => sum + parseU64(position.quantity_kg), 0n) !==
     parseU64(lot.supply_kg);
 
-  function shownPosition(positions: ChainPositionRow[], orgId: string): ChainPositionRow {
-    const own = positions.find(
-      (position) => position.owner_org_id === orgId && parseU64(position.quantity_kg) > 0n,
-    );
-    if (own) return own;
+  const nowMs = BigInt(now.getTime());
+  const iso = (seconds: bigint) => new Date(Number(seconds) * 1000).toISOString();
+  const facilityByAddress = new Map(data.facilities.map((row) => [row.address, row]));
+  const loanByAddress = new Map(data.loans.map((row) => [row.address, row]));
+  const lockByLoan = new Map(data.locks.map((row) => [row.loan, row]));
+  const lotByAddress = new Map(data.lots.map(({ row }) => [row.address, row]));
+  const chainOrgByOrgId = new Map(
+    [...data.organisationByAddress.values()].map(({ row }) => [row.org_id, row]),
+  );
+  const lockedOf = (loan: ChainLoanRow) => {
+    const lock = lockByLoan.get(loan.address);
+    return lock ? parseU64(lock.quantity_kg) : 0n;
+  };
+  const largestLock = (loans: ChainLoanRow[]) =>
+    loans.reduce<ChainLoanRow | null>((best, loan) => {
+      if (best === null) return loan;
+      const quantity = lockedOf(loan);
+      const bestQuantity = lockedOf(best);
+      return quantity > bestQuantity || (quantity === bestQuantity && loan.address < best.address)
+        ? loan
+        : best;
+    }, null);
+
+  function largestPosition(positions: ChainPositionRow[]): ChainPositionRow {
     const [first, ...rest] = positions;
     if (!first) throw new LiveDataError("BAD_ROW", "positions", "a lot without a position");
     return rest.reduce((largest, position) => {
@@ -257,7 +431,235 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
     }, first);
   }
 
-  function lotView(lot: ChainLotRow, orgId: string): LiveLotView {
+  function shownPosition(positions: ChainPositionRow[], member: OrganisationRow): ChainPositionRow {
+    // A lender reads the lot through its facility's borrower (live-lending.md §4.5.2).
+    const borrowers = positions.filter(
+      (position) =>
+        parseU64(position.quantity_kg) > 0n &&
+        data.facilities.some(
+          (facility) =>
+            facility.lender_org_id === member.id && facility.borrower === position.owner,
+        ),
+    );
+    if (borrowers.length > 0) return largestPosition(borrowers);
+    const own = positions.find(
+      (position) => position.owner_org_id === member.id && parseU64(position.quantity_kg) > 0n,
+    );
+    if (own) return own;
+    return largestPosition(positions);
+  }
+
+  function primaryLoan(shown: ChainPositionRow, member: OrganisationRow): ChainLoanRow | null {
+    const open = data.loans.filter(
+      (loan) => loan.position === shown.address && loan.status !== "Closed" && lockedOf(loan) > 0n,
+    );
+    return largestLock(
+      member.kind === "lender" ? open.filter((loan) => loan.lender_org_id === member.id) : open,
+    );
+  }
+
+  function accruedOf(loan: ChainLoanRow): bigint {
+    try {
+      return accrueSimple({
+        principal: parseU64(loan.principal),
+        rateBps: BigInt(loan.rate_bps),
+        elapsedSeconds: (() => {
+          const elapsed = nowMs / 1000n - parseI64(loan.accrued_at, "loans.accrued_at");
+          return elapsed > 0n ? elapsed : 0n;
+        })(),
+        carriedRemainder: parseU64(loan.accrual_remainder),
+      }).interest;
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      const index = snapshot.loans.findIndex((row) => row.address === loan.address);
+      throw new LiveDataError("BAD_ROW", `loans[${index}]`, error.message);
+    }
+  }
+
+  function valuationFor(facility: string, lot: ChainLotRow): ChainValuationRow | null {
+    return (
+      data.valuations.find(
+        (valuation) =>
+          valuation.facility === facility &&
+          valuation.class_policy === lot.class_policy &&
+          valuation.grade === lot.grade &&
+          valuation.custodian_class === lot.custodian_class,
+      ) ?? null
+    );
+  }
+
+  function liveFacility(row: ChainFacilityRow): LiveFacility {
+    return {
+      address: row.address,
+      facilityIdHex: row.facility_id_hex,
+      lender: organisation(row.lender),
+      borrower: organisation(row.borrower),
+      currency: row.currency,
+      currencyDecimals: row.currency_decimals,
+      termsVersion: BigInt(row.terms_version),
+      rateBps: BigInt(row.rate_bps),
+      maxLtvBps: BigInt(row.max_ltv_bps),
+      loanCount: BigInt(row.loan_count),
+      registry: { status: row.commitment },
+    };
+  }
+
+  function liveValuation(row: ChainValuationRow): LiveValuation {
+    const validUntil = parseI64(row.valid_until, "valuations.valid_until");
+    return {
+      address: row.address,
+      facility: row.facility,
+      valuePerKgMinor: parseU64(row.value_per_kg),
+      haircutBps: BigInt(row.haircut_bps),
+      validUntil: iso(validUntil),
+      setAt: iso(parseI64(row.set_at, "valuations.set_at")),
+      version: BigInt(row.version),
+      stale: validUntil * 1000n < nowMs,
+      registry: { status: row.commitment },
+    };
+  }
+
+  function livePayment(row: ChainPaymentRow): LivePayment {
+    return {
+      address: row.address,
+      purpose: row.purpose,
+      subject: row.subject,
+      amountMinor: parseU64(row.amount),
+      status: row.status,
+      appliedMinor: parseU64(row.applied),
+      surplusMinor: parseU64(row.surplus),
+      observedAt: iso(parseI64(row.observed_at, "payments.observed_at")),
+      registry: { status: row.commitment },
+    };
+  }
+
+  function liveLoan(row: ChainLoanRow): LiveLoan {
+    const facility = facilityByAddress.get(row.facility);
+    const lock = lockByLoan.get(row.address);
+    const lot = lotByAddress.get(row.lot);
+    if (!facility || !lock || !lot)
+      throw new LiveDataError("BAD_ROW", "loans", `unresolved ${row.address}`);
+    const principal = parseU64(row.principal);
+    const booked = parseU64(row.booked_interest);
+    const accrued = accruedOf(row);
+    const valuation = valuationFor(row.facility, lot);
+    return {
+      address: row.address,
+      facility: liveFacility(facility),
+      index: BigInt(row.loan_index),
+      status: row.status,
+      principalMinor: principal,
+      bookedInterestMinor: booked,
+      accruedInterestMinor: accrued,
+      debtMinor: principal + booked + accrued,
+      accruedAt: iso(parseI64(row.accrued_at, "loans.accrued_at")),
+      asOf: now.toISOString(),
+      openExceptions: BigInt(row.open_exceptions),
+      revision: parseU64(row.revision),
+      lock: {
+        address: lock.address,
+        quantityKg: parseU64(lock.quantity_kg),
+        control: lock.control,
+      },
+      valuation: valuation ? liveValuation(valuation) : null,
+      payments: data.payments
+        .filter((payment) => payment.loan === row.address)
+        .toSorted(
+          (first, second) =>
+            Number(
+              parseI64(first.observed_at, "payments.observed_at") -
+                parseI64(second.observed_at, "payments.observed_at"),
+            ) || compareText(first.address, second.address),
+        )
+        .map(livePayment),
+      registry: { status: row.commitment },
+    };
+  }
+
+  /** live-lending.md §4.5.4: the intent's Release payment state, and the payment it picked. */
+  function paymentOf(intent: ChainReleaseIntentRow): {
+    state: LivePaymentState;
+    payment: ChainPaymentRow | null;
+  } {
+    const amount = parseU64(intent.price) + parseU64(intent.top_up);
+    const own = data.payments
+      .filter((payment) => payment.purpose === "Release" && payment.subject === intent.address)
+      .toSorted((first, second) => compareText(first.address, second.address));
+    const consumed = own.find((payment) => payment.status === "Consumed");
+    if (consumed) return { state: "consumed", payment: consumed };
+    const unconsumed = own.filter((payment) => payment.status === "Unconsumed");
+    const exact = unconsumed.find((payment) => parseU64(payment.amount) === amount);
+    if (exact) return { state: "confirmed", payment: exact };
+    if (unconsumed[0]) return { state: "mismatch", payment: unconsumed[0] };
+    const voided = own.find((payment) => payment.status === "Voided");
+    if (voided) return { state: "voided", payment: voided };
+    return { state: "none", payment: null };
+  }
+
+  const unexpired = (intent: ChainReleaseIntentRow) =>
+    parseI64(intent.expires_at, "intents.expires_at") * 1000n > nowMs;
+
+  function liveIntent(row: ChainReleaseIntentRow): LiveIntent {
+    const lot = lotByAddress.get(row.lot);
+    if (!lot) throw new LiveDataError("BAD_ROW", "intents", `unresolved ${row.address}`);
+    return {
+      address: row.address,
+      loan: row.loan,
+      lotId: lot.lot_id,
+      seller: organisation(row.seller),
+      buyer: organisation(row.buyer),
+      lender: organisation(row.lender),
+      nonce: parseU64(row.nonce),
+      quantityKg: parseU64(row.quantity_kg),
+      priceMinor: parseU64(row.price),
+      topUpMinor: parseU64(row.top_up),
+      currency: row.currency,
+      currencyDecimals: row.currency_decimals,
+      expiresAt: iso(parseI64(row.expires_at, "intents.expires_at")),
+      expired: !unexpired(row),
+      status: row.status,
+      payment: paymentOf(row).state,
+      registry: { status: row.commitment },
+    };
+  }
+
+  const byExpiry = (first: ChainReleaseIntentRow, second: ChainReleaseIntentRow) => {
+    const time =
+      parseI64(first.expires_at, "intents.expires_at") -
+      parseI64(second.expires_at, "intents.expires_at");
+    return time !== 0n ? (time < 0n ? -1 : 1) : compareText(first.address, second.address);
+  };
+  const byCreation = (first: CommandRow, second: CommandRow) =>
+    compareText(first.created_at, second.created_at) || compareText(first.id, second.id);
+
+  function summary(row: CommandRow, slug: string): LiveCommandSummary {
+    const signed = new Set(row.signatures.map(({ role }) => role));
+    return {
+      id: row.id,
+      kind: row.kind as CommandKind,
+      status: row.status,
+      awaiting: row.signers
+        .filter(({ role }) => !signed.has(role))
+        .map(({ role, organisationId }) => {
+          const named = organisationByOrgId(organisationId);
+          if (!named)
+            throw new LiveDataError("BAD_ROW", "commands", `no organisation ${organisationId}`);
+          return { role: role as SignerRole, organisation: named };
+        }),
+      validUntil:
+        row.valid_until === null ? null : iso(parseI64(row.valid_until, "commands.valid_until")),
+      href: `/${slug}/commands/${row.id}`,
+    };
+  }
+
+  function organisationByOrgId(orgId: string): Organisation | null {
+    const chain = chainOrgByOrgId.get(orgId);
+    if (chain?.slug) return organisation(chain.address);
+    const member = memberships.find((row) => row.id === orgId);
+    return member ? { id: member.slug, name: member.name, role: member.kind } : null;
+  }
+
+  function lotView(lot: ChainLotRow, member: OrganisationRow): LiveLotView {
     const classPolicy = data.classPolicyByAddress.get(lot.class_policy)?.row;
     const custodianClass = data.custodianClassByAddress.get(lot.custodian_class)?.row;
     if (!classPolicy || !custodianClass)
@@ -268,7 +670,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       kind: "custodian site",
     };
     const custodian = organisation(lot.custodian);
-    const shown = shownPosition(positionsOf(lot), orgId);
+    const shown = shownPosition(positionsOf(lot), member);
     const positionQuantity = parseU64(shown.quantity_kg);
     const activeLockedQuantity = parseU64(shown.locked_kg);
     const separatelyReservedQuantity = parseU64(shown.reserved_kg);
@@ -284,7 +686,6 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
         at: event.block_time,
         registry: { status: event.commitment },
       }));
-    const nowMs = BigInt(now.getTime());
     const evidence = evidenceOf(data, lot)
       .toSorted((first, second) =>
         first.version !== second.version
@@ -308,6 +709,118 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
         file: null,
       }));
 
+    const primary = primaryLoan(shown, member);
+    const lockedKg = parseU64(shown.locked_kg);
+    const openOnShown = data.loans.filter(
+      (loan) => loan.position === shown.address && loan.status !== "Closed",
+    );
+    let finance: LiveLotView["finance"];
+    if (primary?.status === "Active") finance = "Pledged";
+    else if (primary?.status === "Recovery") finance = "Recovery";
+    else if (primary?.status === "ExternalHandoff") finance = "External hand-off";
+    else if (lockedKg > 0n)
+      finance = "Pledged"; // a lock the viewer can't see is never available
+    else if (
+      openOnShown.length === 0 &&
+      data.loans.some((loan) => loan.position === shown.address && loan.status === "Closed")
+    )
+      finance = "Repaid";
+    else finance = "Available";
+
+    const primaryView = primary ? liveLoan(primary) : null;
+    const loanFacility = primary ? facilityByAddress.get(primary.facility) : undefined;
+    const loanView: LiveLotView["loan"] =
+      primaryView && loanFacility
+        ? {
+            principalMinor: primaryView.principalMinor,
+            bookedInterestMinor: primaryView.bookedInterestMinor + primaryView.accruedInterestMinor,
+            bookedFeesMinor: 0n,
+            debtMinor: primaryView.debtMinor,
+            status: primaryView.status,
+            lender: organisation(loanFacility.lender),
+            registry: primaryView.registry,
+          }
+        : null;
+    const valuationRow = primary ? valuationFor(primary.facility, lot) : null;
+    let valuationView: LiveLotView["valuation"] = null;
+    if (primaryView && loanFacility && valuationRow) {
+      const value = parseU64(valuationRow.value_per_kg);
+      const haircut = BigInt(valuationRow.haircut_bps);
+      const eligible = (primaryView.lock.quantityKg * value * (10000n - haircut)) / 10000n;
+      valuationView = {
+        valuePerKgMinor: value,
+        haircutBps: haircut,
+        maxLtvBps: BigInt(loanFacility.max_ltv_bps),
+        validUntil: iso(parseI64(valuationRow.valid_until, "valuations.valid_until")),
+        eligibleValueMinor: eligible,
+        ltvBps: eligible === 0n ? null : (primaryView.debtMinor * 10000n) / eligible,
+        registry: { status: valuationRow.commitment },
+      };
+    }
+
+    const visibleLocks = data.locks
+      .filter((row) => {
+        const owner = loanByAddress.get(row.loan);
+        return row.position === shown.address && owner !== undefined && owner.status !== "Closed";
+      })
+      .map((row) => {
+        const owner = loanByAddress.get(row.loan) as ChainLoanRow;
+        const facility = facilityByAddress.get(owner.facility) as ChainFacilityRow;
+        return {
+          loan: owner.address,
+          lender: organisation(facility.lender),
+          kg: parseU64(row.quantity_kg),
+        };
+      })
+      .toSorted(
+        (first, second) =>
+          compareText(first.lender.name, second.lender.name) ||
+          compareText(first.loan, second.loan),
+      );
+    const visibleLockedKg = visibleLocks.reduce((sum, { kg }) => sum + kg, 0n);
+    const lotIntents = data.intents
+      .filter((intent) => intent.lot === lot.address)
+      .toSorted(byExpiry);
+
+    const lending: LiveLending = {
+      lotAddress: lot.address,
+      primaryLoan: primary?.address ?? null,
+      valuations: data.valuations
+        .filter(
+          (valuation) =>
+            valuation.class_policy === lot.class_policy &&
+            valuation.grade === lot.grade &&
+            valuation.custodian_class === lot.custodian_class,
+        )
+        .toSorted((first, second) => compareText(first.facility, second.facility))
+        .map(liveValuation),
+      facilities: data.facilities
+        .filter((facility) => facility.borrower === shown.owner)
+        .toSorted((first, second) => compareText(first.address, second.address))
+        .map(liveFacility),
+      loans: data.loans
+        .filter((loan) => loan.lot === lot.address)
+        .toSorted(
+          (first, second) =>
+            compareText(first.facility, second.facility) || first.loan_index - second.loan_index,
+        )
+        .map(liveLoan),
+      intents: lotIntents.map(liveIntent),
+      hiddenLockedKg: lockedKg > visibleLockedKg ? lockedKg - visibleLockedKg : 0n,
+      openCommands: data.commands
+        .filter((command) => command.lot === lot.address)
+        .toSorted(byCreation)
+        .map((command) => summary(command, member.slug)),
+      shownPosition: {
+        address: shown.address,
+        owner: organisation(shown.owner),
+        revision: parseU64(shown.revision),
+      },
+      classPolicy: lot.class_policy,
+      grade: lot.grade,
+      custodianClass: lot.custodian_class,
+    };
+
     return {
       id: lot.lot_id,
       mineral: classPolicy.class_code.toLowerCase(),
@@ -317,7 +830,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       owner: organisation(shown.owner),
       custodian,
       custody: CUSTODY_LABEL[lot.state],
-      finance: "Available",
+      finance,
       restriction: RESTRICTION_LABEL[lot.restriction],
       position: {
         positionQuantityKg: positionQuantity,
@@ -329,29 +842,273 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
           separatelyReservedQuantity,
         }),
       },
-      locks: [],
+      locks: visibleLocks.map(({ lender, kg }) => ({ lender, lockedQuantityKg: kg })),
       discrepancyKg: 0n,
       registry: { status: lot.commitment },
-      loan: null,
-      valuation: null,
+      loan: loanView,
+      valuation: valuationView,
       custodyTimeline: timeline,
       evidence,
-      releases: [],
+      releases: lotIntents.map((intent) => ({
+        id: intent.address,
+        buyer: organisation(intent.buyer),
+        soldLockedQuantityKg: parseU64(intent.quantity_kg),
+        payment: paymentOf(intent).state,
+        registry: { status: intent.commitment },
+      })),
+      lending,
     };
   }
 
-  function lots(organisationId: string): LiveLotView[] {
-    const member = membershipBySlug.get(organisationId);
-    if (!member) return [];
-    return data.lots
+  const visibleLots = (member: OrganisationRow) =>
+    data.lots
       .map(({ row }) => row)
-      .filter((lot) => belongsTo(lot, positionsOf(lot), member.id))
+      .filter((lot) => belongsTo(data, lot, member.id))
       .toSorted((first, second) => {
         const time = Date.parse(second.issued_at) - Date.parse(first.issued_at);
         if (time !== 0) return time;
         return first.lot_id < second.lot_id ? -1 : first.lot_id > second.lot_id ? 1 : 0;
-      })
-      .map((lot) => lotView(lot, member.id));
+      });
+
+  function lots(organisationId: string): LiveLotView[] {
+    const member = membershipBySlug.get(organisationId);
+    if (!member) return [];
+    return visibleLots(member).map((lot) => lotView(lot, member));
+  }
+
+  function releases(organisationId: string): LiveIntent[] {
+    const member = membershipBySlug.get(organisationId);
+    if (!member) return [];
+    const visible = new Set(visibleLots(member).map(({ address }) => address));
+    return data.intents
+      .filter((intent) => visible.has(intent.lot))
+      .toSorted(byExpiry)
+      .map(liveIntent);
+  }
+
+  function facilities(organisationId: string): LiveFacility[] {
+    const member = membershipBySlug.get(organisationId);
+    if (!member) return [];
+    return data.facilities
+      .filter(
+        (facility) =>
+          facility.lender_org_id === member.id || facility.borrower_org_id === member.id,
+      )
+      .toSorted((first, second) => compareText(first.address, second.address))
+      .map(liveFacility);
+  }
+
+  type Money = { currency: string; minorDigits: number };
+  const facilityMoney = (address: string | null | undefined): Money | null => {
+    const facility = address ? facilityByAddress.get(address) : undefined;
+    return facility
+      ? { currency: facility.currency, minorDigits: facility.currency_decimals }
+      : null;
+  };
+
+  /** live-lending.md §4.5.3, with each amount's currency beside it. */
+  function queue(organisationId: string): { item: WorkItemView; money: Money | null }[] {
+    const member = membershipBySlug.get(organisationId);
+    const context = contexts.find((entry) => entry.organisationId === organisationId);
+    if (!member || !context) return [];
+    const actor = context.organisation;
+    const lotRef = (address: string) => {
+      const lot = lotByAddress.get(address);
+      if (!lot) return null;
+      const view = lotView(lot, member);
+      return {
+        id: view.id,
+        gradeClass: view.gradeClass,
+        site: view.site,
+        quantityKg: view.quantityKg,
+      };
+    };
+    const notSubmitted: Registry = { status: "not_submitted" };
+    const out: { item: WorkItemView; money: Money | null }[] = [];
+
+    data.commands.forEach((row, index) => {
+      if (row.status !== "awaiting_signatures" || row.lot === null) return;
+      const lot = lotRef(row.lot);
+      if (!lot) return;
+      const validUntil =
+        row.valid_until === null
+          ? null
+          : parseI64(row.valid_until, `commands[${index}].valid_until`);
+      if (validUntil !== null && (validUntil - 30n) * 1000n <= nowMs) return;
+      const signed = new Set(row.signatures.map(({ role }) => role));
+      const textRoles = row.signers.filter(({ method }) => method === "text");
+      const textDone = textRoles.every(({ role }) => signed.has(role));
+      const mine = row.signers.some(
+        ({ role, organisationId: org, method }) =>
+          org === member.id && !signed.has(role) && (method === "text" || textDone),
+      );
+      if (!mine) return;
+      const collected = textRoles.filter(({ role }) => signed.has(role)).length;
+      const blocker =
+        textRoles.length > 0 && validUntil !== null
+          ? `${collected} of ${row.signers.length} signatures collected. The text expires at ${formatClockTime(iso(validUntil - 30n))}.`
+          : "Waiting for your wallet to sign the transaction.";
+      const arg = (name: string) =>
+        row.args[name] === undefined
+          ? null
+          : parseU64At(row.args[name] as string, `commands[${index}].args.${name}`);
+      const amount = arg("amountMinor") ?? arg("priceMinor");
+      const loanFacility = row.loan ? loanByAddress.get(row.loan)?.facility : undefined;
+      out.push({
+        item: {
+          id: row.id,
+          lot,
+          action: `Sign: ${kindTitles[row.kind as CommandKind]}`,
+          nextActor: actor,
+          blocker,
+          deadline: validUntil === null ? null : iso(validUntil - 30n),
+          href: `/${organisationId}/commands/${row.id}`,
+          amountMinor: amount,
+          quantityKg: arg("quantityKg"),
+          registry: { status: "awaiting_signatures" },
+        },
+        money:
+          amount === null ? null : (facilityMoney(row.facility) ?? facilityMoney(loanFacility)),
+      });
+    });
+
+    for (const intent of data.intents) {
+      if (intent.status !== "Open" || !unexpired(intent)) continue;
+      const lot = lotRef(intent.lot);
+      if (!lot) continue;
+      const amount = parseU64(intent.price) + parseU64(intent.top_up);
+      const money = { currency: intent.currency, minorDigits: intent.currency_decimals };
+      const state = paymentOf(intent).state;
+      const common = {
+        lot,
+        nextActor: actor,
+        deadline: iso(parseI64(intent.expires_at, "intents.expires_at")),
+        href: `/${organisationId}/releases/${intent.address}`,
+        amountMinor: amount,
+        quantityKg: parseU64(intent.quantity_kg),
+        registry: notSubmitted,
+      };
+      // A voided payment raises nothing (T064b.2 decision 4).
+      if (intent.lender_org_id === member.id && (state === "none" || state === "mismatch")) {
+        out.push({
+          item: {
+            id: `confirm:${intent.address}`,
+            action: "Confirm payment",
+            blocker: `${organisation(intent.buyer).name} pays ${formatMoney(amount, money.currency, money.minorDigits)} outside Thetis. Record it once your bank shows it.`,
+            ...common,
+          },
+          money,
+        });
+      }
+      const selling = data.commands.some(
+        (command) => command.kind === "sell_pledged" && command.intent === intent.address,
+      );
+      if (intent.buyer_org_id === member.id && state === "confirmed" && !selling) {
+        out.push({
+          item: {
+            id: `accept:${intent.address}`,
+            action: "Accept and buy",
+            blocker: `${organisation(intent.lender).name} confirmed your payment. Sign to receive the units.`,
+            ...common,
+          },
+          money,
+        });
+      }
+    }
+
+    for (const payment of data.payments) {
+      if (payment.purpose !== "Repayment" || payment.status !== "Unconsumed") continue;
+      const loan = loanByAddress.get(payment.loan);
+      if (!loan || loan.status === "Closed" || loan.lender_org_id !== member.id) continue;
+      const lot = lotByAddress.get(loan.lot);
+      const ref = lotRef(loan.lot);
+      const money = facilityMoney(loan.facility);
+      if (!lot || !ref || !money) continue;
+      const amount = parseU64(payment.amount);
+      out.push({
+        item: {
+          id: `apply:${payment.address}`,
+          lot: ref,
+          action: "Apply repayment",
+          nextActor: actor,
+          blocker: `${formatMoney(amount, money.currency, money.minorDigits)} confirmed on ${formatDateTime(iso(parseI64(payment.observed_at, "payments.observed_at")))}. Apply it to the loan.`,
+          deadline: null,
+          href: `/${organisationId}/lots/${encodeURIComponent(lot.lot_id)}?tab=financing`,
+          amountMinor: amount,
+          quantityKg: null,
+          registry: notSubmitted,
+        },
+        money,
+      });
+    }
+
+    return out.toSorted(({ item: first }, { item: second }) => {
+      if (first.deadline !== second.deadline) {
+        if (first.deadline === null) return 1;
+        if (second.deadline === null) return -1;
+        return Date.parse(first.deadline) - Date.parse(second.deadline);
+      }
+      return compareText(first.id, second.id);
+    });
+  }
+
+  function liveRelease(address: string, organisationId: string): LiveReleaseView | null {
+    const member = membershipBySlug.get(organisationId);
+    const intent = data.intents.find((row) => row.address === address);
+    if (!member || !intent) return null;
+    const lotRow = lotByAddress.get(intent.lot);
+    if (!lotRow || !belongsTo(data, lotRow, member.id)) return null;
+    const loanRow = loanByAddress.get(intent.loan);
+    const loan = loanRow ? liveLoan(loanRow) : null;
+    const view = liveIntent(intent);
+    let inputs: ReleaseInput | null = null;
+    let preview: LiveReleaseView["preview"] = null;
+    let previewBlocked: LiveReleaseView["previewBlocked"] = null;
+    if (!loan) previewBlocked = "buyer";
+    else if (!loan.valuation) previewBlocked = "no_valuation";
+    else {
+      inputs = {
+        principal: loan.principalMinor,
+        bookedInterest: loan.bookedInterestMinor + loan.accruedInterestMinor,
+        bookedFees: 0n,
+        buyerAmount: view.priceMinor,
+        sellerTopUp: view.topUpMinor,
+        lockedQuantity: loan.lock.quantityKg,
+        soldLockedQuantity: view.quantityKg,
+        valuePerUnit: loan.valuation.valuePerKgMinor,
+        haircutBps: loan.valuation.haircutBps,
+        maxLtvBps: loan.facility.maxLtvBps,
+      };
+      try {
+        preview = previewRelease(inputs);
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        preview = { error: { code: error.code, message: error.message } };
+      }
+    }
+    const sell = data.commands
+      .filter((command) => command.kind === "sell_pledged" && command.intent === address)
+      .toSorted(byCreation)[0];
+    const saleRegistry: Registry =
+      intent.status === "Executed"
+        ? { status: intent.commitment }
+        : sell
+          ? { status: sell.status }
+          : { status: "not_submitted" };
+    return {
+      intent: view,
+      lot: lotView(lotRow, member),
+      lender: view.lender,
+      currency: view.currency,
+      minorDigits: view.currencyDecimals,
+      loan,
+      inputs,
+      preview,
+      previewBlocked,
+      asOf: now.toISOString(),
+      paymentAddress: paymentOf(intent).payment?.address ?? null,
+      sale: { registry: saleRegistry, command: sell ? summary(sell, member.slug) : null },
+    };
   }
 
   const settlementMode = data.protocol
@@ -371,7 +1128,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
     freshness,
     contexts: () => [...contexts],
     context: (id) => contexts.find(({ organisationId }) => organisationId === id) ?? null,
-    workQueue: () => [],
+    workQueue: (organisationId) => queue(organisationId).map(({ item }) => item),
     exceptions: () => [],
     release: () => null,
     lots,
@@ -381,7 +1138,40 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       const lot = data.lots.find(({ row }) => row.lot_id === lotId)?.row;
       return lot && skewed(lot) ? "skew" : null;
     },
+    liveRelease,
+    releases,
+    facilityCurrency(organisationId) {
+      const kinds = new Map(
+        facilities(organisationId).map(({ currency, currencyDecimals }) => [
+          `${currency}:${currencyDecimals}`,
+          { currency, minorDigits: currencyDecimals },
+        ]),
+      );
+      if (kinds.size === 0) return "none";
+      if (kinds.size > 1) return "mixed";
+      return [...kinds.values()][0] as Money;
+    },
+    organisationsByRole: (role) =>
+      [...data.organisationByAddress.values()]
+        .filter(({ row }) => row.role === role)
+        .map(({ row }) => organisation(row.address))
+        .toSorted((first, second) => compareText(first.name, second.name)),
+    facilities,
+    orgIdOf: (organisationId) =>
+      membershipBySlug.get(organisationId)?.id ??
+      [...data.organisationByAddress.values()].find(({ row }) => row.slug === organisationId)?.row
+        .org_id ??
+      null,
+    organisationByOrgId,
+    workItemMoney(organisationId, itemId) {
+      const entry = queue(organisationId).find(({ item }) => item.id === itemId);
+      return entry && entry.item.amountMinor !== null ? entry.money : null;
+    },
   };
+}
+
+function compareText(first: string, second: string): number {
+  return first < second ? -1 : first > second ? 1 : 0;
 }
 
 function compareEvents(first: ChainEventRow, second: ChainEventRow): number {

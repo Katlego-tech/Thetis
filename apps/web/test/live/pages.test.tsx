@@ -354,10 +354,9 @@ describe("routes", () => {
     });
   });
 
-  test("the release route is notFound in live mode", async () => {
+  test("the release route is notFound in live mode for an address that is not a visible intent", async () => {
     liveEnvironment();
-    server.client = fakeSupabase(freshSnapshot()).client;
+    server.client = fakeSupabase(freshSnapshot(["lender-one"])).client;
     await expect(release()).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
-    expect(server.calls).toBe(0);
   });
 });

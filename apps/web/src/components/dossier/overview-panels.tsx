@@ -19,20 +19,30 @@ export function QuantityPanel({
   // Live, the bar is the shown position, so the bar and the legend share one basis.
   const totalKg = source === "live" ? lot.position.positionQuantityKg : lot.quantityKg;
   const pledged = lot.position.activeLockedQuantityKg;
-  const pending = lot.releases.reduce((total, { payment, registry, soldLockedQuantityKg }) => {
-    if (
-      payment === "rejected" ||
-      registry.status === "confirmed" ||
-      registry.status === "finalized" ||
-      registry.status === "failed"
-    ) {
-      return total;
-    }
-    return total + soldLockedQuantityKg;
-  }, 0n);
+  // Live, a release is pending while its intent is open and unexpired (an executed one left the pledge).
+  const pending = lot.lending
+    ? lot.lending.intents
+        .filter(({ status, expired }) => status === "Open" && !expired)
+        .reduce((total, { quantityKg }) => total + quantityKg, 0n)
+    : lot.releases.reduce((total, { payment, registry, soldLockedQuantityKg }) => {
+        if (
+          payment === "rejected" ||
+          registry.status === "confirmed" ||
+          registry.status === "finalized" ||
+          registry.status === "failed"
+        ) {
+          return total;
+        }
+        return total + soldLockedQuantityKg;
+      }, 0n);
+  const hidden = lot.lending?.hiddenLockedKg ?? 0n;
   const lenders = Array.from(new Set(lot.locks.map(({ lender }) => lender.name)));
   const legend = [
-    { label: lenders.length ? `Pledged to ${lenders.join(", ")}` : "Pledged", kg: pledged },
+    {
+      label: lenders.length ? `Pledged to ${lenders.join(", ")}` : "Pledged",
+      kg: pledged - hidden,
+    },
+    ...(hidden > 0n ? [{ label: "Pledged to lenders you can't see", kg: hidden }] : []),
     { label: "Pending release within pledge", kg: pending },
     { label: "Available", kg: lot.position.availableKg },
     { label: "Discrepancy", kg: lot.discrepancyKg },
@@ -70,7 +80,9 @@ export function QuantityPanel({
           The recorded quantities cannot be shown as a single lot.
         </p>
       )}
-      <dl className="grid grid-cols-2 gap-3 text-xs leading-[1.45] sm:grid-cols-4">
+      <dl
+        className={`grid grid-cols-2 gap-3 text-xs leading-[1.45] ${legend.length > 4 ? "sm:grid-cols-5" : "sm:grid-cols-4"}`}
+      >
         {legend.map(({ label, kg }) => (
           <div key={label}>
             <dt>{label}</dt>
@@ -97,20 +109,24 @@ export function NextPanel({ items, context }: { items: WorkItemView[]; context: 
         <ul className="grid gap-3">
           {items.map((item, index) => {
             const release = item.href.startsWith(`/${context}/releases/`);
-            const tab =
-              item.action === "Approve external hand-off"
+            const command = item.href.startsWith(`/${context}/commands/`);
+            const tab = item.href.endsWith("?tab=financing")
+              ? "financing"
+              : item.action === "Approve external hand-off"
                 ? "custody"
                 : item.action === "Renew valuation"
                   ? "financing"
                   : undefined;
-            const href = tab ? `${item.href}?tab=${tab}` : item.href;
-            const label = release
-              ? "Open release sheet"
-              : tab === "custody"
-                ? "View custody"
-                : tab === "financing"
-                  ? "View financing"
-                  : "Open dossier";
+            const href = tab && !item.href.includes("?") ? `${item.href}?tab=${tab}` : item.href;
+            const label = command
+              ? "Open signing page"
+              : release
+                ? "Open release sheet"
+                : tab === "custody"
+                  ? "View custody"
+                  : tab === "financing"
+                    ? "View financing"
+                    : "Open dossier";
             return (
               <li key={item.id} className="border-(--hair) [&+li]:border-t [&+li]:pt-3">
                 <p className="font-semibold">{item.action}</p>
