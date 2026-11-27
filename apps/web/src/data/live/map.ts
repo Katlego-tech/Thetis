@@ -22,6 +22,7 @@ import {
   type ChainDocumentRow,
   type ChainEventRow,
   type ChainFacilityRow,
+  type ChainLoadingIntentRow,
   type ChainLoanRow,
   type ChainLotRow,
   type ChainOrganisationRow,
@@ -47,6 +48,9 @@ import {
   type LiveFacility,
   type LiveIntent,
   type LiveLending,
+  type LiveLoading,
+  type LiveLoadingIntent,
+  type LiveLoadingRow,
   type LiveLoan,
   type LiveLotView,
   type LivePayment,
@@ -115,6 +119,8 @@ function validate(snapshot: LiveSnapshot) {
   const allPayments = list("payments", snapshot.payments, env);
   const allIntents = list("intents", snapshot.intents, env);
   const commands = list("commands", snapshot.commands, env);
+  const allLoadingIntents = list("loadingIntents", snapshot.loadingIntents, env);
+  const allAcceptances = list("acceptances", snapshot.acceptances, env);
   const allEvents = list("intakeEvents", snapshot.intakeEvents, env);
   const checkpoint = one("checkpoint", snapshot.checkpoint, env);
 
@@ -140,6 +146,13 @@ function validate(snapshot: LiveSnapshot) {
     if (lotAddresses.has(loanLot.get(row.loan) ?? "")) return true;
     return row.purpose === "Release" && lotAddresses.has(intentLot.get(row.subject) ?? "");
   });
+  // Loading rows of lots, intents and loans that were not selected are dropped (§6.10.4).
+  const loadingIntents = allLoadingIntents.filter(({ row }) => lotAddresses.has(row.lot));
+  const keptLoadingIntents = new Set(loadingIntents.map(({ row }) => row.address));
+  const keptLoans = new Set(loans.map(({ row }) => row.address));
+  const acceptances = allAcceptances.filter(
+    ({ row }) => keptLoadingIntents.has(row.intent) && keptLoans.has(row.loan),
+  );
 
   // (3) references and the ids copied from them
   const organisationByAddress = byAddress(organisations);
@@ -254,6 +267,29 @@ function validate(snapshot: LiveSnapshot) {
     const exempt = row.purpose === "Release" && subject !== undefined && buyerOnly(subject);
     if (!loanByAddress.has(row.loan) && !exempt) fail("BAD_ROW", `${at}.loan`, "names no loan");
   }
+  // Loading references (live-lending.md §6.10.4).
+  const positionAddresses = new Set(positions.map(({ row }) => row.address));
+  for (const { row, index } of loadingIntents) {
+    const at = `loadingIntents[${index}]`;
+    if (!positionAddresses.has(row.position))
+      fail("BAD_ROW", `${at}.position`, "names no selected position");
+    sameOrg(organisationAt(row.owner, `${at}.owner`).row, row.owner_org_id, `${at}.owner_org_id`);
+    sameOrg(
+      organisationAt(row.terminal, `${at}.terminal`).row,
+      row.terminal_org_id,
+      `${at}.terminal_org_id`,
+    );
+  }
+  for (const { row, index } of acceptances) {
+    const at = `acceptances[${index}]`;
+    if (lockByLoan.get(row.loan)?.row.address !== row.lock)
+      fail("BAD_ROW", `${at}.lock`, "is not the lock of its loan");
+    sameOrg(
+      organisationAt(row.lender, `${at}.lender`).row,
+      row.lender_org_id,
+      `${at}.lender_org_id`,
+    );
+  }
 
   return {
     env,
@@ -266,6 +302,8 @@ function validate(snapshot: LiveSnapshot) {
     payments: payments.map(({ row }) => row),
     intents: intents.map(({ row }) => row),
     commands: commands.map(({ row }) => row),
+    loadingIntents: loadingIntents.map(({ row }) => row),
+    acceptances: acceptances.map(({ row }) => row),
     protocol,
     classPolicyByAddress,
     custodianClassByAddress,
@@ -345,6 +383,11 @@ function checkSynthetic(data: Valid) {
   for (const { row } of data.organisationByAddress.values()) {
     if (row.role === "Buyer" || row.role === "Exporter") rendered.add(row.address);
   }
+  for (const intent of data.loadingIntents) {
+    rendered.add(intent.owner);
+    rendered.add(intent.terminal);
+  }
+  for (const accepted of data.acceptances) rendered.add(accepted.lender);
   const signerOrgs = new Set(
     data.commands.flatMap(({ signers }) => signers.map(({ organisationId }) => organisationId)),
   );
@@ -556,6 +599,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       asOf: now.toISOString(),
       openExceptions: BigInt(row.open_exceptions),
       revision: parseU64(row.revision),
+      position: row.position,
       lock: {
         address: lock.address,
         quantityKg: parseU64(lock.quantity_kg),
@@ -657,6 +701,185 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
     if (chain?.slug) return organisation(chain.address);
     const member = memberships.find((row) => row.id === orgId);
     return member ? { id: member.slug, name: member.name, role: member.kind } : null;
+  }
+
+  /** live-lending.md §6.10.4: the loading intents of the viewer's positions, from chain rows and `now`. */
+  function loadingView(
+    lot: ChainLotRow,
+    shown: ChainPositionRow,
+    member: OrganisationRow,
+    loans: LiveLoan[],
+    hiddenLockedKg: bigint,
+  ): LiveLoading {
+    const custodian = data.organisationByAddress.get(lot.custodian)?.row;
+    const custodianClass = data.custodianClassByAddress.get(lot.custodian_class)?.row;
+    const lotPositions = positionsOf(lot);
+    const positionByAddress = new Map(lotPositions.map((row) => [row.address, row]));
+    // T064b.4 pre-check fold 10: a loaded position (0 kg) stays in view for its owner and lenders.
+    const viewed = new Set([
+      shown.address,
+      ...lotPositions.filter((row) => row.owner_org_id === member.id).map((row) => row.address),
+      ...data.loans
+        .filter((row) => row.lot === lot.address && row.lender_org_id === member.id)
+        .map((row) => row.position),
+    ]);
+    const intents = data.loadingIntents
+      .filter((row) => row.lot === lot.address && viewed.has(row.position))
+      .toSorted((first, second) => {
+        const delta = parseU64(second.position_revision) - parseU64(first.position_revision);
+        return delta !== 0n ? (delta < 0n ? -1 : 1) : compareText(first.address, second.address);
+      })
+      .map((row) => loadingIntentView(row, lot, positionByAddress, member, loans, hiddenLockedKg));
+    return {
+      terminal: custodian?.role === "Terminal" ? organisation(lot.custodian) : null,
+      site: custodianClass?.site_code ?? "",
+      positionQuantityKg: parseU64(shown.quantity_kg),
+      intents,
+    };
+  }
+
+  function loadingIntentView(
+    row: ChainLoadingIntentRow,
+    lot: ChainLotRow,
+    positionByAddress: Map<string, ChainPositionRow>,
+    member: OrganisationRow,
+    loans: LiveLoan[],
+    hiddenLockedKg: bigint,
+  ): LiveLoadingIntent {
+    const position = positionByAddress.get(row.position);
+    if (!position)
+      throw new LiveDataError("BAD_ROW", "loadingIntents", `unresolved ${row.address}`);
+    const expiresAt = parseI64(row.expires_at, "loadingIntents.expires_at");
+    const current = parseU64(row.position_revision) === parseU64(position.revision);
+    const unexpiredIntent = expiresAt * 1000n > nowMs;
+    const live = row.status === "Open" && row.cancelled_by === null && current && unexpiredIntent;
+    const accepted = data.acceptances.filter((entry) => entry.intent === row.address);
+    const openCommand = (kind: CommandKind, loan?: string) => {
+      const found = data.commands
+        .filter(
+          (command) =>
+            command.kind === kind &&
+            command.intent === row.address &&
+            (loan === undefined || (command.loan ?? command.args.loan) === loan),
+        )
+        .toSorted(byCreation)[0];
+      return found ? summary(found, member.slug) : null;
+    };
+    const required = loans.filter(
+      (loan) =>
+        loan.position === row.position && loan.status !== "Closed" && loan.lock.quantityKg > 0n,
+    );
+    const registryOf = (commitment: ChainLoadingIntentRow["commitment"]): Registry => ({
+      status: commitment,
+    });
+    let rows: LiveLoadingRow[];
+    if (live) {
+      rows = required.map((loan) => {
+        const own = accepted.find((entry) => entry.loan === loan.address);
+        const state: LiveLoadingRow["state"] =
+          loan.status === "Recovery"
+            ? "recovery"
+            : !own
+              ? "missing"
+              : parseU64(own.loan_revision) === loan.revision &&
+                  parseU64(own.lock_quantity_kg) === loan.lock.quantityKg
+                ? "accepted"
+                : "stale";
+        return {
+          loan: loan.address,
+          loanIndex: loan.index,
+          lender: loan.facility.lender,
+          lockedKg: loan.lock.quantityKg,
+          state,
+          acceptedAt: own ? iso(parseI64(own.accepted_at, "acceptances.accepted_at")) : null,
+          registry: own ? registryOf(own.commitment) : null,
+          openCommand: openCommand("accept_loading", loan.address),
+        };
+      });
+    } else {
+      // Recorded as it stands, no freshness check; loans without a row are not listed.
+      rows = accepted.flatMap((entry) => {
+        const loan = loans.find((candidate) => candidate.address === entry.loan);
+        if (!loan) return [];
+        return [
+          {
+            loan: loan.address,
+            loanIndex: loan.index,
+            lender: loan.facility.lender,
+            lockedKg: parseU64(entry.lock_quantity_kg),
+            state: "accepted" as const,
+            acceptedAt: iso(parseI64(entry.accepted_at, "acceptances.accepted_at")),
+            registry: registryOf(entry.commitment),
+            openCommand: null,
+          },
+        ];
+      });
+    }
+    rows = rows.toSorted((first, second) =>
+      first.loanIndex !== second.loanIndex
+        ? first.loanIndex < second.loanIndex
+          ? -1
+          : 1
+        : compareText(first.loan, second.loan),
+    );
+    const acceptedCount = rows.filter(({ state }) => state === "accepted").length;
+    const requiredCount = hiddenLockedKg > 0n ? null : required.length;
+    const state: LiveLoadingIntent["state"] =
+      row.status === "Executed"
+        ? "recorded"
+        : row.cancelled_by !== null
+          ? "cancelled"
+          : !current
+            ? "outdated"
+            : !unexpiredIntent
+              ? "expired"
+              : requiredCount !== null && acceptedCount === requiredCount
+                ? "ready"
+                : "open";
+    const recorded = state === "recorded";
+    return {
+      address: row.address,
+      nonce: parseU64(row.nonce),
+      owner: organisation(row.owner),
+      terminal: organisation(row.terminal),
+      position: row.position,
+      quantityKg: parseU64(row.quantity_kg),
+      lockedKg: parseU64(row.locked_kg),
+      documentSha256Hex: row.document_sha256_hex,
+      positionRevision: parseU64(row.position_revision),
+      expiresAt: iso(expiresAt),
+      executedAt:
+        row.executed_at === null
+          ? null
+          : iso(parseI64(row.executed_at, "loadingIntents.executed_at")),
+      cancelledBy: row.cancelled_by,
+      state,
+      live,
+      rows,
+      accepted: acceptedCount,
+      required: requiredCount,
+      handOffs: recorded
+        ? rows.flatMap(({ loan: address }) => {
+            const loan = loans.find((candidate) => candidate.address === address);
+            return loan
+              ? [
+                  {
+                    loan: loan.address,
+                    loanIndex: loan.index,
+                    lender: loan.facility.lender,
+                    status: loan.status,
+                    debtMinor: loan.debtMinor,
+                    currency: loan.facility.currency,
+                    currencyDecimals: loan.facility.currencyDecimals,
+                  },
+                ]
+              : [];
+          })
+        : [],
+      lotLoaded: recorded && lot.state === "Loaded",
+      openCommand: openCommand("record_loading"),
+      registry: registryOf(row.commitment),
+    };
   }
 
   function lotView(lot: ChainLotRow, member: OrganisationRow): LiveLotView {
@@ -778,6 +1001,14 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
           compareText(first.loan, second.loan),
       );
     const visibleLockedKg = visibleLocks.reduce((sum, { kg }) => sum + kg, 0n);
+    const hiddenLockedKg = lockedKg > visibleLockedKg ? lockedKg - visibleLockedKg : 0n;
+    const loanViews = data.loans
+      .filter((loan) => loan.lot === lot.address)
+      .toSorted(
+        (first, second) =>
+          compareText(first.facility, second.facility) || first.loan_index - second.loan_index,
+      )
+      .map(liveLoan);
     const lotIntents = data.intents
       .filter((intent) => intent.lot === lot.address)
       .toSorted(byExpiry);
@@ -798,15 +1029,9 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
         .filter((facility) => facility.borrower === shown.owner)
         .toSorted((first, second) => compareText(first.address, second.address))
         .map(liveFacility),
-      loans: data.loans
-        .filter((loan) => loan.lot === lot.address)
-        .toSorted(
-          (first, second) =>
-            compareText(first.facility, second.facility) || first.loan_index - second.loan_index,
-        )
-        .map(liveLoan),
+      loans: loanViews,
       intents: lotIntents.map(liveIntent),
-      hiddenLockedKg: lockedKg > visibleLockedKg ? lockedKg - visibleLockedKg : 0n,
+      hiddenLockedKg,
       openCommands: data.commands
         .filter((command) => command.lot === lot.address)
         .toSorted(byCreation)
@@ -819,6 +1044,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       classPolicy: lot.class_policy,
       grade: lot.grade,
       custodianClass: lot.custodian_class,
+      loading: loadingView(lot, shown, member, loanViews, hiddenLockedKg),
     };
 
     return {
@@ -938,9 +1164,13 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       const signed = new Set(row.signatures.map(({ role }) => role));
       const textRoles = row.signers.filter(({ method }) => method === "text");
       const textDone = textRoles.every(({ role }) => signed.has(role));
+      // A terminal signs on the field app, never in the web (T064b.4 pre-check fold 5).
       const mine = row.signers.some(
         ({ role, organisationId: org, method }) =>
-          org === member.id && !signed.has(role) && (method === "text" || textDone),
+          org === member.id &&
+          role !== "terminal" &&
+          !signed.has(role) &&
+          (method === "text" || textDone),
       );
       if (!mine) return;
       const collected = textRoles.filter(({ role }) => signed.has(role)).length;
@@ -1040,6 +1270,67 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
         },
         money,
       });
+    }
+
+    // Loading (live-lending.md §6.10.8 work queue): a lender's acceptance, a ready owner's record.
+    for (const lot of visibleLots(member)) {
+      const view = lotView(lot, member);
+      const loading = view.lending?.loading;
+      if (!view.lending || !loading?.terminal) continue;
+      const ref = {
+        id: view.id,
+        gradeClass: view.gradeClass,
+        site: view.site,
+        quantityKg: view.quantityKg,
+      };
+      const href = `/${organisationId}/lots/${encodeURIComponent(view.id)}?tab=financing`;
+      for (const intent of loading.intents) {
+        if (!intent.live) continue;
+        const common = {
+          lot: ref,
+          nextActor: actor,
+          deadline: intent.expiresAt,
+          href,
+          amountMinor: null,
+          registry: notSubmitted,
+        };
+        for (const row of intent.rows) {
+          const loan = view.lending.loans.find(({ address }) => address === row.loan);
+          if (
+            row.lender.id !== organisationId ||
+            (row.state !== "missing" && row.state !== "stale") ||
+            row.openCommand !== null ||
+            loan?.status !== "Active"
+          )
+            continue;
+          out.push({
+            item: {
+              ...common,
+              id: `accept-loading:${intent.address}:${row.loan}`,
+              action: "Accept loading",
+              blocker: `${intent.owner.name} is loading ${view.id} at ${intent.terminal.name}. Accept so the loading can be recorded.`,
+              quantityKg: row.lockedKg,
+            },
+            money: null,
+          });
+        }
+        if (
+          intent.owner.id === organisationId &&
+          intent.state === "ready" &&
+          intent.openCommand === null
+        ) {
+          out.push({
+            item: {
+              ...common,
+              id: `record-loading:${intent.address}`,
+              action: "Record loading",
+              blocker: `Every lender has accepted. Record the loading with ${intent.terminal.name}.`,
+              quantityKg: intent.quantityKg,
+            },
+            money: null,
+          });
+        }
+      }
     }
 
     return out.toSorted(({ item: first }, { item: second }) => {

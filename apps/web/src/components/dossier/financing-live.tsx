@@ -7,6 +7,7 @@ import { kindTitles } from "@/lib/commands";
 import { formatTonnes } from "@/lib/format";
 import { FacilitySection } from "./facility-section";
 import { type LendingActions, livePaymentLabels, summaryLine } from "./lending-copy";
+import { LoadingSection } from "./loading-section";
 import { LoanBlock } from "./loan-block";
 import { type FinancialRecord, FinancialResults } from "./record-tables";
 
@@ -40,6 +41,7 @@ export function FinancingLive({
           you can't see.
         </p>
       )}
+      <LoadingSection lot={lot} context={context} actions={actions} />
       {showFacilities && <FacilitySection lending={lending} context={context} actions={actions} />}
       {lending.loans.length > 0 && (
         <section aria-labelledby="financing-loans" className="flex flex-col gap-4">

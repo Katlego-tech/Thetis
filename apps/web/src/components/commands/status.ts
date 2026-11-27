@@ -40,8 +40,8 @@ export function statusLine(view: CommandView, organisationName: (id: string) => 
       return `Confirmed on devnet in slot ${view.confirmedSlot === null ? "unknown" : formatSlot(BigInt(view.confirmedSlot))}. The lot's figures update once the indexer reads this transaction.`;
     case "failed":
       return view.error
-        ? `Devnet refused this transaction: ${view.error.code}. ${failureExplanation(view.error.code)} The program made no change.`
-        : `Devnet refused this transaction. ${failureExplanation("")} The program made no change.`;
+        ? `Devnet refused this transaction: ${view.error.code}. ${failureExplanation(view.error.code, view.kind)} The program made no change.`
+        : `Devnet refused this transaction. ${failureExplanation("", view.kind)} The program made no change.`;
     case "outcome_unknown":
       return "Thetis can't tell yet whether this transaction landed. Don't start this action again; this page keeps checking.";
     case "expired":

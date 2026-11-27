@@ -12,8 +12,13 @@ import {
 import { accessMessages } from "@/lib/access-messages";
 import { type CommandKind, createCommand } from "@/lib/commands";
 import { parseMoneyInput, parseTonnesInput } from "@/lib/format";
-import { bankFileProblem, bankUploadFailed, uploadBankFile } from "./bank-upload";
-import { browserSession, failureMessage } from "./messages";
+import {
+  bankFileProblem,
+  bankUploadFailed,
+  loadingUploadFailed,
+  uploadEvidenceFile,
+} from "./bank-upload";
+import { browserSession, commandFailureMessage, type FailureNames } from "./messages";
 
 // One lending action: a button that opens its dialog, the fields that become the command's args,
 // and createCommand, then the command page (live-lending.md §6.9.5). The program decides; this
@@ -41,10 +46,29 @@ export type CommandFormProps = {
   /** args fixed by the screen: addresses and ids */
   args: Record<string, string>;
   fields?: FormField[];
-  /** a bank or evidence file, uploaded and finalized before the command is created */
-  upload?: { label: string; ownerOrganisationId: string; lotId: string };
-  /** the confirm step of an action without fields */
+  /**
+   * a bank or evidence file, uploaded and finalized before the command is created. `purpose`
+   * defaults to bank (subject the lot_id); a loading document is subject `subjectRef`, the lot's
+   * chain address (live-lending.md §6.10.3).
+   */
+  upload?: {
+    label: string;
+    ownerOrganisationId: string;
+    lotId: string;
+    purpose?: "bank" | "loading";
+    subjectRef?: string;
+    hint?: string;
+  };
+  /** the confirm step of an action without fields, or the dialog's body */
   confirm?: string;
+  /** a second body line (the replace note, §6.10.6) */
+  note?: string;
+  /** a fact list after the body (T064b.4 pre-check fold 2) */
+  facts?: { label: string; value: string }[];
+  /** a line above the buttons (T064b.4 pre-check fold 2) */
+  foot?: string;
+  /** the names a refusal reads (§6.10.6); plain data, so a server component can pass it */
+  names?: FailureNames;
   primary?: boolean;
 };
 
@@ -88,6 +112,10 @@ export function CommandForm({
   fields = [],
   upload,
   confirm,
+  note,
+  facts,
+  foot,
+  names = {},
   primary = false,
 }: CommandFormProps) {
   const router = useRouter();
@@ -141,15 +169,17 @@ export function CommandForm({
       }
       const commandArgs = { ...args, ...parsed };
       if (upload && file) {
-        const versionId = await uploadBankFile({
+        const loading = upload.purpose === "loading";
+        const versionId = await uploadEvidenceFile({
           file,
           ownerOrganisationId: upload.ownerOrganisationId,
-          lotId: upload.lotId,
+          purpose: loading ? "loading" : "bank",
+          subjectRef: upload.subjectRef ?? upload.lotId,
           userId: session.userId,
           token: session.token,
         });
         if (versionId === null) {
-          setFailure(bankUploadFailed);
+          setFailure(loading ? loadingUploadFailed : bankUploadFailed);
           return;
         }
         commandArgs.evidenceVersionId = versionId;
@@ -159,7 +189,7 @@ export function CommandForm({
         session.token,
       );
       if (!created.ok) {
-        setFailure(failureMessage(created));
+        setFailure(commandFailureMessage(kind, created, names, commandArgs));
         return;
       }
       // Stay busy after a successful create: the dialog stays open until the route changes, and a
@@ -170,6 +200,30 @@ export function CommandForm({
       if (!succeeded) setBusy(false);
     }
   }
+
+  const fileField = upload && (
+    <div className="form-field">
+      <label htmlFor={`${id}-file`}>{upload.label}</label>
+      <input
+        id={`${id}-file`}
+        type="file"
+        accept="application/pdf,image/jpeg,image/png"
+        className="form-input"
+        aria-invalid={invalid.file ? true : undefined}
+        aria-describedby={`${id}-file-hint${invalid.file ? ` ${id}-file-error` : ""}`}
+        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+      />
+      <span id={`${id}-file-hint`} className="form-hint">
+        {upload.hint ??
+          "PDF, JPEG or PNG, at most 20 MiB. Stored before anything is sent to the chain."}
+      </span>
+      {invalid.file && (
+        <span id={`${id}-file-error`} className="form-error">
+          {invalid.file}
+        </span>
+      )}
+    </div>
+  );
 
   return (
     <Dialog open={open} onOpenChange={reset}>
@@ -182,8 +236,20 @@ export function CommandForm({
         <DialogTitle>{action}</DialogTitle>
         <form className="flex flex-col gap-4" onSubmit={submit} noValidate>
           {confirm && <p className="text-[14px]">{confirm}</p>}
+          {note && <p className="text-[14px]">{note}</p>}
+          {facts && facts.length > 0 && (
+            <dl className="fact-list">
+              {facts.map(({ label, value }) => (
+                <div key={label} className="contents">
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
           {(fields.length > 0 || upload) && (
             <div className="form-fields">
+              {upload?.purpose === "loading" && fileField}
               {fields.map((field) => {
                 const inputId = `${id}-${field.name}`;
                 const problem = invalid[field.name];
@@ -245,30 +311,10 @@ export function CommandForm({
                   </div>
                 );
               })}
-              {upload && (
-                <div className="form-field">
-                  <label htmlFor={`${id}-file`}>{upload.label}</label>
-                  <input
-                    id={`${id}-file`}
-                    type="file"
-                    accept="application/pdf,image/jpeg,image/png"
-                    className="form-input"
-                    aria-invalid={invalid.file ? true : undefined}
-                    aria-describedby={`${id}-file-hint${invalid.file ? ` ${id}-file-error` : ""}`}
-                    onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                  />
-                  <span id={`${id}-file-hint`} className="form-hint">
-                    PDF, JPEG or PNG, at most 20 MiB. Stored before anything is sent to the chain.
-                  </span>
-                  {invalid.file && (
-                    <span id={`${id}-file-error`} className="form-error">
-                      {invalid.file}
-                    </span>
-                  )}
-                </div>
-              )}
+              {upload && upload.purpose !== "loading" && fileField}
             </div>
           )}
+          {foot && <p className="form-hint">{foot}</p>}
           {failure && (
             <p role="alert" className="form-alert">
               {failure}

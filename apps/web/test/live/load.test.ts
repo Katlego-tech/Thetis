@@ -29,6 +29,8 @@ const chainTables = [
   "chain_locks",
   "chain_payments",
   "chain_release_intents",
+  "chain_loading_intents",
+  "chain_handoff_acceptances",
 ];
 
 function liveEnvironment() {
@@ -67,6 +69,8 @@ describe("loadLiveSnapshot", () => {
       payments: [],
       intents: [],
       commands: [],
+      loadingIntents: [],
+      acceptances: [],
       intakeEvents: [],
     };
 
@@ -257,6 +261,9 @@ describe("loadLiveSnapshot", () => {
             "withdraw",
             "borrow",
             "repay_simulated",
+            "create_loading_intent",
+            "record_loading",
+            "accept_loading",
           ],
           "in",
         ],

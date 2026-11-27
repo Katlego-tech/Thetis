@@ -210,6 +210,10 @@ export const COMMAND_KINDS = [
   "withdraw",
   "borrow",
   "repay_simulated",
+  // live-lending.md §6.10.7: the loading kinds; issue_lot, handover and record_observation stay out.
+  "create_loading_intent",
+  "record_loading",
+  "accept_loading",
 ] as const;
 export const OPEN_COMMAND_STATUSES = [
   "awaiting_signatures",
@@ -223,8 +227,44 @@ export const SIGNER_ROLES = [
   "buyer",
   "depositor",
   "payer",
+  "owner",
+  "terminal",
 ] as const;
-/** An open public.commands row of a lending kind (live-lending.md §4.5.1, T064b.3 fold 1). */
+/** A chain_loading_intents row (supabase/migrations/20261127001300_chain_custody_loading.sql). */
+export interface ChainLoadingIntentRow extends ProjectionColumns {
+  lot: string;
+  position: string;
+  owner: string;
+  owner_org_id: string;
+  terminal: string;
+  terminal_org_id: string;
+  custodian_class: string;
+  nonce: string;
+  quantity_kg: string;
+  locked_kg: string;
+  document_sha256_hex: string;
+  position_revision: string;
+  expires_at: string;
+  status: "Open" | "Executed";
+  executed_at: string | null;
+  cancelled_by: string | null;
+}
+/** A chain_handoff_acceptances row (the same migration). */
+export interface ChainHandoffAcceptanceRow extends ProjectionColumns {
+  intent: string;
+  loan: string;
+  lock: string;
+  lender: string;
+  lender_org_id: string;
+  lock_quantity_kg: string;
+  loan_revision: string;
+  principal: string;
+  booked_interest: string;
+  accepted_at: string;
+  version: number;
+  event_version: number;
+}
+/** An open public.commands row of a lending or loading kind (live-lending.md §4.5.1, §6.10.7). */
 export interface CommandRow {
   id: string;
   kind: (typeof COMMAND_KINDS)[number];
@@ -294,7 +334,9 @@ export interface LiveSnapshot {
   locks: ChainLockRow[];
   payments: ChainPaymentRow[];
   intents: ChainReleaseIntentRow[];
-  commands: CommandRow[]; // open lending commands the caller is a party to, read whatever the checkpoint says
+  commands: CommandRow[]; // open lending and loading commands the caller is a party to, read whatever the checkpoint says
+  loadingIntents: ChainLoadingIntentRow[];
+  acceptances: ChainHandoffAcceptanceRow[];
   intakeEvents: ChainEventRow[]; // chain_events where event = 'LotIssued'
   checkpoint: CheckpointRow | null;
 }
@@ -472,6 +514,11 @@ const signaturesRule = (value: unknown, _row: Row, path: string) => {
     }
     if (!isAddress(item.wallet)) bad(`${at}.wallet`, "expected a base58 address");
   });
+};
+
+const U32_MAX = 4_294_967_295;
+const u32Rule = (value: unknown, _row: Row, path: string) => {
+  if ((value as number) > U32_MAX) bad(path, "outside u32");
 };
 
 const haltRule =
@@ -772,6 +819,50 @@ export const SNAPSHOT_TABLES = {
       updated_at: { kind: "timestamp" },
     } satisfies Record<keyof CommandRow, Column>,
   },
+  loadingIntents: {
+    table: "chain_loading_intents",
+    key: ["network", "address"],
+    filter: "chain",
+    columns: {
+      ...projection,
+      lot: { kind: "address" },
+      position: { kind: "address" },
+      owner: { kind: "address" },
+      owner_org_id: { kind: "uuid" },
+      terminal: { kind: "address" },
+      terminal_org_id: { kind: "uuid" },
+      custodian_class: { kind: "address" },
+      nonce: { kind: "u64" },
+      quantity_kg: { kind: "u64" },
+      locked_kg: { kind: "u64" },
+      document_sha256_hex: { kind: "hex64" },
+      position_revision: { kind: "u64" },
+      expires_at: { kind: "i64" },
+      status: { kind: { oneOf: ["Open", "Executed"] } },
+      executed_at: { kind: "i64", nullable: true },
+      cancelled_by: { kind: "address", nullable: true },
+    } satisfies Record<keyof ChainLoadingIntentRow, Column>,
+  },
+  acceptances: {
+    table: "chain_handoff_acceptances",
+    key: ["network", "address"],
+    filter: "chain",
+    columns: {
+      ...projection,
+      intent: { kind: "address" },
+      loan: { kind: "address" },
+      lock: { kind: "address" },
+      lender: { kind: "address" },
+      lender_org_id: { kind: "uuid" },
+      lock_quantity_kg: { kind: "u64" },
+      loan_revision: { kind: "u64" },
+      principal: { kind: "u64" },
+      booked_interest: { kind: "u64" },
+      accepted_at: { kind: "i64" },
+      version: { kind: "number", rule: u32Rule },
+      event_version: { kind: "number", rule: u32Rule },
+    } satisfies Record<keyof ChainHandoffAcceptanceRow, Column>,
+  },
   intakeEvents: {
     table: "chain_events",
     key: ["network", "program_id", "signature", "event_index"],
@@ -830,6 +921,8 @@ export interface RowsOf {
   payments: ChainPaymentRow;
   intents: ChainReleaseIntentRow;
   commands: CommandRow;
+  loadingIntents: ChainLoadingIntentRow;
+  acceptances: ChainHandoffAcceptanceRow;
   intakeEvents: ChainEventRow;
   checkpoint: CheckpointRow;
 }

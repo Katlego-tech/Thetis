@@ -2,7 +2,7 @@ export function StateMark({
   dimension,
   value,
 }: {
-  dimension: "Custody" | "Finance" | "Restriction" | "Payment";
+  dimension: "Custody" | "Finance" | "Restriction" | "Payment" | "Loading";
   value: string;
 }) {
   return (
