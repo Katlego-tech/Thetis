@@ -63,7 +63,7 @@ describe("save and restore", () => {
     const storage = memory();
     const store = createDraftStore(storage);
     const view = commandView("awaiting_signatures");
-    const withCommand = applyCommand({ ...draft(), status: "preparing" }, view);
+    const withCommand = applyCommand({ ...lotDraft(), status: "preparing" }, view);
     await store.save(withCommand);
     const json = [...storage.values.values()].join("");
     expect(json).toContain(view.id);
@@ -86,7 +86,7 @@ describe("revision", () => {
   });
 
   it("an edit clears the command", () => {
-    const failed = applyCommand({ ...draft(), status: "preparing" }, commandView("failed"));
+    const failed = applyCommand({ ...lotDraft(), status: "preparing" }, commandView("failed"));
     expect(failed.status).toBe("failed");
     const edited = editDraft(failed, { quantityText: "4999" }, NOW);
     expect(edited.command).toBeNull();

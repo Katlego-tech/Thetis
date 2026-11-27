@@ -95,8 +95,8 @@ describe("cold start with no network (F3, A24)", () => {
     );
     start();
     await screen.findByText("Drafts on this phone");
-    expect(screen.getByText("CR-0001")).toBeTruthy();
-    expect(screen.getByText("As of 10:04 SAST, offline")).toBeTruthy();
+    await screen.findByText("CR-0001");
+    await screen.findByText("As of 10:04 SAST, offline");
     expect(screen.getByText("Custodian")).toBeTruthy();
   });
 

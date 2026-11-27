@@ -9,6 +9,7 @@ import { fakeApp, renderScreen, USER } from "./app";
 vi.mock("react-native", async () => (await import("./native")).reactNative);
 vi.mock("react-native-safe-area-context", async () => (await import("./native")).safeArea);
 vi.mock("@solana-mobile/mobile-wallet-adapter-protocol", () => ({ transact: vi.fn() }));
+vi.mock("../../src/supabase", () => ({ SupabaseTimeout: class extends Error {} }));
 vi.mock("expo-crypto", async () => ({ randomUUID: (await import("node:crypto")).randomUUID }));
 vi.mock("expo-image-picker", () => ({
   requestCameraPermissionsAsync: vi.fn(async () => ({ granted: false })),

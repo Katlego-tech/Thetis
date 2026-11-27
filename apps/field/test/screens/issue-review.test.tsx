@@ -4,7 +4,6 @@ import { type MobileWallet, transact } from "@solana-mobile/mobile-wallet-adapte
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, ApiShapeError, ApiTimeout, ApiUnreachable } from "../../src/api/client";
-import type { CommandView } from "../../src/api/commands";
 import type { IntakeDraft } from "../../src/drafts/store";
 import { decodeBase58, encodeBase64 } from "../../src/lib/encoding";
 import { IssueReview } from "../../src/screens/IssueReview";
@@ -15,6 +14,11 @@ import { emitAppState } from "./native";
 vi.mock("react-native", async () => (await import("./native")).reactNative);
 vi.mock("react-native-safe-area-context", async () => (await import("./native")).safeArea);
 vi.mock("@solana-mobile/mobile-wallet-adapter-protocol", () => ({ transact: vi.fn() }));
+vi.mock("../../src/supabase", () => ({ SupabaseTimeout: class extends Error {} }));
+vi.mock("expo-crypto", async () => ({ randomUUID: (await import("node:crypto")).randomUUID }));
+vi.mock("expo-image-picker", () => ({}));
+vi.mock("expo-document-picker", () => ({}));
+vi.mock("expo-file-system", () => ({ File: class {}, Directory: class {}, Paths: {} }));
 vi.mock("../../src/data/reads", async (importOriginal) => {
   const { chainOrganisation, owner, site, USER, WALLET, membership } = await import("./app");
   return {
@@ -30,7 +34,7 @@ vi.mock("../../src/data/reads", async (importOriginal) => {
       organisation: chainOrganisation.address,
       orgId: membership.organisationId,
       scopes: 1,
-      expiresAt: "2026-12-26T08:00:00.000Z",
+      expiresAt: "1798272000",
       revokedAt: null,
     })),
     readIssuedIntake: vi.fn(async () => null),
