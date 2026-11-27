@@ -35,6 +35,7 @@ import { sharedMessageInstruction } from "./ed25519.ts";
 import { ensureTableKeys, LookupTableFullError } from "./lookup-table.ts";
 import {
   buildInstruction,
+  type EvidenceExpectation,
   KIND_SPECS,
   type Prepared,
   poolToken,
@@ -162,27 +163,34 @@ async function linkedWallets(context: Caller, organisationId: string): Promise<s
 async function evidenceDigest(
   context: Caller,
   versionId: string,
-  lenderOrgId: string,
+  expected: EvidenceExpectation,
 ): Promise<string> {
   const { data, error } = await context.caller
     .from("evidence_versions")
-    .select("sha256, finalized_at, evidence_objects!inner(purpose, owner_organisation_id)")
+    .select(
+      "sha256, finalized_at, evidence_objects!inner(purpose, owner_organisation_id, subject_kind, subject_ref)",
+    )
     .eq("id", versionId)
     .maybeSingle();
   if (error) throw new RelayError("INTERNAL", error.message);
   const object = (data?.evidence_objects ?? null) as {
     purpose: string;
     owner_organisation_id: string;
+    subject_kind: string;
+    subject_ref: string;
   } | null;
   if (
     !data ||
     data.finalized_at === null ||
     typeof data.sha256 !== "string" ||
     !object ||
-    object.purpose !== "bank" ||
-    object.owner_organisation_id !== lenderOrgId
+    object.purpose !== expected.purpose ||
+    object.owner_organisation_id !== expected.ownerOrgId ||
+    (expected.subject !== undefined &&
+      (object.subject_kind !== expected.subject.kind ||
+        object.subject_ref !== expected.subject.ref))
   ) {
-    throw new RelayError("EVIDENCE_INVALID");
+    throw new RelayError("EVIDENCE_INVALID", expected.detail);
   }
   return data.sha256;
 }
@@ -276,7 +284,7 @@ async function prepared(
     chainTime,
     initiator,
     args,
-    evidenceDigest: (versionId, lenderOrgId) => evidenceDigest(context, versionId, lenderOrgId),
+    evidenceDigest: (versionId, expected) => evidenceDigest(context, versionId, expected),
     callerLinks: (org) => linkedWallets(context, org),
   });
 }

@@ -44,8 +44,27 @@ export const FAILED_COMMAND_MESSAGES: Record<string, (v: CopyVars & { code: stri
  */
 export const LATER_FAILED_CODES: ReadonlySet<string> = new Set<string>();
 
-export function failedCommandCopy(code: string, vars: CopyVars): string {
-  const message = FAILED_COMMAND_MESSAGES[code];
+/**
+ * A border or checkpoint observation's own wording for program errors whose shared message names
+ * another action (WrongRole speaks of exporters) or that only observations reach this way.
+ */
+export const OBSERVATION_FAILED_MESSAGES: Record<
+  string,
+  (v: CopyVars & { code: string }) => string
+> = {
+  WrongRole: (v) =>
+    `${v.org} can't record this kind of observation. A border crossing is recorded only by a transporter or a terminal.`,
+  ShipmentNotOpen: () =>
+    "This batch's shipment was cancelled, so no observation can be recorded for it.",
+  StaleRevision: () =>
+    "Another observation of this batch was recorded first. Prepare the text again.",
+};
+
+/** `kind` is the command's kind; an observation's own rows win over the shared table. */
+export function failedCommandCopy(code: string, vars: CopyVars, kind?: string): string {
+  const message =
+    (kind === "record_observation" ? OBSERVATION_FAILED_MESSAGES[code] : undefined) ??
+    FAILED_COMMAND_MESSAGES[code];
   return message
     ? message({ ...vars, code })
     : "See the transaction on the explorer for the program's message.";
@@ -60,6 +79,8 @@ export interface RelayCopyVars {
   siteCode?: string;
   classLabel?: string;
   ownerName?: string;
+  /** The command's kind, for the rows one kind words differently. */
+  kind?: string;
 }
 
 /** These make the app GET the command and map its status; they show no copy. */
@@ -99,6 +120,14 @@ export function transactionTooLargeCopy(detail: string | null | undefined): stri
 /** Copy for a relay error (nothing was sent), or null when the code has none (re-fetch, sign in). */
 export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars): string | null {
   if (REFETCH_CODES.has(code) || code === "NOT_AUTHENTICATED") return null;
+  if (v.kind === "record_observation") {
+    if (code === "NOT_AUTHORISED") {
+      return `${v.org} can't record observations. Only a custodian, a transporter, a terminal or an inspector can. Nothing was sent.`;
+    }
+    if (code === "VALIDATION" && v.detail === "observedAt") {
+      return "This phone's clock is ahead of devnet's. Set the phone's time to automatic, retake the photo, and try again.";
+    }
+  }
   switch (code) {
     case "WALLET_NOT_LINKED":
       return `This wallet is not linked to you for ${v.org}. Link it on the Wallet screen.`;

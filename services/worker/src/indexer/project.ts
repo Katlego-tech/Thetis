@@ -4,6 +4,7 @@
 import type { Address } from "@solana/kit";
 import {
   type Account,
+  getAddressDecoder,
   isSolanaError,
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
@@ -12,6 +13,7 @@ import {
 } from "@solana/kit";
 import {
   type Authority,
+  BatchStage,
   type ClassPolicy,
   type CustodianClass,
   type DocumentAttestation,
@@ -25,12 +27,14 @@ import {
   decodeLoan,
   decodeLockAllocation,
   decodeLot,
+  decodeManifestBatch,
   decodeOrganisation,
   decodePaymentAttestation,
   decodePoolShare,
   decodePosition,
   decodeProtocol,
   decodeReleaseIntent,
+  decodeShipment,
   decodeSimulationPool,
   decodeValuation,
   type Facility,
@@ -43,6 +47,7 @@ import {
   LockControl,
   type Lot,
   LotState,
+  type ManifestBatch,
   type Organisation,
   type PaymentAttestation,
   PaymentPurpose,
@@ -55,6 +60,8 @@ import {
   Restriction,
   Role,
   SettlementMode,
+  type Shipment,
+  ShipmentStatus,
   type SimulationPool,
   ThetisAccountError,
   toI64String,
@@ -87,7 +94,9 @@ export type Kind =
   | "PaymentAttestation"
   | "ReleaseIntent"
   | "SimulationPool"
-  | "PoolShare";
+  | "PoolShare"
+  | "Shipment"
+  | "ManifestBatch";
 
 export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   Protocol: "chain_protocols",
@@ -107,6 +116,8 @@ export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   ReleaseIntent: "chain_release_intents",
   SimulationPool: "chain_pools",
   PoolShare: "chain_pool_shares",
+  Shipment: "chain_shipments",
+  ManifestBatch: "chain_batches",
 };
 
 export const TABLE_KIND = Object.fromEntries(
@@ -130,7 +141,9 @@ export type AccountData =
   | { kind: "PaymentAttestation"; data: PaymentAttestation }
   | { kind: "ReleaseIntent"; data: ReleaseIntent }
   | { kind: "SimulationPool"; data: SimulationPool }
-  | { kind: "PoolShare"; data: PoolShare };
+  | { kind: "PoolShare"; data: PoolShare }
+  | { kind: "Shipment"; data: Shipment }
+  | { kind: "ManifestBatch"; data: ManifestBatch };
 
 type GuardedDecoder = (account: MaybeEncodedAccount) => { exists: boolean; data?: unknown };
 
@@ -152,6 +165,8 @@ const DECODERS: Record<Kind, GuardedDecoder> = {
   ReleaseIntent: decodeReleaseIntent as unknown as GuardedDecoder,
   SimulationPool: decodeSimulationPool as unknown as GuardedDecoder,
   PoolShare: decodePoolShare as unknown as GuardedDecoder,
+  Shipment: decodeShipment as unknown as GuardedDecoder,
+  ManifestBatch: decodeManifestBatch as unknown as GuardedDecoder,
 };
 
 export type DecodeFailure = { address: string; enumError: boolean; message: string };
@@ -266,6 +281,7 @@ export function uuidFromBytes(bytes: ReadonlyUint8Array): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+const addressText = getAddressDecoder();
 const hex = (bytes: ReadonlyUint8Array) => Buffer.from(bytes as Uint8Array).toString("hex");
 const currencyText = (bytes: ReadonlyUint8Array) => {
   const values = [...(bytes as Uint8Array)];
@@ -348,6 +364,9 @@ export function accountColumns(account: AccountData, resolver: Resolver): Row {
         sha256_hex: hex(data.sha256),
         valid_until: toI64String(data.validUntil),
         revoked_at: optionalI64(data.revokedAt),
+        // A Departure document's subject is its lot's address bytes (live-custody.md §3.1).
+        subject_address:
+          data.kind === DocumentKind.Departure ? addressText.decode(data.subject) : null,
       };
     }
     case "IntakeIdentity": {
@@ -524,6 +543,56 @@ export function accountColumns(account: AccountData, resolver: Resolver): Row {
         lent_minor: toU64String(data.lentMinor),
       };
     }
+    case "Shipment": {
+      const { data } = account;
+      return {
+        shipment_id_hex: hex(data.shipmentId),
+        lot: data.lot,
+        position: data.position,
+        owner: data.owner,
+        owner_org_id: resolver.organisationId(data.owner),
+        source: data.source,
+        source_custodian: data.sourceCustodian,
+        source_custodian_org_id: resolver.organisationId(data.sourceCustodian),
+        destination: data.destination,
+        destination_custodian: data.destinationCustodian,
+        destination_custodian_org_id: resolver.organisationId(data.destinationCustodian),
+        committed_kg: toU64String(data.committedKg),
+        locked_kg: toU64String(data.lockedKg),
+        batch_count: data.batchCount,
+        manifest_root_hex: hex(data.manifestRoot),
+        departure_document: data.departureDocument,
+        registered_count: data.registeredCount,
+        registered_kg: toU64String(data.registeredKg),
+        departed_count: data.departedCount,
+        departed_kg: toU64String(data.departedKg),
+        arrived_count: data.arrivedCount,
+        arrived_kg: toU64String(data.arrivedKg),
+        status: variant("ShipmentStatus", ShipmentStatus, data.status),
+        prepared_at: toI64String(data.preparedAt),
+        revision: toU64String(data.revision),
+      };
+    }
+    case "ManifestBatch": {
+      const { data } = account;
+      return {
+        shipment: data.shipment,
+        lot: data.lot,
+        batch_index: data.index,
+        batch_count: data.batchCount,
+        quantity_kg: toU64String(data.quantityKg),
+        carrier: data.carrier,
+        load_digest_hex: hex(data.loadDigest),
+        manifest_digest_hex: hex(data.manifestDigest),
+        holder: data.holder,
+        holder_org_id: resolver.organisationId(data.holder),
+        stage: variant("BatchStage", BatchStage, data.stage),
+        sequence: toU64String(data.sequence),
+        observation_count: data.observationCount,
+        departed_at: optionalI64(data.departedAt),
+        arrived_at: optionalI64(data.arrivedAt),
+      };
+    }
   }
 }
 
@@ -561,6 +630,14 @@ type LendingKeys = {
   valuation: string | null;
   valuationVersion: number | null;
   created: string | null;
+  /** The Phase 3 keys (live-custody.md §4.1.3). */
+  shipment: string | null;
+  shipmentRevision: bigint | null;
+  batch: string | null;
+  batchSequence: bigint | null;
+  observationIndex: number | null;
+  acceptance: string | null;
+  acceptanceVersion: number | null;
 };
 
 const NO_KEYS: LendingKeys = {
@@ -572,13 +649,20 @@ const NO_KEYS: LendingKeys = {
   valuation: null,
   valuationVersion: null,
   created: null,
+  shipment: null,
+  shipmentRevision: null,
+  batch: null,
+  batchSequence: null,
+  observationIndex: null,
+  acceptance: null,
+  acceptanceVersion: null,
 };
 
 type Plan = {
   transaction: SlotTransaction;
   invocation: Invocation;
   event: DecodedEvent;
-  scope: "registry" | "organisation" | "lot" | "facility" | "pool";
+  scope: "registry" | "organisation" | "lot" | "facility" | "pool" | "shipment";
   lot: string | null;
   revision: bigint | null;
   keys: LendingKeys;
@@ -947,6 +1031,64 @@ async function planEvent(
           { address: ixAccount("lenderShare"), kind: "PoolShare" },
         ],
       };
+    case "ShipmentPrepared": {
+      const shipment = { address: text("shipment"), kind: "Shipment" as const };
+      const lot = text("lot");
+      return {
+        ...base,
+        scope: "lot",
+        lot,
+        revision: value.lotRevision as bigint,
+        // The created Shipment's own revision is 0 (live-custody.md §4.1.3).
+        keys: {
+          ...NO_KEYS,
+          shipment: shipment.address,
+          shipmentRevision: 0n,
+          created: shipment.address,
+        },
+        fetch: [
+          shipment,
+          { address: lot, kind: "Lot" },
+          { address: ixAccount("position"), kind: "Position" },
+          { address: ixAccount("destinationClass"), kind: "CustodianClass" },
+        ],
+        creates: [shipment],
+      };
+    }
+    case "BatchRegistered": {
+      const batch = { address: text("batch"), kind: "ManifestBatch" as const };
+      return {
+        ...base,
+        scope: "shipment",
+        keys: {
+          ...NO_KEYS,
+          shipment: text("shipment"),
+          batch: batch.address,
+          created: batch.address,
+        },
+        fetch: [batch, { address: text("shipment"), kind: "Shipment" }],
+        creates: [batch],
+      };
+    }
+    case "ShipmentCancelled": {
+      const lot = text("lot");
+      return {
+        ...base,
+        scope: "lot",
+        lot,
+        revision: value.lotRevision as bigint,
+        keys: {
+          ...NO_KEYS,
+          shipment: text("shipment"),
+          shipmentRevision: value.revision as bigint,
+        },
+        fetch: [
+          { address: text("shipment"), kind: "Shipment" },
+          { address: lot, kind: "Lot" },
+          { address: ixAccount("destinationClass"), kind: "CustodianClass" },
+        ],
+      };
+    }
   }
 }
 
@@ -1037,6 +1179,8 @@ export async function projectSlot(
         entryOf(value.child as string).creators.push(plan);
         break;
       case "PledgedSold":
+      case "ShipmentPrepared":
+      case "ShipmentCancelled":
         entryOf(value.lot as string).revisions.push({
           revision: value.lotRevision as bigint,
           plan,
@@ -1253,6 +1397,100 @@ export async function projectSlot(
     const base = row ? BigInt(row.event_version as number) : 0n;
     inSequence(named, base, versions);
     valuationEventVersion.set(valuation, Number(versions.at(-1) as bigint));
+  }
+
+  // Shipments and registrations (live-custody.md §4.1.4).
+  const preparedIn = (shipment: string) =>
+    plans.filter(
+      (plan) => plan.event.name === "ShipmentPrepared" && plan.keys.shipment === shipment,
+    );
+  const shipmentEventRevision = new Map<string, bigint>();
+  const shipmentNames = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.keys.shipmentRevision !== null)
+        .map((plan) => plan.keys.shipment as string),
+    ),
+  ].sort(sortText);
+  for (const shipment of shipmentNames) {
+    const advancing = plans.filter(
+      (plan) => plan.keys.shipment === shipment && plan.keys.shipmentRevision !== null,
+    );
+    const prepared = preparedIn(shipment);
+    const named = `shipment ${shipment} (signatures ${signaturesOf(advancing)})`;
+    const row = storedRow("Shipment", shipment);
+    let base: bigint;
+    if (prepared.length > 0) {
+      if (prepared.length > 1) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} is prepared by ${prepared.length} events of one slot`,
+        );
+      }
+      if (row) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} is prepared again while it is stored`,
+        );
+      }
+      base = -1n;
+    } else {
+      if (!row) {
+        throw stepHalt(
+          "sequence",
+          "EVENT_GAP",
+          `${named} has no stored row and no ShipmentPrepared of this slot creates it`,
+        );
+      }
+      base = BigInt(row.event_revision as string);
+    }
+    const revisions = advancing.map((plan) => plan.keys.shipmentRevision as bigint).sort(sortBig);
+    inSequence(named, base, revisions);
+    shipmentEventRevision.set(shipment, revisions.at(-1) ?? base);
+  }
+
+  const shipmentEventRegistered = new Map<string, number>();
+  const registeredNames = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.event.name === "BatchRegistered")
+        .map((plan) => plan.keys.shipment as string),
+    ),
+  ].sort(sortText);
+  for (const shipment of registeredNames) {
+    const naming = plans.filter(
+      (plan) => plan.event.name === "BatchRegistered" && plan.keys.shipment === shipment,
+    );
+    const named = `shipment ${shipment} (signatures ${signaturesOf(naming)})`;
+    const row = storedRow("Shipment", shipment);
+    let base: bigint;
+    if (preparedIn(shipment).length > 0) base = 0n;
+    else if (row) base = BigInt(row.event_registered as number);
+    else {
+      throw stepHalt(
+        "sequence",
+        "EVENT_GAP",
+        `${named} registers a batch but has no stored row and no ShipmentPrepared of this slot`,
+      );
+    }
+    const counts = naming
+      .map((plan) =>
+        BigInt((plan.event.value as Record<string, unknown>).registeredCount as number),
+      )
+      .sort(sortBig);
+    for (const [index, count] of counts.entries()) {
+      const expected = base + 1n + BigInt(index);
+      if (count !== expected) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} carries registration counts [${counts.join(", ")}] after ${base}, expected ${expected} at position ${index}`,
+        );
+      }
+    }
+    shipmentEventRegistered.set(shipment, Number(counts.at(-1) ?? base));
   }
 
   // Creation check, account by account.
@@ -1559,6 +1797,27 @@ export async function projectSlot(
       row.event_revision =
         revision === undefined ? (previous?.event_revision as string) : toU64String(revision);
     }
+    if (account.kind === "Shipment") {
+      const previous = storedRow("Shipment", address);
+      const revision = shipmentEventRevision.get(address);
+      row.event_revision =
+        revision === undefined ? (previous?.event_revision as string) : toU64String(revision);
+      // A shipment prepared in this slot has had no registration yet unless one is counted.
+      row.event_registered =
+        shipmentEventRegistered.get(address) ??
+        (previous ? (previous.event_registered as number) : 0);
+    }
+    if (account.kind === "ManifestBatch") {
+      // Only a handover or an observation moves these, and neither is handled yet: a batch
+      // registered in this slot starts at 0, a stored one keeps its columns.
+      const previous = storedRow("ManifestBatch", address);
+      row.event_sequence = previous ? (previous.event_sequence as string) : "0";
+      row.event_observations = previous ? (previous.event_observations as number) : 0;
+    }
+    if (account.kind === "ReleaseIntent") {
+      // The mark is carried forward; §4.1.7 below may set it.
+      row.cancelled_by = (storedRow("ReleaseIntent", address)?.cancelled_by ?? null) as JsonValue;
+    }
     if (account.kind === "Valuation") {
       const version = valuationEventVersion.get(address);
       row.event_version =
@@ -1567,6 +1826,59 @@ export async function projectSlot(
           : version;
     }
     upserts.push({ table, row });
+  }
+
+  // Intents cancelled by a shipment (live-custody.md §4.1.7).
+  const shipped = plans.filter((plan) => plan.event.name === "ShipmentPrepared");
+  if (shipped.length > 0) {
+    const positions = [
+      ...new Set(shipped.map((plan) => plan.invocation.accounts.position as string)),
+    ];
+    const storedIntents = await store.rowsByColumn(
+      stream,
+      "chain_release_intents",
+      "position",
+      positions,
+    );
+    const fresh = new Map<string, Row>();
+    for (const entry of upserts) {
+      if (entry.table === "chain_release_intents")
+        fresh.set(entry.row.address as string, entry.row);
+    }
+    const marked = new Map<string, string>();
+    for (const plan of shipped) {
+      const value = plan.event.value as Record<string, unknown>;
+      const shipment = value.shipment as string;
+      const position = plan.invocation.accounts.position as string;
+      const decoded = read.get(shipment)?.account as { data: Shipment };
+      const preparedAt = decoded.data.preparedAt;
+      const before = (value.positionRevision as bigint) - 1n;
+      const candidates = new Map<string, Row>();
+      for (const [address, row] of storedIntents) candidates.set(address, row);
+      for (const [address, row] of fresh) candidates.set(address, row);
+      for (const address of [...candidates.keys()].sort(sortText)) {
+        const row = candidates.get(address) as Row;
+        if (row.position !== position || row.cancelled_by !== null || marked.has(address)) continue;
+        if (
+          row.status === "Open" &&
+          BigInt(row.position_revision as string) === before &&
+          BigInt(row.expires_at as string) > preparedAt
+        ) {
+          marked.set(address, shipment);
+        }
+      }
+    }
+    for (const address of [...marked.keys()].sort(sortText)) {
+      const shipment = marked.get(address) as string;
+      const row = fresh.get(address);
+      if (row) row.cancelled_by = shipment;
+      else {
+        upserts.push({
+          table: "chain_release_intents",
+          row: { ...(storedIntents.get(address) as Row), cancelled_by: shipment },
+        });
+      }
+    }
   }
 
   const eventRows: Row[] = [];
@@ -1596,6 +1908,15 @@ export async function projectSlot(
       valuation: plan.keys.valuation,
       valuation_version: plan.keys.valuationVersion,
       created: plan.keys.created,
+      shipment: plan.keys.shipment,
+      shipment_revision:
+        plan.keys.shipmentRevision === null ? null : toU64String(plan.keys.shipmentRevision),
+      batch: plan.keys.batch,
+      batch_sequence:
+        plan.keys.batchSequence === null ? null : toU64String(plan.keys.batchSequence),
+      observation_index: plan.keys.observationIndex,
+      acceptance: plan.keys.acceptance,
+      acceptance_version: plan.keys.acceptanceVersion,
     });
   }
   const counts = new Map<string, number>();

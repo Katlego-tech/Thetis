@@ -156,6 +156,13 @@ const SPONSORED: readonly {
     protocol: 1,
     sponsorSlots: [0],
   },
+  {
+    name: "record_observation",
+    discriminator: [37, 148, 41, 216, 83, 104, 162, 96],
+    accounts: 9,
+    protocol: 1,
+    sponsorSlots: [0],
+  },
 ];
 
 export const SPONSORED_INSTRUCTIONS = SPONSORED;

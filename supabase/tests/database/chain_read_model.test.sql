@@ -91,7 +91,9 @@ create function pg_temp.ev(n int, idx int, slot bigint, instruction text, event 
     'protocol', pg_temp.a('protocol'), 'instruction', instruction, 'event', event, 'scope', scope,
     'lot', lot, 'lot_revision', revision, 'org_id', org, 'data', data,
     'facility', null, 'loan', null, 'loan_revision', null, 'pool', null, 'pool_revision', null,
-    'valuation', null, 'valuation_version', null, 'created', null)
+    'valuation', null, 'valuation_version', null, 'created', null,
+    'shipment', null, 'shipment_revision', null, 'batch', null, 'batch_sequence', null,
+    'observation_index', null, 'acceptance', null, 'acceptance_version', null)
 $$;
 
 -- {table, row} with the common columns; `fields` holds the account columns.

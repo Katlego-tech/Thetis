@@ -72,6 +72,7 @@ const SPONSORED_NAMES = [
   "borrow",
   "issue_lot",
   "handover",
+  "record_observation",
 ];
 const TEXT_SIGNED = new Set([
   "pledge",
@@ -81,6 +82,7 @@ const TEXT_SIGNED = new Set([
   "borrow",
   "issue_lot",
   "handover",
+  "record_observation",
 ]);
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 const SYSTEM = "11111111111111111111111111111111" as Address;
@@ -305,6 +307,7 @@ describe("sponsor allowlist", () => {
     for (const [name, slot] of [
       ["issue_lot", "custodian"],
       ["handover", "from_org"],
+      ["record_observation", "observer_org"],
     ] as const) {
       const shape = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === name);
       expect(shape?.sponsorSlots, name).toStrictEqual([0]);

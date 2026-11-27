@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { liveReader } from "@/data/live/map";
 import type { LiveSnapshot } from "@/data/live/rows";
-import { parseI64 } from "@/data/live/rows";
+import { checkRow, parseI64 } from "@/data/live/rows";
 import { LiveDataError } from "@/data/live/types";
 import {
   address,
@@ -297,6 +297,44 @@ describe("live mapping", () => {
     refused(id, "BAD_ROW", "memberships[0].id");
 
     expect(liveReader(issuedSnapshot([]), NOW).contexts()).toEqual([]);
+  });
+
+  test("lot states, restrictions and document kinds of the custody instructions parse and map to plain labels", () => {
+    const custody = [
+      ["Prepared", "Awaiting departure"],
+      ["InTransit", "In transit"],
+      ["Loaded", "Loaded"],
+    ] as const;
+    for (const [state, label] of custody) {
+      const snapshot = issuedSnapshot();
+      snapshot.lots = [lotRow({ state })];
+      expect(lotOf(snapshot).custody, state).toBe(label);
+    }
+    const restrictions = [
+      ["ReviewRequired", "Review required"],
+      ["Disputed", "Disputed"],
+      ["Frozen", "Frozen"],
+    ] as const;
+    for (const [restriction, label] of restrictions) {
+      const snapshot = issuedSnapshot();
+      snapshot.lots = [lotRow({ restriction })];
+      expect(lotOf(snapshot).restriction, restriction).toBe(label);
+    }
+
+    const departure = issuedSnapshot();
+    departure.documents = [document(address(60), 1, { kind: "Departure" })];
+    expect(
+      checkRow("documents", departure.documents[0], "documents[0]", departure.env),
+    ).toMatchObject({
+      kind: "Departure",
+    });
+    expect(lotOf(departure).evidence).toEqual([
+      expect.objectContaining({ id: address(60), kind: "Departure attestation, version 1" }),
+    ]);
+
+    const unknown = issuedSnapshot();
+    unknown.lots = [lotRow({ state: "Shipped" as never })];
+    refused(unknown, "BAD_ROW", "lots[0].state");
   });
 
   test("evidence is Expired at valid_until and Revoked when revoked_at is set", () => {
