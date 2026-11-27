@@ -8,7 +8,7 @@
 
 import { combineCodec, getEnumDecoder, getEnumEncoder, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder } from '@solana/kit';
 
-export const LotState = { 0: 'Stored', 1: 'Redeemed', Stored: 0, Redeemed: 1 } as const;
+export const LotState = { 0: 'Stored', 1: 'Redeemed', 2: 'Prepared', 3: 'InTransit', 4: 'Loaded', Stored: 0, Redeemed: 1, Prepared: 2, InTransit: 3, Loaded: 4 } as const;
 
 export type LotState = (typeof LotState)[Exclude<keyof typeof LotState, number>];
 

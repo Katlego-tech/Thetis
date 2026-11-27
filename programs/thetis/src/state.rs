@@ -7,6 +7,11 @@ pub const MAX_DISPLAY_NAME: usize = 48;
 pub const MAX_RELATED: usize = 8;
 pub const MAX_SITE_CODE: usize = 16;
 pub const MAX_LOT_ID: usize = 16;
+/// The manifest tree's leaves: a shipment has 1 to 16 batches.
+pub const MAX_BATCHES: u8 = 16;
+/// The most loans one loading may hand off.
+pub const MAX_LOADING_LOANS: usize = 4;
+pub const MAX_METHOD_CODE: usize = 8;
 
 #[account]
 #[derive(InitSpace)]
@@ -274,6 +279,132 @@ pub struct PoolShare {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct Shipment {
+    pub protocol: Pubkey,
+    pub shipment_id: [u8; 16],
+    pub lot: Pubkey,
+    pub position: Pubkey,
+    pub owner: Pubkey,
+    pub source: Pubkey,
+    pub source_custodian: Pubkey,
+    pub destination: Pubkey,
+    pub destination_custodian: Pubkey,
+    pub committed_kg: u64,
+    pub locked_kg: u64,
+    pub batch_count: u8,
+    pub manifest_root: [u8; 32],
+    pub departure_document: Pubkey,
+    pub registered_count: u8,
+    pub registered_kg: u64,
+    pub departed_count: u8,
+    pub departed_kg: u64,
+    pub arrived_count: u8,
+    pub arrived_kg: u64,
+    pub status: ShipmentStatus,
+    pub prepared_at: i64,
+    pub revision: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ManifestBatch {
+    pub protocol: Pubkey,
+    pub shipment: Pubkey,
+    pub lot: Pubkey,
+    pub index: u8,
+    pub batch_count: u8,
+    pub quantity_kg: u64,
+    pub carrier: Pubkey,
+    pub load_digest: [u8; 32],
+    pub manifest_digest: [u8; 32],
+    pub holder: Pubkey,
+    pub stage: BatchStage,
+    pub sequence: u64,
+    pub observation_count: u32,
+    pub departed_at: Option<i64>,
+    pub arrived_at: Option<i64>,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct HandoverRecord {
+    pub protocol: Pubkey,
+    pub batch: Pubkey,
+    pub shipment: Pubkey,
+    pub sequence: u64,
+    pub from: Pubkey,
+    pub to: Pubkey,
+    pub from_wallet: Pubkey,
+    pub to_wallet: Pubkey,
+    pub stage: HandoverStage,
+    pub quantity_kg: u64,
+    pub manifest_digest: [u8; 32],
+    pub at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct LoadingIntent {
+    pub protocol: Pubkey,
+    pub lot: Pubkey,
+    pub position: Pubkey,
+    pub owner: Pubkey,
+    pub terminal: Pubkey,
+    pub custodian_class: Pubkey,
+    pub nonce: u64,
+    pub quantity_kg: u64,
+    pub locked_kg: u64,
+    pub document_sha256: [u8; 32],
+    pub position_revision: u64,
+    pub expires_at: i64,
+    pub status: LoadingStatus,
+    pub executed_at: Option<i64>,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct HandoffAcceptance {
+    pub protocol: Pubkey,
+    pub intent: Pubkey,
+    pub loan: Pubkey,
+    pub lock: Pubkey,
+    pub lender: Pubkey,
+    pub lock_quantity_kg: u64,
+    pub loan_revision: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub accepted_at: i64,
+    pub version: u32,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Incident {
+    pub protocol: Pubkey,
+    pub incident_id: [u8; 16],
+    pub lot: Pubkey,
+    pub batch: Option<Pubkey>,
+    pub inspector: Pubkey,
+    #[max_len(MAX_METHOD_CODE)]
+    pub method_code: String,
+    pub expected_kg: u64,
+    pub observed_kg: u64,
+    pub tolerance_bps: u16,
+    pub within_tolerance: bool,
+    pub evidence_digest: [u8; 32],
+    pub observed_at: i64,
+    pub restriction_after: Restriction,
+    pub status: IncidentStatus,
+    pub bump: u8,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettlementMode {
     FiatAttestationTest,
@@ -300,17 +431,24 @@ pub enum Role {
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentKind {
     Origin,
+    Departure,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LotState {
     Stored,
     Redeemed,
+    Prepared,
+    InTransit,
+    Loaded,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Restriction {
     Normal,
+    ReviewRequired,
+    Disputed,
+    Frozen,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
@@ -347,6 +485,45 @@ pub enum IntentStatus {
     Executed,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipmentStatus {
+    Prepared,
+    InTransit,
+    Arrived,
+    Cancelled,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchStage {
+    AtSource,
+    InTransit,
+    Arrived,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandoverStage {
+    Departure,
+    Transfer,
+    Arrival,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObservationKind {
+    Checkpoint,
+    Border,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadingStatus {
+    Open,
+    Executed,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncidentStatus {
+    Open,
+}
+
 pub mod scope {
     pub const ISSUE: u16 = 1 << 0;
     pub const TRANSFER: u16 = 1 << 1;
@@ -357,6 +534,12 @@ pub mod scope {
     pub const BUY: u16 = 1 << 6;
     pub const LEND: u16 = 1 << 7;
     pub const POOL: u16 = 1 << 8;
+    pub const SHIP: u16 = 1 << 9;
+    pub const CARRY: u16 = 1 << 10;
+    pub const OBSERVE: u16 = 1 << 11;
+    pub const LOAD: u16 = 1 << 12;
+    pub const INSPECT: u16 = 1 << 13;
+    pub const ATTEST_TRANSPORT: u16 = 1 << 14;
 }
 
 pub mod pause {
@@ -369,6 +552,19 @@ pub mod pause {
     pub const RELEASE: u16 = 1 << 6;
     pub const LIQUIDATE: u16 = 1 << 7;
     pub const POOL: u16 = 1 << 8;
-    pub const ALL: u16 =
-        ISSUE | TRANSFER | SPLIT | REDEEM | PLEDGE | ADVANCE | RELEASE | LIQUIDATE | POOL;
+    pub const SHIP: u16 = 1 << 9;
+    pub const HANDOVER: u16 = 1 << 10;
+    pub const LOADING: u16 = 1 << 11;
+    pub const ALL: u16 = ISSUE
+        | TRANSFER
+        | SPLIT
+        | REDEEM
+        | PLEDGE
+        | ADVANCE
+        | RELEASE
+        | LIQUIDATE
+        | POOL
+        | SHIP
+        | HANDOVER
+        | LOADING;
 }

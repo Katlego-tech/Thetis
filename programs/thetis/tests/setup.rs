@@ -303,14 +303,14 @@ fn delegate_rejects_zero_scopes() {
 fn delegation_enforces_the_complete_role_scope_table() {
     let mut f = Fixture::initialized();
     for (index, (role, mask)) in [
-        (Role::Exporter, 0b00_0010_1110),
-        (Role::Buyer, 0b00_0100_1110),
-        (Role::Custodian, 0b00_0000_1001),
-        (Role::Transporter, 0),
-        (Role::Terminal, 0),
-        (Role::Lender, 0b01_1000_0000),
-        (Role::Inspector, 0),
-        (Role::DocumentIssuer, 0b1_0000),
+        (Role::Exporter, 0x22e),
+        (Role::Buyer, 0x24e),
+        (Role::Custodian, 0x4c09),
+        (Role::Transporter, 0xc00),
+        (Role::Terminal, 0x5c00),
+        (Role::Lender, 0x180),
+        (Role::Inspector, 0x2800),
+        (Role::DocumentIssuer, 0x4010),
     ]
     .into_iter()
     .enumerate()
@@ -426,7 +426,7 @@ fn pause_and_unpause_check_admin_and_preserve_unselected_bits() {
     let mut f = Fixture::initialized();
     for paused in [true, false] {
         f.refused(f.change_pause(Accreditor, 1, paused), Accreditor, NotAdmin);
-        for flags in [0x200, 0x201, 0x8000, 0xffff] {
+        for flags in [0x1000, 0x1001, 0x8000, 0xffff] {
             f.refused(f.change_pause(Admin, flags, paused), Admin, InvalidField);
         }
     }

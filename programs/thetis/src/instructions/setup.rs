@@ -229,16 +229,21 @@ pub fn delegate_authority(
     scopes: u16,
     expires_at: i64,
 ) -> Result<()> {
-    use scope::{ATTEST_ORIGIN, BUY, ISSUE, LEND, PLEDGE, POOL, REDEEM, SPLIT, TRANSFER};
+    use scope::{
+        ATTEST_ORIGIN, ATTEST_TRANSPORT, BUY, CARRY, INSPECT, ISSUE, LEND, LOAD, OBSERVE, PLEDGE,
+        POOL, REDEEM, SHIP, SPLIT, TRANSFER,
+    };
 
     let organisation = &ctx.accounts.organisation;
     let allowed = match organisation.role {
-        Role::Exporter => TRANSFER | SPLIT | REDEEM | PLEDGE,
-        Role::Buyer => TRANSFER | SPLIT | REDEEM | BUY,
-        Role::Custodian => ISSUE | REDEEM,
+        Role::Exporter => TRANSFER | SPLIT | REDEEM | PLEDGE | SHIP,
+        Role::Buyer => TRANSFER | SPLIT | REDEEM | BUY | SHIP,
+        Role::Custodian => ISSUE | REDEEM | CARRY | OBSERVE | ATTEST_TRANSPORT,
+        Role::Transporter => CARRY | OBSERVE,
+        Role::Terminal => CARRY | OBSERVE | LOAD | ATTEST_TRANSPORT,
         Role::Lender => LEND | POOL,
-        Role::DocumentIssuer => ATTEST_ORIGIN,
-        Role::Transporter | Role::Terminal | Role::Inspector => 0,
+        Role::Inspector => OBSERVE | INSPECT,
+        Role::DocumentIssuer => ATTEST_ORIGIN | ATTEST_TRANSPORT,
     };
     require!(scopes & !allowed == 0, ThetisError::ScopeNotAllowed);
     require!(scopes != 0, ThetisError::InvalidField);
@@ -332,8 +337,12 @@ pub fn accredit_custodian_class(
     site_code: String,
     approved_capacity_kg: u64,
 ) -> Result<()> {
+    // A terminal holds the port site it loads from.
     require!(
-        ctx.accounts.custodian.role == Role::Custodian,
+        matches!(
+            ctx.accounts.custodian.role,
+            Role::Custodian | Role::Terminal
+        ),
         ThetisError::WrongRole
     );
     require!(approved_capacity_kg > 0, ThetisError::InvalidField);

@@ -7,6 +7,7 @@
  */
 
 export * from './authority.ts';
+export * from './batch.ts';
 export * from './buyerPosition.ts';
 export * from './buyerVaultAuthority.ts';
 export * from './childMint.ts';
@@ -29,6 +30,7 @@ export * from './position.ts';
 export * from './protocol.ts';
 export * from './sellerVaultAuthority.ts';
 export * from './share.ts';
+export * from './shipment.ts';
 export * from './toPosition.ts';
 export * from './toVaultAuthority.ts';
 export * from './vaultAuthority.ts';

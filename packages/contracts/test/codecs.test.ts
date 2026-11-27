@@ -23,14 +23,17 @@ function codecRoundTrip(
 
 describe("IDL sanity", () => {
   it("lists the Phase 1 instructions and accounts and the lending setup ones", () => {
-    expect(idl.instructions.length).toBe(29);
-    expect(idl.accounts.length).toBe(18);
+    expect(idl.instructions.length).toBe(32);
+    expect(idl.accounts.length).toBe(20);
     const instructions = idl.instructions.map((i) => i.name);
     expect(instructions).toContain("redeem");
     expect(instructions).toContain("open_facility");
     expect(instructions).toContain("set_valuation");
+    for (const name of ["prepare_shipment", "register_batch", "cancel_shipment"]) {
+      expect(instructions).toContain(name);
+    }
     const accounts = idl.accounts.map((a) => a.name);
-    for (const name of ["Facility", "Valuation", "SimulationPool"]) {
+    for (const name of ["Facility", "Valuation", "SimulationPool", "Shipment", "ManifestBatch"]) {
       expect(accounts).toContain(name);
     }
   });

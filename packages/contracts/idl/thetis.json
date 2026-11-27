@@ -361,6 +361,64 @@
       ]
     },
     {
+      "name": "cancel_shipment",
+      "discriminator": [
+        218,
+        193,
+        79,
+        176,
+        231,
+        134,
+        184,
+        74
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "owner_org"
+        },
+        {
+          "name": "owner_authority"
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "shipment",
+          "writable": true
+        },
+        {
+          "name": "destination_class",
+          "writable": true
+        },
+        {
+          "name": "destination_org"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "close_loan",
       "discriminator": [
         96,
@@ -1761,6 +1819,128 @@
       ]
     },
     {
+      "name": "prepare_shipment",
+      "discriminator": [
+        121,
+        18,
+        78,
+        214,
+        101,
+        13,
+        96,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "sponsor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "owner_org"
+        },
+        {
+          "name": "owner_authority"
+        },
+        {
+          "name": "lot",
+          "writable": true
+        },
+        {
+          "name": "position",
+          "writable": true
+        },
+        {
+          "name": "source_class"
+        },
+        {
+          "name": "destination_class",
+          "writable": true
+        },
+        {
+          "name": "destination_org"
+        },
+        {
+          "name": "departure_document"
+        },
+        {
+          "name": "departure_issuer"
+        },
+        {
+          "name": "shipment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  104,
+                  105,
+                  112,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "arg",
+                "path": "shipment_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "shipment_id",
+          "type": {
+            "array": [
+              "u8",
+              16
+            ]
+          }
+        },
+        {
+          "name": "batch_count",
+          "type": "u8"
+        },
+        {
+          "name": "manifest_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expected_revision",
+          "type": "u64"
+        },
+        {
+          "name": "valid_until",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "record_advance",
       "discriminator": [
         241,
@@ -1992,6 +2172,109 @@
         {
           "name": "valid_until",
           "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "register_batch",
+      "discriminator": [
+        255,
+        186,
+        59,
+        153,
+        95,
+        233,
+        143,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol"
+        },
+        {
+          "name": "shipment",
+          "writable": true
+        },
+        {
+          "name": "batch",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  97,
+                  116,
+                  99,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "protocol"
+              },
+              {
+                "kind": "arg",
+                "path": "load_digest"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "index",
+          "type": "u8"
+        },
+        {
+          "name": "quantity_kg",
+          "type": "u64"
+        },
+        {
+          "name": "carrier",
+          "type": "pubkey"
+        },
+        {
+          "name": "load_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "manifest_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "proof",
+          "type": {
+            "array": [
+              {
+                "array": [
+                  "u8",
+                  32
+                ]
+              },
+              4
+            ]
+          }
         }
       ]
     },
@@ -3214,6 +3497,19 @@
       ]
     },
     {
+      "name": "ManifestBatch",
+      "discriminator": [
+        45,
+        32,
+        166,
+        185,
+        18,
+        71,
+        244,
+        163
+      ]
+    },
+    {
       "name": "Organisation",
       "discriminator": [
         100,
@@ -3305,6 +3601,19 @@
       ]
     },
     {
+      "name": "Shipment",
+      "discriminator": [
+        3,
+        65,
+        195,
+        72,
+        154,
+        63,
+        211,
+        213
+      ]
+    },
+    {
       "name": "SimulationPool",
       "discriminator": [
         154,
@@ -3369,6 +3678,19 @@
         155,
         29,
         34
+      ]
+    },
+    {
+      "name": "BatchRegistered",
+      "discriminator": [
+        125,
+        239,
+        216,
+        76,
+        8,
+        32,
+        199,
+        204
       ]
     },
     {
@@ -3655,6 +3977,32 @@
         164,
         172,
         23
+      ]
+    },
+    {
+      "name": "ShipmentCancelled",
+      "discriminator": [
+        203,
+        222,
+        158,
+        44,
+        11,
+        88,
+        233,
+        28
+      ]
+    },
+    {
+      "name": "ShipmentPrepared",
+      "discriminator": [
+        182,
+        156,
+        254,
+        26,
+        113,
+        240,
+        187,
+        70
       ]
     },
     {
@@ -4005,6 +4353,76 @@
       "code": 6058,
       "name": "MintMismatch",
       "msg": "The token mint or account does not match the pool"
+    },
+    {
+      "code": 6059,
+      "name": "ShipmentNotOpen",
+      "msg": "The shipment is not open"
+    },
+    {
+      "code": 6060,
+      "name": "ShipmentDeparted",
+      "msg": "A batch of the shipment has already departed"
+    },
+    {
+      "code": 6061,
+      "name": "ShipmentIncomplete",
+      "msg": "Every batch of the manifest must be registered first"
+    },
+    {
+      "code": 6062,
+      "name": "NotSoleHolder",
+      "msg": "The position does not hold the whole lot"
+    },
+    {
+      "code": 6063,
+      "name": "DestinationNotEligible",
+      "msg": "The destination site is not of the lot's class"
+    },
+    {
+      "code": 6064,
+      "name": "BatchSumMismatch",
+      "msg": "The registered batches do not sum to the committed quantity"
+    },
+    {
+      "code": 6065,
+      "name": "ManifestMismatch",
+      "msg": "The batch does not match the signed manifest"
+    },
+    {
+      "code": 6066,
+      "name": "StageOutOfOrder",
+      "msg": "The batch cannot move at this stage"
+    },
+    {
+      "code": 6067,
+      "name": "DepartureDocumentInvalid",
+      "msg": "The departure document is invalid"
+    },
+    {
+      "code": 6068,
+      "name": "LoadingNotOpen",
+      "msg": "The loading intent is not open"
+    },
+    {
+      "code": 6069,
+      "name": "LoadingExpired",
+      "msg": "The loading intent has expired"
+    },
+    {
+      "code": 6070,
+      "name": "AcceptanceMissing",
+      "msg": "A lender with a lock on the position has not accepted the loading"
+    },
+    {
+      "code": 6071,
+      "name": "AcceptanceStale",
+      "msg": "The loading acceptance is stale"
+    },
+    {
+      "code": 6072,
+      "name": "LotRetired",
+      "msg": "The lot is retired"
     }
   ],
   "types": [
@@ -4110,6 +4528,73 @@
           {
             "name": "at",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BatchRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "batch",
+            "type": "pubkey"
+          },
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "type": "u8"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "carrier",
+            "type": "pubkey"
+          },
+          {
+            "name": "load_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "manifest_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "registered_count",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BatchStage",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "AtSource"
+          },
+          {
+            "name": "InTransit"
+          },
+          {
+            "name": "Arrived"
           }
         ]
       }
@@ -4404,6 +4889,9 @@
         "variants": [
           {
             "name": "Origin"
+          },
+          {
+            "name": "Departure"
           }
         ]
       }
@@ -4941,6 +5429,105 @@
           },
           {
             "name": "Redeemed"
+          },
+          {
+            "name": "Prepared"
+          },
+          {
+            "name": "InTransit"
+          },
+          {
+            "name": "Loaded"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ManifestBatch",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "index",
+            "type": "u8"
+          },
+          {
+            "name": "batch_count",
+            "type": "u8"
+          },
+          {
+            "name": "quantity_kg",
+            "type": "u64"
+          },
+          {
+            "name": "carrier",
+            "type": "pubkey"
+          },
+          {
+            "name": "load_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "manifest_digest",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "holder",
+            "type": "pubkey"
+          },
+          {
+            "name": "stage",
+            "type": {
+              "defined": {
+                "name": "BatchStage"
+              }
+            }
+          },
+          {
+            "name": "sequence",
+            "type": "u64"
+          },
+          {
+            "name": "observation_count",
+            "type": "u32"
+          },
+          {
+            "name": "departed_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "arrived_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }
@@ -5683,6 +6270,15 @@
         "variants": [
           {
             "name": "Normal"
+          },
+          {
+            "name": "ReviewRequired"
+          },
+          {
+            "name": "Disputed"
+          },
+          {
+            "name": "Frozen"
           }
         ]
       }
@@ -5729,6 +6325,233 @@
           },
           {
             "name": "DevnetTokenSimulation"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Shipment",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "shipment_id",
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "source",
+            "type": "pubkey"
+          },
+          {
+            "name": "source_custodian",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_custodian",
+            "type": "pubkey"
+          },
+          {
+            "name": "committed_kg",
+            "type": "u64"
+          },
+          {
+            "name": "locked_kg",
+            "type": "u64"
+          },
+          {
+            "name": "batch_count",
+            "type": "u8"
+          },
+          {
+            "name": "manifest_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "departure_document",
+            "type": "pubkey"
+          },
+          {
+            "name": "registered_count",
+            "type": "u8"
+          },
+          {
+            "name": "registered_kg",
+            "type": "u64"
+          },
+          {
+            "name": "departed_count",
+            "type": "u8"
+          },
+          {
+            "name": "departed_kg",
+            "type": "u64"
+          },
+          {
+            "name": "arrived_count",
+            "type": "u8"
+          },
+          {
+            "name": "arrived_kg",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "ShipmentStatus"
+              }
+            }
+          },
+          {
+            "name": "prepared_at",
+            "type": "i64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShipmentCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "released_kg",
+            "type": "u64"
+          },
+          {
+            "name": "lot_revision",
+            "type": "u64"
+          },
+          {
+            "name": "revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShipmentPrepared",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "shipment",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "source",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "committed_kg",
+            "type": "u64"
+          },
+          {
+            "name": "locked_kg",
+            "type": "u64"
+          },
+          {
+            "name": "batch_count",
+            "type": "u8"
+          },
+          {
+            "name": "manifest_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "departure_document",
+            "type": "pubkey"
+          },
+          {
+            "name": "lot_revision",
+            "type": "u64"
+          },
+          {
+            "name": "position_revision",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ShipmentStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Prepared"
+          },
+          {
+            "name": "InTransit"
+          },
+          {
+            "name": "Arrived"
+          },
+          {
+            "name": "Cancelled"
           }
         ]
       }

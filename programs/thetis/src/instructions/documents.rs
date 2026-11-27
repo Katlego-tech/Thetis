@@ -47,11 +47,15 @@ pub fn attest_document(
     valid_until: i64,
 ) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    check_attest_authority(&ctx.accounts.authority, now)?;
-    require!(
-        ctx.accounts.organisation.role == Role::DocumentIssuer,
-        ThetisError::WrongRole
-    );
+    check_attest_authority(&ctx.accounts.authority, now, kind)?;
+    let eligible = match kind {
+        DocumentKind::Origin => matches!(ctx.accounts.organisation.role, Role::DocumentIssuer),
+        DocumentKind::Departure => matches!(
+            ctx.accounts.organisation.role,
+            Role::DocumentIssuer | Role::Custodian | Role::Terminal
+        ),
+    };
+    require!(eligible, ThetisError::WrongRole);
     require!(valid_until > now, ThetisError::InvalidField);
     require!(version != 0, ThetisError::InvalidField);
 
@@ -93,7 +97,7 @@ pub struct RevokeDocument<'info> {
 
 pub fn revoke_document(ctx: Context<RevokeDocument>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    check_attest_authority(&ctx.accounts.authority, now)?;
+    check_attest_authority(&ctx.accounts.authority, now, ctx.accounts.document.kind)?;
     let document = &mut ctx.accounts.document;
     require_keys_eq!(
         ctx.accounts.organisation.key(),
@@ -110,14 +114,22 @@ pub fn revoke_document(ctx: Context<RevokeDocument>) -> Result<()> {
     Ok(())
 }
 
-fn check_attest_authority(authority: &Authority, now: i64) -> Result<()> {
+/// The scope a document kind needs to be attested or revoked.
+fn kind_scope(kind: DocumentKind) -> u16 {
+    match kind {
+        DocumentKind::Origin => scope::ATTEST_ORIGIN,
+        DocumentKind::Departure => scope::ATTEST_TRANSPORT,
+    }
+}
+
+fn check_attest_authority(authority: &Authority, now: i64, kind: DocumentKind) -> Result<()> {
     require!(
         authority.revoked_at.is_none(),
         ThetisError::AuthorityRevoked
     );
     require!(authority.expires_at > now, ThetisError::AuthorityExpired);
     require!(
-        authority.scopes & scope::ATTEST_ORIGIN != 0,
+        authority.scopes & kind_scope(kind) != 0,
         ThetisError::ScopeMissing
     );
     Ok(())

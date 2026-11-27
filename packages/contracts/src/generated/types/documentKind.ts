@@ -8,7 +8,7 @@
 
 import { combineCodec, getEnumDecoder, getEnumEncoder, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder } from '@solana/kit';
 
-export const DocumentKind = { 0: 'Origin', Origin: 0 } as const;
+export const DocumentKind = { 0: 'Origin', 1: 'Departure', Origin: 0, Departure: 1 } as const;
 
 export type DocumentKind = (typeof DocumentKind)[Exclude<keyof typeof DocumentKind, number>];
 

@@ -264,3 +264,40 @@ pub struct Borrowed {
     pub revision: u64,
     pub pool_revision: u64,
 }
+
+#[event]
+pub struct ShipmentPrepared {
+    pub shipment: Pubkey,
+    pub lot: Pubkey,
+    pub owner: Pubkey,
+    pub source: Pubkey,
+    pub destination: Pubkey,
+    pub committed_kg: u64,
+    pub locked_kg: u64,
+    pub batch_count: u8,
+    pub manifest_root: [u8; 32],
+    pub departure_document: Pubkey,
+    pub lot_revision: u64,
+    pub position_revision: u64,
+}
+
+#[event]
+pub struct BatchRegistered {
+    pub batch: Pubkey,
+    pub shipment: Pubkey,
+    pub index: u8,
+    pub quantity_kg: u64,
+    pub carrier: Pubkey,
+    pub load_digest: [u8; 32],
+    pub manifest_digest: [u8; 32],
+    pub registered_count: u8,
+}
+
+#[event]
+pub struct ShipmentCancelled {
+    pub shipment: Pubkey,
+    pub lot: Pubkey,
+    pub released_kg: u64,
+    pub lot_revision: u64,
+    pub revision: u64,
+}

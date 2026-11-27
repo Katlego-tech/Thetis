@@ -8,7 +8,7 @@
 
 import { combineCodec, getEnumDecoder, getEnumEncoder, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder } from '@solana/kit';
 
-export const Restriction = { 0: 'Normal', Normal: 0 } as const;
+export const Restriction = { 0: 'Normal', 1: 'ReviewRequired', 2: 'Disputed', 3: 'Frozen', Normal: 0, ReviewRequired: 1, Disputed: 2, Frozen: 3 } as const;
 
 export type Restriction = (typeof Restriction)[Exclude<keyof typeof Restriction, number>];
 
