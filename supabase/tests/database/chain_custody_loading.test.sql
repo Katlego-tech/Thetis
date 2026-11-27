@@ -383,7 +383,7 @@ select throws_ok(
   'P0001', 'ROW_INVALID', 'a document digest that is not 64 lowercase hex is ROW_INVALID');
 select throws_ok(
   $$select public.indexer_apply(pg_temp.one(600, 700, 7, null, jsonb_build_array(
-    pg_temp.acceptance(4294967296, 1, 700, 7))))$$,
+    jsonb_set(pg_temp.acceptance(1, 1, 700, 7), '{row,version}', '4294967296'))))$$,
   'P0001', 'ROW_INVALID', 'an acceptance version above u32 is ROW_INVALID');
 select throws_ok(
   $$select public.indexer_apply(pg_temp.one(600, 700, 7,
