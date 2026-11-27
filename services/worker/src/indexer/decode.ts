@@ -20,6 +20,7 @@ import {
   getBorrowedEventDecoder,
   getClassRegisteredEventDecoder,
   getCustodianClassAccreditedEventDecoder,
+  getCustodyHandedOverEventDecoder,
   getDepositedEventDecoder,
   getDocumentAttestedEventDecoder,
   getDocumentRevokedEventDecoder,
@@ -45,11 +46,14 @@ import {
   getUnitsTransferredEventDecoder,
   getValuationSetEventDecoder,
   getWithdrawnEventDecoder,
+  HandoverStage,
   identifyThetisEvent,
   identifyThetisInstruction,
+  LotState,
   PaymentPurpose,
   parseThetisInstruction,
   Role,
+  ShipmentStatus,
   THETIS_PROGRAM_ADDRESS,
   ThetisEvent,
   ThetisInstruction,
@@ -95,6 +99,7 @@ export const HANDLED_INSTRUCTIONS = [
   "PrepareShipment",
   "RegisterBatch",
   "CancelShipment",
+  "Handover",
 ] as const;
 
 export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
@@ -132,6 +137,7 @@ export const HANDLED_EVENTS = [
   "ShipmentPrepared",
   "BatchRegistered",
   "ShipmentCancelled",
+  "CustodyHandedOver",
 ] as const;
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
@@ -220,6 +226,7 @@ const EMITS: Record<
   PrepareShipment: { event: "ShipmentPrepared", required: true },
   RegisterBatch: { event: "BatchRegistered", required: true },
   CancelShipment: { event: "ShipmentCancelled", required: true },
+  Handover: { event: "CustodyHandedOver", required: true },
 };
 
 /**
@@ -363,6 +370,14 @@ const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
     ["shipment", "shipment"],
     ["lot", "lot"],
   ],
+  CustodyHandedOver: [
+    ["handover", "handover"],
+    ["batch", "batch"],
+    ["shipment", "shipment"],
+    ["lot", "lot"],
+    ["from", "fromOrg"],
+    ["to", "toOrg"],
+  ],
 };
 
 const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
@@ -398,6 +413,7 @@ const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
   ShipmentPrepared: getShipmentPreparedEventDecoder,
   BatchRegistered: getBatchRegisteredEventDecoder,
   ShipmentCancelled: getShipmentCancelledEventDecoder,
+  CustodyHandedOver: getCustodyHandedOverEventDecoder,
 };
 
 /** Event fields that hold an enum, by event, with the generated name table of each. */
@@ -405,7 +421,36 @@ const ENUM_FIELDS: Partial<Record<HandledEvent, Record<string, Record<number, st
   OrganisationAccredited: { role: Role as unknown as Record<number, string> },
   DocumentAttested: { kind: DocumentKind as unknown as Record<number, string> },
   PaymentConfirmed: { purpose: PaymentPurpose as unknown as Record<number, string> },
+  CustodyHandedOver: {
+    stage: HandoverStage as unknown as Record<number, string>,
+    shipmentStatus: ShipmentStatus as unknown as Record<number, string>,
+    lotState: LotState as unknown as Record<number, string>,
+  },
 };
+
+/**
+ * The handover consistency rules (live-custody.md §4.1.2): the indexer decides from these fields
+ * whether a handover advances the lot revision, so a contradiction halts here. A shipment's first
+ * handover is its first departure; an arrived shipment is an arrival that stored the lot; any other
+ * handover leaves the shipment and the lot in transit.
+ */
+function handoverInconsistency(value: Record<string, unknown>): string | null {
+  const name = (names: Record<number, string>, field: string) =>
+    names[value[field] as number] ?? String(value[field]);
+  const stage = name(HandoverStage as unknown as Record<number, string>, "stage");
+  const shipment = name(ShipmentStatus as unknown as Record<number, string>, "shipmentStatus");
+  const lot = name(LotState as unknown as Record<number, string>, "lotState");
+  if (value.shipmentRevision === 1n) {
+    if (stage === "Departure" && shipment === "InTransit" && lot === "InTransit") return null;
+    return `CustodyHandedOver is the shipment's first handover (shipment revision 1) but is stage ${stage}, shipment ${shipment}, lot ${lot}; expected Departure, InTransit, InTransit`;
+  }
+  if (shipment === "Arrived") {
+    if (stage === "Arrival" && lot === "Stored") return null;
+    return `CustodyHandedOver leaves the shipment Arrived with stage ${stage} and lot ${lot}; expected Arrival and Stored`;
+  }
+  if (shipment === "InTransit" && lot === "InTransit") return null;
+  return `CustodyHandedOver leaves the shipment ${shipment} and the lot ${lot}; expected InTransit and InTransit`;
+}
 
 export type DecodedEvent = {
   /** Position of the event line among all Thetis event lines of the transaction, from 0. */
@@ -822,6 +867,10 @@ export function decodeTransaction(
             [String(event.value[field]), String(entry.accounts[account])],
           );
         }
+      }
+      if (event.name === "CustodyHandedOver") {
+        const inconsistency = handoverInconsistency(event.value);
+        if (inconsistency !== null) throw halt("EVENT_MISMATCH", signature, inconsistency);
       }
       if (event.name === "Repaid") {
         const pooled = event.value.pool !== undefined;
