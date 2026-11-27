@@ -28,7 +28,8 @@ export type ProjectionTable =
   | "chain_batches"
   | "chain_handovers"
   | "chain_loading_intents"
-  | "chain_handoff_acceptances";
+  | "chain_handoff_acceptances"
+  | "chain_incidents";
 export type JsonValue =
   | string
   | number
@@ -133,6 +134,7 @@ export const PROJECTION_TABLES: readonly ProjectionTable[] = [
   "chain_handovers",
   "chain_loading_intents",
   "chain_handoff_acceptances",
+  "chain_incidents",
 ];
 
 /** Columns every projection table starts with and every row carries. */
@@ -389,6 +391,22 @@ export const ACCOUNT_COLUMNS: Record<ProjectionTable, readonly string[]> = {
     "accepted_at",
     "version",
   ],
+  chain_incidents: [
+    "incident_id_hex",
+    "lot",
+    "batch",
+    "inspector",
+    "inspector_org_id",
+    "method_code",
+    "expected_kg",
+    "observed_kg",
+    "tolerance_bps",
+    "within_tolerance",
+    "evidence_digest_hex",
+    "observed_at",
+    "restriction_after",
+    "status",
+  ],
 };
 
 /** Columns that come from events or from Supabase, not from the account read. */
@@ -415,6 +433,7 @@ export const EXTRA_COLUMNS: Record<ProjectionTable, readonly string[]> = {
   chain_handovers: [],
   chain_loading_intents: ["cancelled_by"],
   chain_handoff_acceptances: ["event_version"],
+  chain_incidents: [],
 };
 
 const TRANSACTION_COLUMNS = [

@@ -1,15 +1,12 @@
-// Phase 3, the shipment, handover, observation and loading parts: shipments, batches, Departure
-// documents, intent cancellation, custody handovers, observations, loading intents, acceptances and
-// the loading with its loan hand-offs into the read model (live-custody.md §4.1, §9.1 tests 0–11,
-// 13–16, 18, 19 and 21–25, its T063d.1–T063d.4 pre-check folds). Every history here is synthetic
-// (fixtures/custody.ts).
+// Phase 3 into the read model: shipments, batches, Departure documents, intent cancellation, custody
+// handovers, observations, loading intents, acceptances, the loading with its loan hand-offs, and the
+// shortfalls and restrictions (live-custody.md §4.1, §9.1 tests 0–11, 13–16, 18, 19, 21–24 and
+// 26–28, its T063d.1–T063d.5 pre-check folds). Every history here is synthetic (fixtures/custody.ts).
 
 import { readFileSync } from "node:fs";
-import { type Address, getAddressEncoder, getBase58Decoder } from "@solana/kit";
+import { type Address, getAddressEncoder, getBase58Decoder, none, some } from "@solana/kit";
 import {
   findAuthorityPda,
-  findIncidentPda,
-  getAttestShortfallInstruction,
   getBatchRegisteredEventDecoder,
   getBatchRegisteredEventEncoder,
   getCustodyHandedOverEventDecoder,
@@ -34,9 +31,12 @@ import {
   getShipmentEncoder,
   getShipmentPreparedEventDecoder,
   getShipmentPreparedEventEncoder,
+  getShortfallAttestedEventDecoder,
+  getShortfallAttestedEventEncoder,
   HandoverStage,
   LotState,
   ObservationKind,
+  Restriction,
   type Shipment,
   ShipmentStatus,
 } from "@thetis/contracts";
@@ -52,6 +52,7 @@ import {
   manifestProof,
   manifestRoot,
   routeHistory,
+  shortfallHistory,
 } from "../fixtures/custody.ts";
 import { counts, expectHalt, harness, rows } from "../fixtures/harness.ts";
 import {
@@ -73,6 +74,9 @@ const IDL = new URL("../../../../packages/contracts/idl/thetis.json", import.met
 const CUSTODY_TABLES = ["chain_shipments", "chain_batches"];
 const HANDOVER_TABLE = "chain_handovers";
 const LOADING_TABLES = ["chain_loading_intents", "chain_handoff_acceptances"];
+const INCIDENT_TABLE = "chain_incidents";
+/** SYNTHETIC: Inspector Test Org's org_id (live-custody.md §9.1; not in seed.sql). */
+const INSPECTOR_ORG_ID = "11000000-0000-4000-8000-000000000008";
 const LENDING_TABLES = [
   "chain_facilities",
   "chain_valuations",
@@ -100,10 +104,9 @@ function allCounts(store: ReadModelStore) {
   return {
     ...counts(store),
     ...Object.fromEntries(
-      [...LENDING_TABLES, ...CUSTODY_TABLES, HANDOVER_TABLE, ...LOADING_TABLES].map((table) => [
-        table,
-        rows(store, table).length,
-      ]),
+      [...LENDING_TABLES, ...CUSTODY_TABLES, HANDOVER_TABLE, ...LOADING_TABLES, INCIDENT_TABLE].map(
+        (table) => [table, rows(store, table).length],
+      ),
     ),
   };
 }
@@ -252,30 +255,23 @@ describe("Phase 3 custody, the shipment part", () => {
     );
   });
 
-  it("1. handles every instruction and event of the IDL it is built on, but shortfalls and restrictions", () => {
-    // The IDL at main has 39 instructions and 40 events; this slice handles all but
-    // attest_shortfall and set_restriction and their two events, which T063d.5 indexes
-    // (live-custody.md, T063d.4 pre-check fold 5).
+  it("1. handles every instruction and event of the IDL it is built on", () => {
+    // The IDL at main has 39 instructions and 40 events, and T063d.5 handles the last two of each
+    // (live-custody.md, T063d.5 pre-check fold 1): nothing is left unhandled.
     const idl = JSON.parse(readFileSync(IDL, "utf8")) as {
       instructions: { name: string }[];
       events: { name: string }[];
     };
     expect(idl.instructions).toHaveLength(39);
     expect(idl.events).toHaveLength(40);
-    const unhandledInstructions = ["AttestShortfall", "SetRestriction"];
-    const unhandledEvents = ["ShortfallAttested", "RestrictionSet"];
     const instructions = idl.instructions.map((entry) => pascal(entry.name));
-    for (const name of unhandledInstructions) expect(instructions).toContain(name);
-    expect([...HANDLED_INSTRUCTIONS].sort()).toEqual(
-      instructions.filter((name) => !unhandledInstructions.includes(name)).sort(),
-    );
-    expect(HANDLED_INSTRUCTIONS).toHaveLength(37);
+    for (const name of ["AttestShortfall", "SetRestriction"]) expect(instructions).toContain(name);
+    expect([...HANDLED_INSTRUCTIONS].sort()).toEqual([...instructions].sort());
+    expect(HANDLED_INSTRUCTIONS).toHaveLength(39);
     const eventNames = idl.events.map((entry) => entry.name);
-    for (const name of unhandledEvents) expect(eventNames).toContain(name);
-    expect([...HANDLED_EVENTS].sort()).toEqual(
-      eventNames.filter((name) => !unhandledEvents.includes(name)).sort(),
-    );
-    expect(HANDLED_EVENTS).toHaveLength(38);
+    for (const name of ["ShortfallAttested", "RestrictionSet"]) expect(eventNames).toContain(name);
+    expect([...HANDLED_EVENTS].sort()).toEqual([...eventNames].sort());
+    expect(HANDLED_EVENTS).toHaveLength(40);
   });
 
   it("2. indexes the shipment history with one row per shipment revision, lot revision, registration and created account", async () => {
@@ -1898,50 +1894,327 @@ describe("Phase 3 custody, the shipment part", () => {
     });
   });
 
-  it("25. halts with UNKNOWN_INSTRUCTION on its own instance's attest_shortfall until T063d.5", async () => {
-    const scenario = await loadingHistory();
-    const sponsor = await syntheticSigner(97);
-    // The indexer halts at decode, before it reads any account, so the inspector is a bare synthetic
-    // wallet; the instruction is the generated builder's (live-custody.md, T063d.4 pre-check fold 6).
-    const inspector = await syntheticSigner(98);
-    const [inspectorAuthority] = await findAuthorityPda({
-      protocol: scenario.protocol as Address,
-      wallet: inspector.address,
-    });
-    const incidentId = new Uint8Array(16).fill(0x25);
-    const [incident] = await findIncidentPda({
-      protocol: scenario.protocol as Address,
-      incidentId,
-    });
-    const shortfall: FakeTransaction = thetisTransaction({
-      signature: syntheticSignature(254),
-      feePayer: sponsor.address,
-      name: "AttestShortfall",
-      events: [],
-      instruction: getAttestShortfallInstruction({
-        sponsor,
-        protocol: scenario.protocol as Address,
-        inspectorOrg: inspector.address,
-        inspectorAuthority,
-        lot: scenario.lot as Address,
-        incident,
-        incidentId,
-        observedKg: 4_900_000n,
-        toleranceBps: 50,
-        methodCode: "WEIGHBRIDGE",
-        evidenceDigest: new Uint8Array(32).fill(0x5f),
-        observedAt: 1_790_000_000n,
-        validUntil: 1_800_000_000n,
-      }),
-    });
-    const slot = lastSlot(scenario.history) + 1000;
-    scenario.history.push({ slot, blockTime: null, transactions: [shortfall], accounts: {} });
+  it("26. indexes the shortfalls and restrictions with one lot key per advance", async () => {
+    const scenario = await shortfallHistory();
     const h = await harness(scenario.history);
-    await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
-      step: "decode",
-      signature: shortfall.signature,
-      mentions: ["AttestShortfall, which is not handled"],
+    await h.pollUntilLive();
+    const incidents = scenario.incidents as { within: string; outside: string; whole: string };
+    const within = step(scenario, "shortfallWithin");
+    const outside = step(scenario, "shortfallOutside");
+    const whole = step(scenario, "shortfallWhole");
+    const frozen = step(scenario, "restrictFrozen");
+    const normal = step(scenario, "restrictNormal");
+    const b2 = scenario.batches.b2;
+
+    // Six transactions and six events beyond the route's 27 and 26.
+    expect(allCounts(h.store)).toMatchObject({
+      chain_transactions: 33,
+      chain_events: 32,
+      chain_incidents: 3,
     });
-    expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
+    // Revision 6 was advanced by the outside-tolerance shortfall, which is keyed by its incident only.
+    expect(keysOf(h.store, "lot", "lot_revision", scenario.lot)).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "7",
+      "8",
+    ]);
+    expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({
+      state: "Stored",
+      restriction: "Normal",
+      revision: "8",
+      event_revision: "8",
+      commitment: "finalized",
+    });
+    expect(row(h.store, "chain_organisations", scenario.inspector as string)).toMatchObject({
+      org_id: INSPECTOR_ORG_ID,
+      role: "Inspector",
+      display_name: "Inspector Test Org",
+      slug: null,
+    });
+
+    const incident = (address: string, fields: Record<string, unknown>) =>
+      expect(row(h.store, INCIDENT_TABLE, address)).toMatchObject({
+        lot: scenario.lot,
+        inspector: scenario.inspector,
+        inspector_org_id: INSPECTOR_ORG_ID,
+        method_code: "WEIGH",
+        expected_kg: "5000000",
+        observed_kg: "4990000",
+        evidence_digest_hex: "99".repeat(32),
+        status: "Open",
+        commitment: "finalized",
+        ...fields,
+      });
+    incident(incidents.within, {
+      incident_id_hex: "88".repeat(16),
+      batch: b2,
+      tolerance_bps: 50,
+      within_tolerance: true,
+      observed_at: String(unixOf(within.blockTime)),
+      restriction_after: "Normal",
+    });
+    incident(incidents.outside, {
+      incident_id_hex: "89".repeat(16),
+      batch: b2,
+      tolerance_bps: 0,
+      within_tolerance: false,
+      observed_at: String(unixOf(outside.blockTime)),
+      restriction_after: "ReviewRequired",
+    });
+    incident(incidents.whole, {
+      incident_id_hex: "8a".repeat(16),
+      batch: null,
+      tolerance_bps: 0,
+      within_tolerance: false,
+      observed_at: String(unixOf(whole.blockTime)),
+      restriction_after: "ReviewRequired",
+    });
+
+    const noKeys = {
+      lot: null,
+      lot_revision: null,
+      org_id: null,
+      facility: null,
+      loan: null,
+      loan_revision: null,
+      shipment: null,
+      shipment_revision: null,
+      batch_sequence: null,
+      observation_index: null,
+      acceptance: null,
+      acceptance_version: null,
+    };
+    const named = (event: string) =>
+      events(h.store)
+        .filter((entry) => entry.event === event)
+        .sort((a, b) => Number(a.slot) - Number(b.slot));
+    const attested = (
+      at: typeof within,
+      address: string,
+      batch: string | null,
+      data: Record<string, unknown>,
+    ) =>
+      expect.objectContaining({
+        ...noKeys,
+        signature: at.signature,
+        event_index: 0,
+        instruction: "AttestShortfall",
+        scope: "incident",
+        created: address,
+        batch,
+        data: expect.objectContaining({
+          incident: address,
+          lot: scenario.lot,
+          batch,
+          inspector: scenario.inspector,
+          expectedKg: "5000000",
+          observedKg: "4990000",
+          ...data,
+        }),
+      });
+    expect(named("ShortfallAttested")).toEqual([
+      attested(within, incidents.within, b2, {
+        toleranceBps: 50,
+        withinTolerance: true,
+        restriction: "Normal",
+        lotRevision: "5",
+      }),
+      attested(outside, incidents.outside, b2, {
+        toleranceBps: 0,
+        withinTolerance: false,
+        restriction: "ReviewRequired",
+        lotRevision: "6",
+      }),
+      attested(whole, incidents.whole, null, {
+        toleranceBps: 0,
+        withinTolerance: false,
+        restriction: "ReviewRequired",
+        lotRevision: "6",
+      }),
+    ]);
+    const restricted = (at: typeof within, revision: string, data: Record<string, unknown>) =>
+      expect.objectContaining({
+        ...noKeys,
+        signature: at.signature,
+        instruction: "SetRestriction",
+        scope: "lot",
+        lot: scenario.lot,
+        lot_revision: revision,
+        created: null,
+        batch: null,
+        data: { lot: scenario.lot, revision, ...data },
+      });
+    expect(named("RestrictionSet")).toEqual([
+      restricted(frozen, "7", {
+        from: "ReviewRequired",
+        to: "Frozen",
+        reasonDigest: "bb".repeat(32),
+      }),
+      restricted(normal, "8", { from: "Frozen", to: "Normal", reasonDigest: "bc".repeat(32) }),
+    ]);
+
+    // Replayed from the first signature, every transaction and event is written once.
+    const again = await harness(scenario.history);
+    await again.pollUntilLive();
+    expect(allCounts(again.store)).toEqual(allCounts(h.store));
+  });
+
+  it("27. an outside-tolerance shortfall on a ReviewRequired lot repeats the lot revision, in the same slot or a later one", async () => {
+    // A later slot: shortfallHistory as listed, the whole-lot shortfall one slot after the one that
+    // made the lot ReviewRequired.
+    const later = await shortfallHistory();
+    expect(step(later, "shortfallWhole").slot).toBe(step(later, "shortfallOutside").slot + 1000);
+    // The same slot: the whole-lot shortfall moves into the outside-tolerance shortfall's slot, with
+    // its accounts (the slot's state is the state after both).
+    const same = await shortfallHistory();
+    const outsideSlot = slotOf(same.history, step(same, "shortfallOutside").signature);
+    const wholeSlot = slotOf(same.history, step(same, "shortfallWhole").signature);
+    outsideSlot.transactions.push(...wholeSlot.transactions);
+    outsideSlot.accounts = { ...outsideSlot.accounts, ...wholeSlot.accounts };
+    same.history.splice(same.history.indexOf(wholeSlot), 1);
+
+    for (const scenario of [later, same]) {
+      const h = await harness(scenario.history);
+      await h.pollUntilLive();
+      const incidents = scenario.incidents as { outside: string; whole: string };
+      expect(allCounts(h.store)).toMatchObject({ chain_events: 32, chain_incidents: 3 });
+      expect(keysOf(h.store, "lot", "lot_revision", scenario.lot)).toEqual([
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "7",
+        "8",
+      ]);
+      expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({
+        restriction: "Normal",
+        event_revision: "8",
+      });
+      const revisions = events(h.store)
+        .filter((entry) => entry.created === incidents.outside || entry.created === incidents.whole)
+        .map((entry) => (entry.data as Record<string, unknown>).lotRevision);
+      expect(revisions).toEqual(["6", "6"]);
+      expect(row(h.store, INCIDENT_TABLE, incidents.whole)).toMatchObject({
+        restriction_after: "ReviewRequired",
+      });
+    }
+
+    // Stopped before the restrictions, the lot's event_revision is the candidate's 6 in both forms.
+    for (const scenario of [later, same]) {
+      const restrictions = new Set([
+        step(scenario, "restrictFrozen").signature,
+        step(scenario, "restrictNormal").signature,
+      ]);
+      const truncated = scenario.history.filter(
+        (entry) => !entry.transactions.some((tx) => restrictions.has(tx.signature)),
+      );
+      const h = await harness(truncated);
+      await h.pollUntilLive();
+      expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({
+        restriction: "ReviewRequired",
+        revision: "6",
+        event_revision: "6",
+      });
+    }
+  });
+
+  it("28. halts with REVISION_SEQUENCE when a shortfall's lot revision is below the stored one", async () => {
+    const cases: { name: CustodyStep; revision: bigint; floor: string }[] = [
+      // An outside-tolerance shortfall on the ReviewRequired lot (stored at 6) naming 5.
+      { name: "shortfallWhole", revision: 5n, floor: "6" },
+      // A within-tolerance repeat on the Normal lot (stored at 5) naming 4.
+      { name: "shortfallWithin", revision: 4n, floor: "5" },
+    ];
+    for (const { name, revision, floor } of cases) {
+      const scenario = await shortfallHistory();
+      rewriteEvent(
+        stepTx(scenario, name),
+        0,
+        getShortfallAttestedEventDecoder(),
+        getShortfallAttestedEventEncoder(),
+        (value) => ({ ...value, lotRevision: revision }),
+      );
+      const h = await harness(scenario.history);
+      await expectHalt(h, await h.poll(), "REVISION_SEQUENCE", {
+        step: "sequence",
+        signature: null,
+        mentions: [`lot ${scenario.lot}`, String(revision), floor],
+      });
+      expect((await h.checkpoint())?.indexedThroughSlot).toBe(step(scenario, name).slot - 1000);
+      expect(rows(h.store, INCIDENT_TABLE).length).toBe(name === "shortfallWhole" ? 2 : 0);
+    }
+  });
+
+  it("28a. halts with REVISION_SEQUENCE when an outside-tolerance shortfall skips a lot revision", async () => {
+    // The lot is stored at 5; a candidate naming 7 leaves 6 unaccounted for.
+    const scenario = await shortfallHistory();
+    rewriteEvent(
+      stepTx(scenario, "shortfallOutside"),
+      0,
+      getShortfallAttestedEventDecoder(),
+      getShortfallAttestedEventEncoder(),
+      (value) => ({ ...value, lotRevision: 7n }),
+    );
+    const h = await harness(scenario.history);
+    await expectHalt(h, await h.poll(), "REVISION_SEQUENCE", {
+      step: "sequence",
+      signature: null,
+      mentions: [`lot ${scenario.lot}`],
+    });
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(
+      step(scenario, "shortfallOutside").slot - 1000,
+    );
+  });
+
+  it("28b. halts with EVENT_MISMATCH when an outside-tolerance shortfall leaves the lot Normal, or names another batch than its instruction", async () => {
+    type Shortfall = ReturnType<ReturnType<typeof getShortfallAttestedEventDecoder>["decode"]>;
+    const cases: {
+      name: CustodyStep;
+      edit: (value: Shortfall, b2: string) => Shortfall;
+      mentions: (scenario: CustodyScenario) => string[];
+    }[] = [
+      {
+        name: "shortfallOutside",
+        edit: (value) => ({ ...value, restriction: Restriction.Normal }),
+        mentions: () => ["ShortfallAttested", "Normal"],
+      },
+      {
+        // The whole-lot attestation names no batch; its event claims B2.
+        name: "shortfallWhole",
+        edit: (value, b2) => ({ ...value, batch: some(b2 as Address) }),
+        mentions: (scenario) => ["ShortfallAttested.batch", scenario.batches.b2],
+      },
+      {
+        // The batch attestation names B2; its event names none.
+        name: "shortfallWithin",
+        edit: (value) => ({ ...value, batch: none() }),
+        mentions: (scenario) => ["ShortfallAttested.batch", scenario.batches.b2],
+      },
+    ];
+    for (const { name, edit, mentions } of cases) {
+      const scenario = await shortfallHistory();
+      const tx = stepTx(scenario, name);
+      rewriteEvent(
+        tx,
+        0,
+        getShortfallAttestedEventDecoder(),
+        getShortfallAttestedEventEncoder(),
+        (value) => edit(value, scenario.batches.b2),
+      );
+      const h = await harness(scenario.history);
+      await expectHalt(h, await h.poll(), "EVENT_MISMATCH", {
+        step: "decode",
+        signature: tx.signature,
+        mentions: mentions(scenario),
+      });
+      expect((await h.checkpoint())?.indexedThroughSlot).toBe(step(scenario, name).slot - 1000);
+    }
   });
 });

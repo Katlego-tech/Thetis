@@ -23,6 +23,7 @@ import {
   findBatchPda,
   findFacilityPda,
   findHandoverPda,
+  findIncidentPda,
   findIntakePda,
   findIntentPda,
   findLoadingIntentPda,
@@ -40,6 +41,7 @@ import {
   getAccreditOrganisationInstruction,
   getAdvanceRecordedEventEncoder,
   getAttestDocumentInstruction,
+  getAttestShortfallInstruction,
   getBatchRegisteredEventEncoder,
   getCancelShipmentInstruction,
   getCreateLoadingIntentInstruction,
@@ -54,6 +56,7 @@ import {
   getHandoffAcceptanceEncoder,
   getHandoverInstruction,
   getHandoverRecordEncoder,
+  getIncidentEncoder,
   getIntakeIdentityEncoder,
   getIssueLotInstruction,
   getLoadingAcceptedEventEncoder,
@@ -81,13 +84,17 @@ import {
   getRegisterBatchInstruction,
   getReleaseIntentCreatedEventEncoder,
   getReleaseIntentEncoder,
+  getRestrictionSetEventEncoder,
+  getSetRestrictionInstruction,
   getSetValuationInstruction,
   getShipmentCancelledEventEncoder,
   getShipmentEncoder,
   getShipmentPreparedEventEncoder,
+  getShortfallAttestedEventEncoder,
   getValuationEncoder,
   getValuationSetEventEncoder,
   HandoverStage,
+  IncidentStatus,
   IntentStatus,
   LoadingStatus,
   LoanStatus,
@@ -231,13 +238,20 @@ export type CustodyStep =
   | "reacceptLoading"
   | "recordLoading"
   | "attestDeparture2"
-  | "prepareS3";
+  | "prepareS3"
+  | "accreditInspector"
+  | "shortfallWithin"
+  | "shortfallOutside"
+  | "shortfallWhole"
+  | "restrictFrozen"
+  | "restrictNormal";
 
 /**
  * SYNTHETIC: one signature index per step (live-custody.md §9.1: k from 240; the route steps below
  * 240 because a synthetic signature index stops at 255, T063d.2 pre-check fold 6; 237 is
  * T063d.3's border observation, its pre-check fold 2; 224–229 the loading, T063d.4 pre-check folds 2
- * and 3; 220–222 the second loan of the two-loan loading, unused by any other custody step).
+ * and 3; 220–222 the second loan of the two-loan loading, unused by any other custody step; 210–215
+ * the shortfalls and restrictions, T063d.5 pre-check fold 3).
  */
 const STEP_SIGNATURE: Record<CustodyStep, number> = {
   accreditKopano: 240,
@@ -273,6 +287,13 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   reacceptLoading: 227,
   attestDeparture2: 228,
   prepareS3: 229,
+  // The shortfalls and restrictions (T063d.5 pre-check fold 3): §9.1's 261–266 exceed 255.
+  accreditInspector: 210,
+  shortfallWithin: 211,
+  shortfallOutside: 212,
+  shortfallWhole: 213,
+  restrictFrozen: 214,
+  restrictNormal: 215,
 };
 
 export type CustodyScenario = {
@@ -306,6 +327,9 @@ export type CustodyScenario = {
   loan2?: string;
   lock2?: string;
   acceptance2?: string;
+  /** Inspector Test Org's Organisation and the three incidents, in the shortfall variant only. */
+  inspector?: string;
+  incidents?: { within: string; outside: string; whole: string };
   firstSignature: string;
 };
 
@@ -321,6 +345,12 @@ const LOT_KG = 5_000_000n;
  */
 const HAULIER_NAME = "Haulier Two Test Org";
 const HAULIER_ORG_ID = "11000000-0000-4000-8000-000000000009";
+/**
+ * SYNTHETIC, test only (live-custody.md §9.1, program-custody.md §10's test-only name): the
+ * inspector of the shortfall variant, role Inspector. Not in seed.sql, so its slug is null.
+ */
+const INSPECTOR_NAME = "Inspector Test Org";
+const INSPECTOR_ORG_ID = "11000000-0000-4000-8000-000000000008";
 
 export type CustodyOptions = {
   secondIntent?: boolean;
@@ -347,6 +377,12 @@ export type CustodyOptions = {
   twoLoans?: boolean;
   /** No advance: every loan owes nothing, so a loading leaves it Active (loading.rs step 9). */
   noAdvance?: boolean;
+  /**
+   * With `route`, after the arrival (live-custody.md §9.1 shortfallHistory, T063d.5 pre-check folds):
+   * Inspector Test Org is accredited, attests three shortfalls (B2 within tolerance, B2 outside, the
+   * whole lot outside), and the accreditor sets the lot Frozen, then Normal.
+   */
+  shortfall?: boolean;
 };
 
 /**
@@ -538,6 +574,22 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
   const [haulier, haulierBump] = await findOrganisationPda({ protocol, orgId: haulierOrgId });
   const haulierName = await findOrganisationNamePda(protocol, HAULIER_NAME);
   const haulierAdmin = await syntheticSigner(47);
+  const inspectorOrgId = Uint8Array.from(Buffer.from(INSPECTOR_ORG_ID.replaceAll("-", ""), "hex"));
+  const [inspector, inspectorBump] = await findOrganisationPda({ protocol, orgId: inspectorOrgId });
+  const inspectorName = await findOrganisationNamePda(protocol, INSPECTOR_NAME);
+  // 48 is the Inspector Test Org authority (live-custody.md §9.1 keys).
+  const inspectorAdmin = await syntheticSigner(48);
+  const inspectorAuthority = await authorityOf(48);
+  const incidentOf = async (id: number) => {
+    const incidentId = fill(16, id);
+    const [address, bump] = await findIncidentPda({ protocol, incidentId });
+    return { address, bump, incidentId };
+  };
+  const incidents = {
+    within: await incidentOf(0x88),
+    outside: await incidentOf(0x89),
+    whole: await incidentOf(0x8a),
+  };
   // Who signs a handover for each party (live-custody.md §9.1 keys; 47 is fold 3's).
   const carrierKey: Record<string, number> = {
     [kopano]: 43,
@@ -554,6 +606,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     portOccupied: 0n,
     lotRevision: 0n,
     lotState: LotState.Stored as LotState,
+    lotRestriction: Restriction.Normal as Restriction,
     lotClass: kopanoClass as string,
     positionRevision: 0n,
     lotSupply: LOT_KG,
@@ -730,7 +783,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           mint,
           supplyKg: state.lotSupply,
           state: state.lotState,
-          restriction: Restriction.Normal,
+          restriction: state.lotRestriction,
           expiresAt: state.issuedAt + SEED.lotValiditySecs,
           revision: state.lotRevision,
           liveChildren: 0,
@@ -917,6 +970,18 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           admin: haulierAdmin.address,
           related: [],
           bump: haulierBump,
+        }),
+      ),
+    inspector: () =>
+      thetis(
+        bytesOf(getOrganisationEncoder(), {
+          protocol,
+          orgId: inspectorOrgId,
+          role: Role.Inspector,
+          displayName: INSPECTOR_NAME,
+          admin: inspectorAdmin.address,
+          related: [],
+          bump: inspectorBump,
         }),
       ),
     intake: () =>
@@ -1335,6 +1400,16 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
       : []),
     ...(options.route && options.loading === "ship"
       ? (["createLoadingIntent", "attestDeparture2", "prepareS3"] as const)
+      : []),
+    ...(options.route && options.shortfall
+      ? ([
+          "accreditInspector",
+          "shortfallWithin",
+          "shortfallOutside",
+          "shortfallWhole",
+          "restrictFrozen",
+          "restrictNormal",
+        ] as const)
       : []),
   ];
   const handovers: CustodyScenario["handovers"] = {};
@@ -1766,6 +1841,155 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           },
         };
         break;
+      case "accreditInspector":
+        made = {
+          tx: thetisTransaction({
+            signature,
+            feePayer: deployer.address,
+            name: "AccreditOrganisation",
+            systemCpi: true,
+            instruction: getAccreditOrganisationInstruction({
+              protocol,
+              organisation: inspector,
+              organisationName: inspectorName,
+              accreditor,
+              payer: deployer,
+              orgId: inspectorOrgId,
+              role: Role.Inspector,
+              displayName: INSPECTOR_NAME,
+              admin: inspectorAdmin.address,
+            }),
+            events: [
+              bytesOf(getOrganisationAccreditedEventEncoder(), {
+                organisation: inspector,
+                role: Role.Inspector,
+              }),
+            ],
+          }),
+          accounts: {
+            [inspector]: enc.inspector(),
+            [inspectorName]: thetis(bytesOf(getOrganisationNameEncoder(), {})),
+          },
+        };
+        break;
+      case "shortfallWithin":
+      case "shortfallOutside":
+      case "shortfallWhole": {
+        // shortfall.rs attest_shortfall (live-custody.md §9.1 shortfallHistory): B2, observed
+        // 4,990,000 kg, 50 bps (program-custody.md §6.2: within tolerance); B2 again at 0 bps
+        // (outside: a Normal lot becomes ReviewRequired at revision + 1); the whole lot at 0 bps
+        // (outside again: the lot is already ReviewRequired, so its revision repeats).
+        const incident =
+          step === "shortfallWithin"
+            ? incidents.within
+            : step === "shortfallOutside"
+              ? incidents.outside
+              : incidents.whole;
+        const b2 = s2.batches[0] as (typeof s2.batches)[number];
+        const onBatch = step !== "shortfallWhole";
+        const toleranceBps = step === "shortfallWithin" ? 50 : 0;
+        const expectedKg = onBatch ? b2.leafInput.quantityKg : state.lotSupply;
+        const observedKg = 4_990_000n;
+        const within = (expectedKg - observedKg) * 10_000n <= expectedKg * BigInt(toleranceBps);
+        if (!within && state.lotRestriction === Restriction.Normal) {
+          state.lotRestriction = Restriction.ReviewRequired;
+          state.lotRevision += 1n;
+        }
+        const evidenceDigest = fill(32, 0x99);
+        const batchKey = onBatch ? (b2.address as Address) : undefined;
+        made = {
+          tx: tx(
+            signature,
+            "AttestShortfall",
+            getAttestShortfallInstruction({
+              sponsor,
+              protocol,
+              inspectorOrg: inspector,
+              inspectorAuthority,
+              lot: lot as Address,
+              ...(batchKey ? { batch: batchKey } : {}),
+              incident: incident.address,
+              incidentId: incident.incidentId,
+              observedKg,
+              toleranceBps,
+              methodCode: "WEIGH",
+              evidenceDigest,
+              observedAt: now,
+              validUntil: now + 570n,
+            }),
+            bytesOf(getShortfallAttestedEventEncoder(), {
+              incident: incident.address,
+              lot,
+              batch: batchKey ? some(batchKey) : none(),
+              inspector,
+              expectedKg,
+              observedKg,
+              toleranceBps,
+              withinTolerance: within,
+              restriction: state.lotRestriction,
+              lotRevision: state.lotRevision,
+            }),
+            true,
+          ),
+          accounts: {
+            [incident.address]: thetis(
+              bytesOf(getIncidentEncoder(), {
+                protocol,
+                incidentId: incident.incidentId,
+                lot,
+                batch: batchKey ? some(batchKey) : none(),
+                inspector,
+                methodCode: "WEIGH",
+                expectedKg,
+                observedKg,
+                toleranceBps,
+                withinTolerance: within,
+                evidenceDigest,
+                observedAt: now,
+                restrictionAfter: state.lotRestriction,
+                status: IncidentStatus.Open,
+                bump: incident.bump,
+              }),
+            ),
+            [lot]: enc.lot(),
+          },
+        };
+        break;
+      }
+      case "restrictFrozen":
+      case "restrictNormal": {
+        // shortfall.rs set_restriction: the protocol accreditor moves the restriction, revision + 1.
+        const from = state.lotRestriction;
+        const to = step === "restrictFrozen" ? Restriction.Frozen : Restriction.Normal;
+        state.lotRestriction = to;
+        state.lotRevision += 1n;
+        const reasonDigest = fill(32, step === "restrictFrozen" ? 0xbb : 0xbc);
+        made = {
+          tx: thetisTransaction({
+            signature,
+            feePayer: accreditor.address,
+            name: "SetRestriction",
+            instruction: getSetRestrictionInstruction({
+              accreditor,
+              protocol,
+              lot: lot as Address,
+              restriction: to,
+              reasonDigest,
+            }),
+            events: [
+              bytesOf(getRestrictionSetEventEncoder(), {
+                lot,
+                from,
+                to,
+                reasonDigest,
+                revision: state.lotRevision,
+              }),
+            ],
+          }),
+          accounts: { [lot]: enc.lot() },
+        };
+        break;
+      }
       case "createLoadingIntent": {
         // loading.rs create_loading_intent, step 7: the intent snapshots the whole position and
         // bumps its revision (live-custody.md §9.1 loadingHistory, 258 → 224).
@@ -2084,6 +2308,16 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     lock,
     ...(options.loading ? { loadingIntent, acceptance } : {}),
     ...(options.twoLoans ? { loan2, lock2, acceptance2 } : {}),
+    ...(options.shortfall
+      ? {
+          inspector,
+          incidents: {
+            within: incidents.within.address,
+            outside: incidents.outside.address,
+            whole: incidents.whole.address,
+          },
+        }
+      : {}),
     firstSignature: f.seedSignatures.deploy,
   };
 }
@@ -2120,4 +2354,16 @@ export async function loadingHistory(
     ...(options.twoLoans ? { twoLoans: true } : {}),
     ...(options.noAdvance ? { noAdvance: true } : {}),
   });
+}
+
+/**
+ * routeHistory() (with the observation) then the shortfalls and restrictions (live-custody.md §9.1
+ * shortfallHistory, T063d.5 pre-check folds 3 and 5): Inspector Test Org accredited (210); B2 observed
+ * at 4,990,000 kg within 50 bps (211, incident 16 × 0x88, lot revision 5 repeated); B2 at 0 bps (212,
+ * 16 × 0x89: ReviewRequired, revision 6); the whole lot at 0 bps (213, 16 × 0x8a: revision 6
+ * repeated); the accreditor sets Frozen (214, reason 32 × 0xbb, revision 7), then Normal (215, 32 ×
+ * 0xbc, revision 8).
+ */
+export async function shortfallHistory(): Promise<CustodyScenario> {
+  return custodyHistory({ route: true, shortfall: true });
 }
