@@ -11,6 +11,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import bs58 from "bs58";
 import type {
   ChainDocumentRow,
+  ChainHandoffAcceptanceRow,
+  ChainLoadingIntentRow,
   ChainEventRow,
   ChainFacilityRow,
   ChainLoanRow,
@@ -336,6 +338,8 @@ export function issuedSnapshot(members: Slug[] = ["khunou"]): LiveSnapshot {
     payments: [],
     intents: [],
     commands: [],
+    loadingIntents: [],
+    acceptances: [],
     intakeEvents: [issueEvent()],
     checkpoint: checkpoint(),
   };
@@ -409,6 +413,8 @@ export function tablesOf(snapshot: LiveSnapshot): Record<string, Record<string, 
       program_id: PROGRAM_ID,
       protocol: PROTOCOL,
     })),
+    chain_loading_intents: rows(snapshot.loadingIntents),
+    chain_handoff_acceptances: rows(snapshot.acceptances),
     chain_events: snapshot.intakeEvents.map((row) => ({
       ...row,
       instruction: "IssueLot",
@@ -709,5 +715,103 @@ export function pledgedSnapshot(members: Slug[] = ["lender-one"]): LiveSnapshot 
   snapshot.valuations = [valuation()];
   snapshot.loans = [loan(LOAN_ONE, FACILITY_ONE, "lender-one")];
   snapshot.locks = [lock(LOCK_ONE, LOAN_ONE, "5000000")];
+  return snapshot;
+}
+
+// Loading rows (live-lending.md §6.10). CR-0001 after the 2,000 t sale, stored at Port Terminal T1's
+// PORT-T1: Khunou's 3,000 t locked to Lender One Bank's loan 0, USD 200,000.00 accrued to NOW, and
+// loading intent 1 with program-custody.md §6.2's document (64 x "a") at position revision 3.
+// Accounts are n = 80 to 83.
+
+export const LOADING_INTENT = address(80);
+export const ACCEPTANCE_ONE = address(81);
+export const LOADING_INTENT_OLD = address(82);
+export const LOADING_DOCUMENT = "a".repeat(64);
+export const LOADING_EXPIRES_AT = String(NOW_SECONDS + 86_400);
+
+export function loadingIntent(
+  overrides: Partial<ChainLoadingIntentRow> = {},
+): ChainLoadingIntentRow {
+  return {
+    ...lending(13_400),
+    address: LOADING_INTENT,
+    lot: LOT,
+    position: KHUNOU_POSITION,
+    owner: orgAccount("khunou"),
+    owner_org_id: orgId("khunou"),
+    terminal: orgAccount("port-t1"),
+    terminal_org_id: orgId("port-t1"),
+    custodian_class: CUSTODIAN_CLASS,
+    nonce: "1",
+    quantity_kg: "3000000",
+    locked_kg: "3000000",
+    document_sha256_hex: LOADING_DOCUMENT,
+    position_revision: "3",
+    expires_at: LOADING_EXPIRES_AT,
+    status: "Open",
+    executed_at: null,
+    cancelled_by: null,
+    ...overrides,
+  };
+}
+
+export function acceptance(
+  overrides: Partial<ChainHandoffAcceptanceRow> = {},
+): ChainHandoffAcceptanceRow {
+  return {
+    ...lending(13_500),
+    address: ACCEPTANCE_ONE,
+    intent: LOADING_INTENT,
+    loan: LOAN_ONE,
+    lock: LOCK_ONE,
+    lender: orgAccount("lender-one"),
+    lender_org_id: orgId("lender-one"),
+    lock_quantity_kg: "3000000",
+    loan_revision: "2",
+    principal: "20000000",
+    booked_interest: "0",
+    accepted_at: String(NOW_SECONDS - 600),
+    version: 1,
+    event_version: 1,
+    ...overrides,
+  };
+}
+
+/** CR-0001 at Port Terminal T1 with Khunou's position locked to loan 0, and the given loading rows. */
+export function loadingSnapshot(
+  members: Slug[] = ["khunou"],
+  intents: ChainLoadingIntentRow[] = [loadingIntent()],
+  acceptances: ChainHandoffAcceptanceRow[] = [],
+): LiveSnapshot {
+  const snapshot = pledgedSnapshot(members);
+  snapshot.custodianClasses = snapshot.custodianClasses.map((row) => ({
+    ...row,
+    custodian: orgAccount("port-t1"),
+    custodian_org_id: orgId("port-t1"),
+    site_code: "PORT-T1",
+  }));
+  snapshot.lots = [
+    lotRow({
+      custodian: orgAccount("port-t1"),
+      custodian_org_id: orgId("port-t1"),
+      revision: "1",
+      event_revision: "1",
+    }),
+  ];
+  snapshot.positions = [
+    position(KHUNOU_POSITION, "khunou", "3000000", { locked_kg: "3000000", revision: "3" }),
+    position(BUYER_POSITION, "buyer-smelter", "2000000"),
+  ];
+  snapshot.loans = [
+    loan(LOAN_ONE, FACILITY_ONE, "lender-one", {
+      principal: "20000000",
+      accrued_at: String(NOW_SECONDS),
+      revision: "2",
+      event_revision: "2",
+    }),
+  ];
+  snapshot.locks = [lock(LOCK_ONE, LOAN_ONE, "3000000")];
+  snapshot.loadingIntents = intents;
+  snapshot.acceptances = acceptances;
   return snapshot;
 }
