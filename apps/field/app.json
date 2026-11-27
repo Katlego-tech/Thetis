@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Thetis field",
+    "slug": "thetis-field",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["android"],
+    "android": {
+      "package": "dev.thetis.field",
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Thetis field uses the camera to photograph weighbridge tickets, assay certificates and origin documents for an intake.",
+          "photosPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      ["expo-document-picker"]
+    ]
+  }
+}
