@@ -132,6 +132,7 @@ export function CommandForm({
     if (Object.keys(problems).length > 0) return;
 
     setBusy(true);
+    let succeeded = false;
     try {
       const session = await browserSession();
       if (!session) {
@@ -161,9 +162,12 @@ export function CommandForm({
         setFailure(failureMessage(created));
         return;
       }
+      // Stay busy after a successful create: the dialog stays open until the route changes, and a
+      // second click must not send a second command.
+      succeeded = true;
       router.push(`/${context}/commands/${created.data.id}`);
     } finally {
-      setBusy(false);
+      if (!succeeded) setBusy(false);
     }
   }
 

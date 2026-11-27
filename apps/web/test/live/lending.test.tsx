@@ -8,11 +8,12 @@ import { previewRelease } from "@thetis/domain";
 import { getWallets } from "@wallet-standard/app";
 import bs58 from "bs58";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { FinancialResults } from "@/components/dossier/record-tables";
 import { liveReader } from "@/data/live/map";
 import type { LiveSnapshot } from "@/data/live/rows";
 import { LiveDataError } from "@/data/live/types";
 import type { CommandView } from "@/lib/commands";
-import { formatClockTime, parseMoneyInput, parseTonnesInput } from "@/lib/format";
+import { formatClockTime, formatMoney, parseMoneyInput, parseTonnesInput } from "@/lib/format";
 import { fakeWallet } from "../access/fake-wallet";
 import {
   command,
@@ -226,6 +227,14 @@ describe("live lending reads", () => {
       eligibleValueMinor: 0n,
       ltvBps: null,
     });
+    render(
+      <FinancialResults
+        source="live"
+        lot={lotOf(haircut, "lender-one")}
+        money={(minor) => formatMoney(minor, "USD", 2)}
+      />,
+    );
+    expect(screen.getByText("Eligible value is zero at this haircut")).toBeInTheDocument();
   });
 
   test("the primary loan is the lender's own, else the largest open lock", () => {

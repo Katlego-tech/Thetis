@@ -167,7 +167,7 @@ function LiveResults({
         value: valuation.ltvBps === null ? "Not computed" : formatBpsPercent(valuation.ltvBps),
         basis:
           valuation.ltvBps === null
-            ? "Eligible value is zero"
+            ? "Eligible value is zero at this haircut"
             : `Limit ${formatBpsPercent(valuation.maxLtvBps)}`,
         attestor: "Derived",
         registry: "none",
