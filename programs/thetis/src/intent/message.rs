@@ -617,6 +617,59 @@ pub fn observation_message(
     )
 }
 
+/// `batch` is `(batch_number, batch_count, load_digest)`; `None` names the whole lot.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn shortfall_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    incident_id: &[u8; 16],
+    batch: Option<(u8, u8, &[u8; 32])>,
+    inspector: &str,
+    method_code: &str,
+    expected_kg: u64,
+    observed_kg: u64,
+    tolerance_bps: u16,
+    evidence_digest: &[u8; 32],
+    observed_at: i64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let incident = hex(incident_id);
+    let (batch, load) = match batch {
+        Some((number, count, load_digest)) => {
+            (format!("{number} of {count}"), digest_hex(load_digest))
+        }
+        None => ("whole lot".to_owned(), "none".to_owned()),
+    };
+    let expected = format_tonnes(expected_kg);
+    let observed = format_tonnes(observed_kg);
+    let tolerance = format_bps(tolerance_bps);
+    let evidence = digest_hex(evidence_digest);
+    let observed_at = format_sast(observed_at);
+    signed_message(
+        program_id,
+        instance_id,
+        "Attest shortfall",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Incident: {incident}\n\
+             Batch: {batch}\n\
+             Load: {load}\n\
+             Inspector: {inspector}\n\
+             Method: {method_code}\n\
+             Expected: {expected}\n\
+             Observed: {observed}\n\
+             Tolerance: {tolerance}\n\
+             Evidence: {evidence}\n\
+             Observed at: {observed_at}"
+        ),
+        valid_until,
+    )
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the fields are the signed message contract"
