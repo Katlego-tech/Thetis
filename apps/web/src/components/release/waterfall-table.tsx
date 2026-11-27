@@ -10,9 +10,17 @@ export const waterfallColumns = [
 
 type WaterfallProps = Pick<ReleaseView, "currency" | "inputs" | "preview"> & {
   minorDigits: number;
+  /** live: no caption of its own (LiveReleaseReview renders §6.9.3's), and a confirmed payment */
+  source?: "reference" | "live";
 };
 
-export function WaterfallTable({ currency, inputs, preview, minorDigits }: WaterfallProps) {
+export function WaterfallTable({
+  currency,
+  inputs,
+  preview,
+  minorDigits,
+  source = "reference",
+}: WaterfallProps) {
   const money = (minor: bigint) => formatMoney(minor, currency, minorDigits);
 
   if ("error" in preview) {
@@ -35,7 +43,11 @@ export function WaterfallTable({ currency, inputs, preview, minorDigits }: Water
   const haircut = inputs.haircutBps === 0n ? "0" : formatBpsPercent(inputs.haircutBps);
   const rows = [
     ["Debt before", money(preview.debtBefore), "Principal plus booked interest and fees"],
-    ["Payment, once attested", money(preview.confirmedPayment), "Buyer amount plus seller top-up"],
+    [
+      source === "live" ? "Payment, once confirmed" : "Payment, once attested",
+      money(preview.confirmedPayment),
+      "Buyer amount plus seller top-up",
+    ],
     ["Applied to debt", money(preview.applied), "The lesser of debt and payment"],
     ["Debt after", money(debtAfter), "Remains recorded against the lot"],
     [
@@ -71,10 +83,12 @@ export function WaterfallTable({ currency, inputs, preview, minorDigits }: Water
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <p className="text-[12px] text-(--ink-2)">
-        Preview from the reported terms. Nothing here is recorded until the lender attests the
-        payment and the chain confirms the release.
-      </p>
+      {source === "reference" && (
+        <p className="text-[12px] text-(--ink-2)">
+          Preview from the reported terms. Nothing here is recorded until the lender attests the
+          payment and the chain confirms the release.
+        </p>
+      )}
       {!allowed && (
         <p role="alert" className="border border-(--refuse) bg-(--sheet) p-3 text-(--refuse)">
           Refused: debt after {money(debtAfter)} exceeds the {money(preview.limitAfter)} limit.

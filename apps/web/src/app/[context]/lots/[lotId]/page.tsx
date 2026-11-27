@@ -47,6 +47,21 @@ export default async function LotPage({
   if (!current) notFound();
   const lot = reader.lot(lotId, context);
   if (!lot) notFound();
+  // The dossier currency: the primary loan's facility, else the first facility, else none (§7 D).
+  const lending = lot.lending;
+  const primary = lending?.loans.find(({ address }) => address === lending.primaryLoan);
+  const facility = primary?.facility ?? lending?.facilities[0] ?? null;
+  const organisationId = reader.orgIdOf(context);
+  const actions =
+    organisationId === null
+      ? null
+      : {
+          organisationId,
+          buyers: reader.organisationsByRole("Buyer").flatMap((buyer) => {
+            const id = reader.orgIdOf(buyer.id);
+            return id === null ? [] : [{ value: id, label: buyer.name }];
+          }),
+        };
   return (
     <LiveShell reader={reader} current={current} segment="lots">
       <LotDossier
@@ -54,10 +69,12 @@ export default async function LotPage({
         context={context}
         tab={selectedTab}
         workItems={reader.workQueue(context).filter((item) => item.lot.id === lot.id)}
-        currency={reader.scenario.facilityCurrency}
-        minorDigits={reader.scenario.currencyMinorDigits}
+        currency={facility?.currency ?? null}
+        minorDigits={facility?.currencyDecimals ?? null}
         source="live"
         stale={reader.lotStale(lot.id)}
+        role={current.role}
+        actions={actions}
       />
     </LiveShell>
   );

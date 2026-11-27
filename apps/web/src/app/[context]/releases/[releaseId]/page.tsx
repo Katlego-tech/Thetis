@@ -1,10 +1,12 @@
-import { notFound } from "next/navigation";
+import { notFound, unstable_rethrow } from "next/navigation";
 import { releaseCases } from "@/components/release/case-switch";
+import { LiveReleaseReview } from "@/components/release/live-release-review";
 import { ReleaseReview } from "@/components/release/release-review";
 import { LiveFailurePage } from "@/components/shell/live-read-failed";
+import { LiveShell } from "@/components/shell/live-shell";
 import { getReader } from "@/data/get-reader";
-import { LiveDataError } from "@/data/live/types";
-import { dataSource } from "@/data/load-reader";
+import { LiveDataError, type ScreenReader } from "@/data/live/types";
+import { dataSource, requireReader } from "@/data/load-reader";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +24,38 @@ export default async function ReleasePage({
     if (error instanceof LiveDataError) return <LiveFailurePage error={error} />;
     throw error;
   }
-  // Live mode has no release screen, so fixture data never appears under a live banner.
-  if (source === "live") notFound();
+  const [{ context, releaseId }, { case: query }] = await Promise.all([params, searchParams]);
 
-  const [{ releaseId }, { case: query }] = await Promise.all([params, searchParams]);
+  if (source === "live") {
+    // live-lending.md §4.5.4: a visible intent, and no reference cases.
+    if (query !== undefined) notFound();
+    let reader: ScreenReader;
+    try {
+      reader = await requireReader(
+        `/${encodeURIComponent(context)}/releases/${encodeURIComponent(releaseId)}`,
+      );
+    } catch (error) {
+      unstable_rethrow(error);
+      if (error instanceof LiveDataError) return <LiveFailurePage error={error} />;
+      throw error;
+    }
+    if (reader.mode !== "live") notFound();
+    const current = reader.context(context);
+    if (!current) notFound();
+    const release = reader.liveRelease(releaseId, context);
+    if (!release) notFound();
+    return (
+      <LiveShell reader={reader} current={current} segment="releases">
+        <LiveReleaseReview
+          release={release}
+          scenario={reader.scenario}
+          context={context}
+          organisationId={reader.orgIdOf(context)}
+        />
+      </LiveShell>
+    );
+  }
+
   const selectedCase = releaseCases.find((name) => name === query);
   if (query !== undefined && selectedCase === undefined) notFound();
 

@@ -23,6 +23,7 @@ import {
   decodeCustodianClass,
   decodeDocumentAttestation,
   decodeFacility,
+  decodeHandoverRecord,
   decodeIntakeIdentity,
   decodeLoan,
   decodeLockAllocation,
@@ -39,6 +40,8 @@ import {
   decodeValuation,
   type Facility,
   findPositionPda,
+  type HandoverRecord,
+  HandoverStage,
   type IntakeIdentity,
   IntentStatus,
   type Loan,
@@ -96,7 +99,8 @@ export type Kind =
   | "SimulationPool"
   | "PoolShare"
   | "Shipment"
-  | "ManifestBatch";
+  | "ManifestBatch"
+  | "HandoverRecord";
 
 export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   Protocol: "chain_protocols",
@@ -118,6 +122,7 @@ export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   PoolShare: "chain_pool_shares",
   Shipment: "chain_shipments",
   ManifestBatch: "chain_batches",
+  HandoverRecord: "chain_handovers",
 };
 
 export const TABLE_KIND = Object.fromEntries(
@@ -143,7 +148,8 @@ export type AccountData =
   | { kind: "SimulationPool"; data: SimulationPool }
   | { kind: "PoolShare"; data: PoolShare }
   | { kind: "Shipment"; data: Shipment }
-  | { kind: "ManifestBatch"; data: ManifestBatch };
+  | { kind: "ManifestBatch"; data: ManifestBatch }
+  | { kind: "HandoverRecord"; data: HandoverRecord };
 
 type GuardedDecoder = (account: MaybeEncodedAccount) => { exists: boolean; data?: unknown };
 
@@ -167,6 +173,7 @@ const DECODERS: Record<Kind, GuardedDecoder> = {
   PoolShare: decodePoolShare as unknown as GuardedDecoder,
   Shipment: decodeShipment as unknown as GuardedDecoder,
   ManifestBatch: decodeManifestBatch as unknown as GuardedDecoder,
+  HandoverRecord: decodeHandoverRecord as unknown as GuardedDecoder,
 };
 
 export type DecodeFailure = { address: string; enumError: boolean; message: string };
@@ -591,6 +598,24 @@ export function accountColumns(account: AccountData, resolver: Resolver): Row {
         observation_count: data.observationCount,
         departed_at: optionalI64(data.departedAt),
         arrived_at: optionalI64(data.arrivedAt),
+      };
+    }
+    case "HandoverRecord": {
+      const { data } = account;
+      return {
+        shipment: data.shipment,
+        batch: data.batch,
+        sequence: toU64String(data.sequence),
+        from_organisation: data.from,
+        from_org_id: resolver.organisationId(data.from),
+        to_organisation: data.to,
+        to_org_id: resolver.organisationId(data.to),
+        from_wallet: data.fromWallet,
+        to_wallet: data.toWallet,
+        stage: variant("HandoverStage", HandoverStage, data.stage),
+        quantity_kg: toU64String(data.quantityKg),
+        manifest_digest_hex: hex(data.manifestDigest),
+        at: toI64String(data.at),
       };
     }
   }
@@ -1089,12 +1114,68 @@ async function planEvent(
         ],
       };
     }
+    case "CustodyHandedOver": {
+      // A handover advances the lot exactly at the shipment's first departure and its last
+      // arrival (live-custody.md §4.1.4); any other is shipment-scoped and repeats the lot revision.
+      const record = { address: text("handover"), kind: "HandoverRecord" as const };
+      const lot = text("lot");
+      const advancing = advancesLot(value);
+      const keys: LendingKeys = {
+        ...NO_KEYS,
+        shipment: text("shipment"),
+        shipmentRevision: value.shipmentRevision as bigint,
+        batch: text("batch"),
+        batchSequence: value.sequence as bigint,
+        created: record.address,
+      };
+      return {
+        ...base,
+        scope: advancing ? "lot" : "shipment",
+        lot: advancing ? lot : null,
+        revision: advancing ? (value.lotRevision as bigint) : null,
+        keys,
+        fetch: [
+          record,
+          { address: text("batch"), kind: "ManifestBatch" },
+          { address: text("shipment"), kind: "Shipment" },
+          { address: lot, kind: "Lot" },
+          { address: ixAccount("sourceClass"), kind: "CustodianClass" },
+          { address: ixAccount("destinationClass"), kind: "CustodianClass" },
+        ],
+        creates: [record],
+      };
+    }
+    case "ObservationRecorded":
+      // An observation moves only the batch's observation_count; it is keyed by the batch and its
+      // index, never by observed_at (live-custody.md §4.1.3, §4.1.4).
+      return {
+        ...base,
+        scope: "shipment",
+        keys: {
+          ...NO_KEYS,
+          shipment: text("shipment"),
+          batch: text("batch"),
+          observationIndex: value.index as number,
+        },
+        fetch: [{ address: text("batch"), kind: "ManifestBatch" }],
+      };
   }
+}
+
+/**
+ * Whether a CustodyHandedOver advanced its lot's revision: the shipment's first handover (its
+ * first departure) or the arrival that made it Arrived (decode.ts checks the two agree with the
+ * stage and the lot state).
+ */
+function advancesLot(value: Record<string, unknown>): boolean {
+  return value.shipmentRevision === 1n || value.shipmentStatus === ShipmentStatus.Arrived;
 }
 
 type LotEntry = {
   creators: Plan[];
   revisions: { revision: bigint; plan: Plan }[];
+  /** Events that name the lot's revision without advancing it (live-custody.md §4.1.4 repeats). */
+  repeats: { revision: bigint; plan: Plan }[];
 };
 
 /**
@@ -1155,7 +1236,7 @@ export async function projectSlot(
   const entryOf = (lot: string) => {
     let entry = lots.get(lot);
     if (!entry) {
-      entry = { creators: [], revisions: [] };
+      entry = { creators: [], revisions: [], repeats: [] };
       lots.set(lot, entry);
     }
     return entry;
@@ -1186,6 +1267,12 @@ export async function projectSlot(
           plan,
         });
         break;
+      case "CustodyHandedOver": {
+        const item = { revision: value.lotRevision as bigint, plan };
+        if (plan.scope === "lot") entryOf(value.lot as string).revisions.push(item);
+        else entryOf(value.lot as string).repeats.push(item);
+        break;
+      }
       default:
         break;
     }
@@ -1195,9 +1282,11 @@ export async function projectSlot(
     const entry = lots.get(lot) as LotEntry;
     const signatures = [
       ...new Set(
-        [...entry.creators, ...entry.revisions.map((item) => item.plan)].map(
-          (p) => p.transaction.signature,
-        ),
+        [
+          ...entry.creators,
+          ...entry.revisions.map((item) => item.plan),
+          ...entry.repeats.map((item) => item.plan),
+        ].map((p) => p.transaction.signature),
       ),
     ].sort(sortText);
     const named = `lot ${lot} (signatures ${signatures.join(", ")})`;
@@ -1241,7 +1330,18 @@ export async function projectSlot(
         );
       }
     }
-    eventRevision.set(lot, revisions.at(-1) ?? base);
+    const next = revisions.at(-1) ?? base;
+    const floor = base < 0n ? 0n : base;
+    for (const { revision } of entry.repeats) {
+      if (revision < floor || revision > next) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named}: a handover repeats revision ${revision}, outside ${floor} to ${next}`,
+        );
+      }
+    }
+    eventRevision.set(lot, next);
   }
 
   // Loans, pools and valuations (live-lending.md §4.1.4).
@@ -1491,6 +1591,92 @@ export async function projectSlot(
       }
     }
     shipmentEventRegistered.set(shipment, Number(counts.at(-1) ?? base));
+  }
+
+  // Batch sequences (live-custody.md §4.1.4): each handover consumes the batch's next sequence.
+  const batchEventSequence = new Map<string, bigint>();
+  const handedBatches = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.event.name === "CustodyHandedOver")
+        .map((plan) => plan.keys.batch as string),
+    ),
+  ].sort(sortText);
+  for (const batch of handedBatches) {
+    const naming = plans.filter(
+      (plan) => plan.event.name === "CustodyHandedOver" && plan.keys.batch === batch,
+    );
+    const named = `batch ${batch} (signatures ${signaturesOf(naming)})`;
+    const registered = plans.some(
+      (plan) => plan.event.name === "BatchRegistered" && plan.keys.batch === batch,
+    );
+    const row = storedRow("ManifestBatch", batch);
+    let base: bigint;
+    if (registered) base = 0n;
+    else if (row) base = BigInt(row.event_sequence as string);
+    else {
+      throw stepHalt(
+        "sequence",
+        "EVENT_GAP",
+        `${named} is handed over but has no stored row and no BatchRegistered of this slot`,
+      );
+    }
+    const sequences = naming.map((plan) => plan.keys.batchSequence as bigint).sort(sortBig);
+    for (const [index, sequence] of sequences.entries()) {
+      const expected = base + BigInt(index);
+      if (sequence !== expected) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} consumes handover sequences [${sequences.join(", ")}] from ${base}, expected ${expected} at position ${index}`,
+        );
+      }
+    }
+    batchEventSequence.set(batch, base + BigInt(sequences.length));
+  }
+
+  // Observations (live-custody.md §4.1.4): each observation takes the batch's next index.
+  const batchEventObservations = new Map<string, number>();
+  const observedBatches = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.event.name === "ObservationRecorded")
+        .map((plan) => plan.keys.batch as string),
+    ),
+  ].sort(sortText);
+  for (const batch of observedBatches) {
+    const naming = plans.filter(
+      (plan) => plan.event.name === "ObservationRecorded" && plan.keys.batch === batch,
+    );
+    const named = `batch ${batch} (signatures ${signaturesOf(naming)})`;
+    const registered = plans.some(
+      (plan) => plan.event.name === "BatchRegistered" && plan.keys.batch === batch,
+    );
+    const row = storedRow("ManifestBatch", batch);
+    let base: number;
+    if (registered) base = 0;
+    else if (row) base = row.event_observations as number;
+    else {
+      throw stepHalt(
+        "sequence",
+        "EVENT_GAP",
+        `${named} is observed but has no stored row and no BatchRegistered of this slot`,
+      );
+    }
+    const indexes = naming
+      .map((plan) => plan.keys.observationIndex as number)
+      .sort((a, b) => a - b);
+    for (const [position, index] of indexes.entries()) {
+      const expected = base + position;
+      if (index !== expected) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} takes observation indexes [${indexes.join(", ")}] from ${base}, expected ${expected} at position ${position}`,
+        );
+      }
+    }
+    batchEventObservations.set(batch, base + indexes.length);
   }
 
   // Creation check, account by account.
@@ -1808,11 +1994,23 @@ export async function projectSlot(
         (previous ? (previous.event_registered as number) : 0);
     }
     if (account.kind === "ManifestBatch") {
-      // Only a handover or an observation moves these, and neither is handled yet: a batch
+      // A handover of this slot moves event_sequence, an observation event_observations. A batch
       // registered in this slot starts at 0, a stored one keeps its columns.
       const previous = storedRow("ManifestBatch", address);
-      row.event_sequence = previous ? (previous.event_sequence as string) : "0";
-      row.event_observations = previous ? (previous.event_observations as number) : 0;
+      const sequence = batchEventSequence.get(address);
+      row.event_sequence =
+        sequence !== undefined
+          ? toU64String(sequence)
+          : previous
+            ? (previous.event_sequence as string)
+            : "0";
+      const observations = batchEventObservations.get(address);
+      row.event_observations =
+        observations !== undefined
+          ? observations
+          : previous
+            ? (previous.event_observations as number)
+            : 0;
     }
     if (account.kind === "ReleaseIntent") {
       // The mark is carried forward; §4.1.7 below may set it.

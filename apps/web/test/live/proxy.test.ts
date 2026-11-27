@@ -86,22 +86,20 @@ test("the proxy redirects to /login with path and query when there is no session
   passesThrough(await proxy(request("/khunou/queue")));
   expect(ssr.created).toHaveLength(0);
 
-  // The release route is a 404 in live mode, before any session check and whatever the other
-  // variables are; reference mode leaves it alone.
-  liveEnvironment();
-  for (const path of ["/khunou/releases/R-0001", "/lender-one/releases/rel-0001"]) {
-    const release = await proxy(request(path));
-    expect([path, release.status, release.headers.get("x-middleware-rewrite")]).toEqual([
-      path,
-      404,
-      "http://localhost:3100/not-found",
-    ]);
-  }
-  vi.stubEnv("THETIS_PROTOCOL", "");
-  expect((await proxy(request("/khunou/releases/R-0001"))).status).toBe(404);
-  expect(ssr.created).toHaveLength(0);
+  // The release route is a live page like the others: its session is checked, and reference mode
+  // leaves it alone.
   vi.stubEnv("THETIS_DATA_SOURCE", "reference");
   passesThrough(await proxy(request("/khunou/releases/R-0001")));
+  expect(ssr.created).toHaveLength(0);
+  liveEnvironment();
+  ssr.getUser = async () => ({
+    data: { user: null },
+    error: { name: "AuthSessionMissingError", status: 400 },
+  });
+  expect((await proxy(request("/lender-one/releases/rel-0001"))).headers.get("location")).toBe(
+    "http://localhost:3100/login?next=%2Flender-one%2Freleases%2Frel-0001",
+  );
+  ssr.created = [];
 
   // A chain variable that is missing or wrong is the page's to report: a signed-out visitor is
   // still sent to sign in, never shown the read failure.
