@@ -58,7 +58,6 @@ import {
   findAuthorityPda,
   findHandoverPda,
   findIntakePda,
-  findLockPda,
   findMintAuthorityPda,
   findMintPda,
   findOrganisationPda,
@@ -3542,7 +3541,8 @@ describe("accept_loading on the real program", () => {
     const w = await world();
     const { loans } = await lotAtTerminal(w, ["3000000", "2000000"]);
     const [first, second] = loans as [Address, Address];
-    await advance(w, first);
+    // 3,000,000 kg at 20 per kg and 60% LTV: 36,000,000 is the limit, so a day's interest is over it.
+    await advance(w, first, "36000000");
     const { intent } = await createIntent(w);
     const post = (org: OrgKey, loan: Address, at: Address = intent) =>
       call(w, "POST", "/v1/commands", people[org], {

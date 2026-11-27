@@ -21,7 +21,8 @@ export type CommandKind =
   | "handover"
   | "record_observation"
   | "create_loading_intent"
-  | "record_loading";
+  | "record_loading"
+  | "accept_loading";
 export type CommandStatus =
   | "awaiting_signatures"
   | "submitted"
@@ -167,6 +168,8 @@ export const RELAY_ERRORS = {
     409,
     "A loan with a lock on this lot is not active, so the lot can't be loaded.",
   ],
+  LOADING_NOT_OPEN: [409, "This loading intent is no longer open."],
+  LOADING_EXPIRED: [409, "This loading intent has expired."],
   TOO_MANY_LOANS: [
     409,
     "More than four loans hold locks on this lot; one loading takes at most four.",

@@ -139,5 +139,5 @@ describe("accept_loading transaction (folds 52, 55, 57)", () => {
 });
 
 /** Measured through compile.ts (fold 55): a first acceptance and a re-acceptance. */
-const MEASURED_FIRST = 0;
-const MEASURED_AGAIN = 0;
+const MEASURED_FIRST = 443;
+const MEASURED_AGAIN = 412;
