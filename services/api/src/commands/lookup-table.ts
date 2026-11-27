@@ -1,9 +1,5 @@
 // One address lookup table per instance, authority and payer the sponsor (live-lending.md §4.4.2).
-import {
-  findAddressLookupTablePda,
-  getCreateLookupTableInstruction,
-  getExtendLookupTableInstruction,
-} from "@solana-program/address-lookup-table";
+
 import {
   type Address,
   appendTransactionMessageInstructions,
@@ -16,6 +12,11 @@ import {
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit";
+import {
+  findAddressLookupTablePda,
+  getCreateLookupTableInstruction,
+  getExtendLookupTableInstruction,
+} from "@solana-program/address-lookup-table";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ChainPort } from "./chain.ts";
 import type { SponsorPort } from "./sponsor.ts";
@@ -41,12 +42,21 @@ export interface TableContext {
   sleep: (ms: number) => Promise<void>;
 }
 
-async function sendSponsored(context: TableContext, sponsor: Address, instruction: Instruction, table: Address | null) {
+async function sendSponsored(
+  context: TableContext,
+  sponsor: Address,
+  instruction: Instruction,
+  table: Address | null,
+) {
   const { blockhash, lastValidBlockHeight } = await context.chain.latestBlockhash();
   const message = pipe(
     createTransactionMessage({ version: 0 }),
     (m) => setTransactionMessageFeePayer(sponsor, m),
-    (m) => setTransactionMessageLifetimeUsingBlockhash({ blockhash: blockhash as never, lastValidBlockHeight }, m),
+    (m) =>
+      setTransactionMessageLifetimeUsingBlockhash(
+        { blockhash: blockhash as never, lastValidBlockHeight },
+        m,
+      ),
     (m) => appendTransactionMessageInstructions([instruction], m),
   );
   const wire = getBase64EncodedWireTransaction(compileTransaction(message));
@@ -81,14 +91,20 @@ async function createTable(context: TableContext, sponsor: Address): Promise<Add
   await sendSponsored(
     context,
     sponsor,
-    getCreateLookupTableInstruction({ address: [address, bump], authority: noop, payer: noop, recentSlot }),
+    getCreateLookupTableInstruction({
+      address: [address, bump],
+      authority: noop,
+      payer: noop,
+      recentSlot,
+    }),
     null,
   );
   for (let attempt = 0; attempt < 40; attempt++) {
     if (await context.chain.lookupTable(address)) break;
     await context.sleep(500);
   }
-  if (!(await context.chain.lookupTable(address))) throw new Error("the lookup table was not created");
+  if (!(await context.chain.lookupTable(address)))
+    throw new Error("the lookup table was not created");
   const { error } = await context.service.from("relay_lookup_tables").insert({
     network: context.network,
     program_id: context.programId,

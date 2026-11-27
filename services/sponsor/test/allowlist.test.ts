@@ -1,10 +1,5 @@
 import { readFileSync } from "node:fs";
 import {
-  getCreateLookupTableInstruction,
-  getExtendLookupTableInstruction,
-} from "@solana-program/address-lookup-table";
-import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
-import {
   AccountRole,
   type Address,
   appendTransactionMessageInstructions,
@@ -24,13 +19,18 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   verifySignature,
 } from "@solana/kit";
+import {
+  getCreateLookupTableInstruction,
+  getExtendLookupTableInstruction,
+} from "@solana-program/address-lookup-table";
+import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
 import { THETIS_PROGRAM_ADDRESS } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import {
   checkSponsorTransaction,
   SPONSORED_INSTRUCTIONS,
-  SponsorRefusedError,
   type SponsorContext,
+  SponsorRefusedError,
 } from "../src/allowlist.ts";
 import { signAsSponsor } from "../src/sign.ts";
 
@@ -66,7 +66,13 @@ const PHASE_2 = [
   "withdraw",
   "borrow",
 ];
-const TEXT_SIGNED = new Set(["pledge", "record_advance", "create_release_intent", "sell_pledged", "borrow"]);
+const TEXT_SIGNED = new Set([
+  "pledge",
+  "record_advance",
+  "create_release_intent",
+  "sell_pledged",
+  "borrow",
+]);
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 const SYSTEM = "11111111111111111111111111111111" as Address;
 const MEMO = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" as Address;
@@ -74,9 +80,9 @@ const BLOCKHASH = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY" as Blockhash;
 
 const sponsorKey = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
 const sponsor = sponsorKey.address;
-const [protocol, otherProtocol, table, otherTable, lender, filler] = await Promise.all(
+const [protocol, otherProtocol, table, otherTable, lender, filler] = (await Promise.all(
   Array.from({ length: 6 }, async () => (await generateKeyPairSigner()).address),
-);
+)) as [Address, Address, Address, Address, Address, Address];
 const context: SponsorContext = {
   sponsor,
   programId: THETIS_PROGRAM_ADDRESS,
@@ -114,7 +120,8 @@ function thetis(
         : AccountRole.READONLY;
     return { address: value, role };
   });
-  for (const extra of options.extra ?? []) accounts.push({ address: extra, role: AccountRole.WRITABLE });
+  for (const extra of options.extra ?? [])
+    accounts.push({ address: extra, role: AccountRole.WRITABLE });
   return {
     programAddress: THETIS_PROGRAM_ADDRESS,
     accounts,
@@ -201,13 +208,15 @@ describe("sponsor allowlist", () => {
 
     const noop = createNoopSigner(sponsor);
     const create = getCreateLookupTableInstruction({
-      address: [table, 255],
+      address: [table, 255 as never],
       authority: noop,
       payer: noop,
       recentSlot: 10n,
     });
     expect(() => checkSponsorTransaction(wire([create]), context)).not.toThrow();
-    expect(() => checkSponsorTransaction(wire([create]), { ...context, lookupTable: null })).not.toThrow();
+    expect(() =>
+      checkSponsorTransaction(wire([create]), { ...context, lookupTable: null }),
+    ).not.toThrow();
     const extend = getExtendLookupTableInstruction({
       address: table,
       authority: noop,
@@ -245,7 +254,11 @@ describe("sponsor allowlist", () => {
     // Lookups through a table other than the instance's.
     refused(wire([limit(), thetis("close_loan")], { tables: { [otherTable]: [filler] } }), /table/);
     // The sponsor's signature slot must be empty.
-    const signed = await signAsSponsor(sponsorKey.keyPair, wire([limit(), thetis("close_loan")]), context);
+    const signed = await signAsSponsor(
+      sponsorKey.keyPair,
+      wire([limit(), thetis("close_loan")]),
+      context,
+    );
     refused(signed, /signature/);
     // A table extension paid by someone else.
     const other = createNoopSigner(lender);
@@ -263,7 +276,11 @@ describe("sponsor allowlist", () => {
     const legacy = pipe(
       createTransactionMessage({ version: "legacy" }),
       (m) => setTransactionMessageFeePayer(sponsor, m),
-      (m) => setTransactionMessageLifetimeUsingBlockhash({ blockhash: BLOCKHASH, lastValidBlockHeight: 1n }, m),
+      (m) =>
+        setTransactionMessageLifetimeUsingBlockhash(
+          { blockhash: BLOCKHASH, lastValidBlockHeight: 1n },
+          m,
+        ),
       (m) => appendTransactionMessageInstructions([limit(), thetis("close_loan")], m),
     );
     refused(getBase64EncodedWireTransaction(compileTransaction(legacy)), /version/);

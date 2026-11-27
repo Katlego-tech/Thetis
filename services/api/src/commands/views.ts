@@ -128,8 +128,14 @@ export interface CommandRow {
 export const RELAY_ERRORS = {
   WRONG_SETTLEMENT_MODE: [409, "This action is not available in this instance's settlement mode."],
   ACCOUNT_MISSING: [409, "A chain account this action needs does not exist."],
-  PAYMENT_ALREADY_RECORDED: [409, "A payment with this bank reference is already recorded on chain."],
-  PAYMENT_NOT_CONFIRMED: [409, "No confirmed payment of the release amount exists for this intent."],
+  PAYMENT_ALREADY_RECORDED: [
+    409,
+    "A payment with this bank reference is already recorded on chain.",
+  ],
+  PAYMENT_NOT_CONFIRMED: [
+    409,
+    "No confirmed payment of the release amount exists for this intent.",
+  ],
   EVIDENCE_INVALID: [409, "The evidence file is not a finalized bank record of this lender."],
   WALLET_NOT_LINKED: [409, "The wallet is not linked to your account for this organisation."],
   AUTHORITY_INVALID: [409, "The wallet has no current on-chain authority for this action."],
@@ -167,10 +173,8 @@ export class RelayError extends Error {
   }
 }
 
-const SAST_OFFSET = 0n;
-
 function iso(unix: string): string {
-  return new Date(Number((BigInt(unix) + SAST_OFFSET) * 1000n)).toISOString();
+  return new Date(Number(BigInt(unix) * 1000n)).toISOString();
 }
 
 export function explorerUrl(signature: string): string {

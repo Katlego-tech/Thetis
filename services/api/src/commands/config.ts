@@ -7,7 +7,9 @@ import { THETIS_PROGRAM_ADDRESS } from "@thetis/contracts";
 
 export const DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 
-export type SponsorSetting = { kind: "file"; path: string } | { kind: "lambda"; functionName: string };
+export type SponsorSetting =
+  | { kind: "file"; path: string }
+  | { kind: "lambda"; functionName: string };
 
 export interface RelayConfig {
   network: "devnet";
@@ -82,5 +84,11 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
   } else {
     throw new ConfigError("THETIS_SPONSOR");
   }
-  return { network: "devnet", programId: THETIS_PROGRAM_ADDRESS, protocol, rpcUrl, sponsor: setting };
+  return {
+    network: "devnet",
+    programId: THETIS_PROGRAM_ADDRESS,
+    protocol,
+    rpcUrl,
+    sponsor: setting,
+  };
 }

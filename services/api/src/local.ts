@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
 
@@ -98,6 +100,10 @@ async function listen() {
   process.env.SUPABASE_SERVICE_ROLE_KEY = SERVICE_ROLE_KEY;
   process.env.SITE_URL ??= siteOrigin;
   process.env.CORS_ORIGIN ??= process.env.SITE_URL;
+  // The relay signs in-process from a key file outside the repository on local runs only.
+  process.env.THETIS_LOCAL = "1";
+  const keysDir = process.env.THETIS_KEYS_DIR ?? join(homedir(), ".config/thetis/devnet");
+  process.env.THETIS_SPONSOR ??= `file:${join(keysDir, "sponsor.json")}`;
 
   const { handler } = await import("./main.ts");
   createServer(async (request, response) => {

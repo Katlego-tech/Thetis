@@ -35,7 +35,9 @@ export function formatSast(unix: bigint): string {
 export function formatMoney(minor: bigint, decimals: number, code: string): string {
   const digits = minor.toString().padStart(decimals + 1, "0");
   const whole = group(digits.slice(0, digits.length - decimals));
-  return decimals === 0 ? `${code} ${whole}` : `${code} ${whole}.${digits.slice(digits.length - decimals)}`;
+  return decimals === 0
+    ? `${code} ${whole}`
+    : `${code} ${whole}.${digits.slice(digits.length - decimals)}`;
 }
 
 /** Basis points as a percentage with two decimals: 6000 is `60.00%`. */

@@ -9,13 +9,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AccountState,
-  findAssociatedTokenPda,
-  getMintEncoder,
-  getTokenEncoder,
-  TOKEN_PROGRAM_ADDRESS,
-} from "@solana-program/token";
-import {
   type Address,
   address,
   appendTransactionMessageInstructions,
@@ -42,6 +35,13 @@ import {
   signTransaction,
   type Transaction,
 } from "@solana/kit";
+import {
+  AccountState,
+  findAssociatedTokenPda,
+  getMintEncoder,
+  getTokenEncoder,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   decodeLoan,
@@ -68,7 +68,7 @@ import {
   THETIS_PROGRAM_ADDRESS,
 } from "@thetis/contracts";
 import type { APIGatewayProxyEventV2 } from "aws-lambda";
-import { FailedTransactionMetadata, LiteSVM, TransactionErrorInstructionError } from "litesvm";
+import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChainPort } from "../src/commands/chain.ts";
 import { KIND_SPECS } from "../src/commands/plan.ts";
@@ -114,7 +114,14 @@ interface Person {
   client: SupabaseClient;
 }
 
-type WalletKey = "lenderOne" | "lenderTwo" | "khunou" | "khunouUnscoped" | "khunouUnlinked" | "buyer" | "kopano";
+type WalletKey =
+  | "lenderOne"
+  | "lenderTwo"
+  | "khunou"
+  | "khunouUnscoped"
+  | "khunouUnlinked"
+  | "buyer"
+  | "kopano";
 const SCOPE = { ISSUE: 1, TRANSFER: 2, PLEDGE: 32, BUY: 64, LEND: 128, POOL: 256 } as const;
 const WALLETS: Record<WalletKey, { org: OrgKey; scopes: number; linked: boolean }> = {
   lenderOne: { org: "lenderOne", scopes: SCOPE.LEND | SCOPE.POOL, linked: true },
@@ -155,23 +162,38 @@ function uuidBytes(uuid: string): Uint8Array {
 // ---------------------------------------------------------------- the chain: LiteSVM as a ChainPort
 
 interface SvmChain extends ChainPort {
-  /** Sends are accepted and dropped: the transaction never lands. */
+  /** Thetis command transactions are accepted and dropped: they never land. */
   dropSends: boolean;
-  /** Every wire transaction the API sent, by signature, in order. */
+  /** Every Thetis command transaction the API sent (lookup-table upkeep excluded), in order. */
   sent: string[];
   advanceSlots(n: bigint): void;
 }
 
+/** LiteSVM's InstructionError (its class is not exported): an index and an inner error. */
+function instructionError(failed: FailedTransactionMetadata) {
+  const err = failed.err() as unknown;
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "index" in err &&
+    "err" in err &&
+    typeof err.err === "function"
+  ) {
+    return err as { index: number; err(): unknown };
+  }
+  return null;
+}
+
 function errorJson(failed: FailedTransactionMetadata): unknown {
-  const err = failed.err();
-  if (err instanceof TransactionErrorInstructionError) {
+  const err = instructionError(failed);
+  if (err) {
     const inner = err.err();
     if (typeof inner === "object" && inner !== null && "code" in inner) {
       return { InstructionError: [err.index, { Custom: inner.code }] };
     }
     return { InstructionError: [err.index, String(inner)] };
   }
-  return { TransactionError: String(err) };
+  return { TransactionError: String(failed.err()) };
 }
 
 function lookupTableAddresses(svm: LiteSVM, table: Address): Address[] {
@@ -211,7 +233,10 @@ function svmChain(svm: LiteSVM): SvmChain {
     }
     for (const table of touched) {
       const account = svm.getAccount(table);
-      if (account.exists && account.programAddress === "AddressLookupTab1e1111111111111111111111111") {
+      if (
+        account.exists &&
+        account.programAddress === "AddressLookupTab1e1111111111111111111111111"
+      ) {
         for (const key of lookupTableAddresses(svm, table)) touched.add(key);
       }
     }
@@ -234,6 +259,8 @@ function svmChain(svm: LiteSVM): SvmChain {
       return svm.getClock().slot;
     },
     async latestBlockhash() {
+      // A fresh blockhash per request, as on devnet: two identical commands never share bytes.
+      svm.expireBlockhash();
       return { blockhash: svm.latestBlockhash(), lastValidBlockHeight: svm.getClock().slot + 150n };
     },
     async accounts(addresses) {
@@ -266,11 +293,14 @@ function svmChain(svm: LiteSVM): SvmChain {
       const feePayerSignature = Object.values(transaction.signatures)[0];
       if (!feePayerSignature) throw new Error("unsigned transaction");
       const signature = getBase58Decoder().decode(feePayerSignature);
-      chain.sent.push(signature);
-      if (chain.dropSends || results.has(signature)) return;
+      const thetis = Buffer.from(transaction.messageBytes).includes(
+        Buffer.from(getAddressEncoder().encode(THETIS_PROGRAM_ADDRESS)),
+      );
+      if (thetis) chain.sent.push(signature);
+      if ((thetis && chain.dropSends) || results.has(signature)) return;
       const result = svm.sendTransaction(transaction);
       if (result instanceof FailedTransactionMetadata) {
-        if (!(result.err() instanceof TransactionErrorInstructionError)) return; // never landed
+        if (!instructionError(result)) return; // never landed
         results.set(signature, {
           slot: svm.getClock().slot,
           failed: errorJson(result),
@@ -327,12 +357,17 @@ function send(svm: LiteSVM, instructions: Instruction[], signers: KeyPairSigner[
     );
     const result = svm.sendTransaction(transaction);
     if (result instanceof FailedTransactionMetadata) {
-      throw new Error(`setup transaction failed: ${result.toString()}\n${result.meta().prettyLogs()}`);
+      throw new Error(
+        `setup transaction failed: ${result.toString()}\n${result.meta().prettyLogs()}`,
+      );
     }
   })();
 }
 
-function sharedEd25519(signatures: { wallet: Address; signature: Uint8Array }[], message: Uint8Array): Instruction {
+function sharedEd25519(
+  signatures: { wallet: Address; signature: Uint8Array }[],
+  message: Uint8Array,
+): Instruction {
   const entriesAt = 2 + 14 * signatures.length;
   const messageOffset = entriesAt + 96 * signatures.length;
   const data = new Uint8Array(messageOffset + message.length);
@@ -340,14 +375,26 @@ function sharedEd25519(signatures: { wallet: Address; signature: Uint8Array }[],
   data[0] = signatures.length;
   signatures.forEach(({ wallet, signature }, index) => {
     const signatureOffset = entriesAt + 96 * index;
-    [signatureOffset, 0xffff, signatureOffset + 64, 0xffff, messageOffset, message.length, 0xffff].forEach(
-      (value, field) => view.setUint16(2 + 14 * index + 2 * field, value, true),
-    );
+    [
+      signatureOffset,
+      0xffff,
+      signatureOffset + 64,
+      0xffff,
+      messageOffset,
+      message.length,
+      0xffff,
+    ].forEach((value, field) => {
+      view.setUint16(2 + 14 * index + 2 * field, value, true);
+    });
     data.set(signature, signatureOffset);
     data.set(getAddressEncoder().encode(wallet), signatureOffset + 64);
   });
   data.set(message, messageOffset);
-  return { programAddress: address("Ed25519SigVerify111111111111111111111111111"), accounts: [], data };
+  return {
+    programAddress: address("Ed25519SigVerify111111111111111111111111111"),
+    accounts: [],
+    data,
+  };
 }
 
 async function classPolicyPda(protocol: Address) {
@@ -372,6 +419,8 @@ async function orgNamePda(protocol: Address, name: string) {
   return found;
 }
 
+let worlds = BigInt(Date.now() % 1_000_000);
+
 async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
   if (!existsSync(programSo)) {
     throw new Error(`${programSo} is missing: run anchor build before the relay suite`);
@@ -380,11 +429,15 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
   svm.addProgramFromFile(THETIS_PROGRAM_ADDRESS, programSo);
   const clock = svm.getClock();
   clock.unixTimestamp = NOW;
-  clock.slot = 1_000n;
+  // Each world starts at its own slot: the sponsor's lookup-table address is derived from a
+  // recent slot, and relay_lookup_tables keeps every address unique across instances.
+  worlds += 1n;
+  clock.slot = 1_000n + worlds * 1_000_000n;
   svm.setClock(clock);
   svm.airdrop(payer.address, lamports(100_000_000_000n));
   svm.airdrop(sponsorAddress, lamports(10_000_000_000n));
-  for (const wallet of Object.values(wallets)) svm.airdrop(wallet.address, lamports(1_000_000_000n));
+  for (const wallet of Object.values(wallets))
+    svm.airdrop(wallet.address, lamports(1_000_000_000n));
 
   const instanceId = new Uint8Array(randomBytes(16));
   const [protocol] = await findProtocolPda({ instanceId });
@@ -397,7 +450,9 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
         payer,
         instanceId,
         settlementMode:
-          mode === "fiat" ? SettlementMode.FiatAttestationTest : SettlementMode.DevnetTokenSimulation,
+          mode === "fiat"
+            ? SettlementMode.FiatAttestationTest
+            : SettlementMode.DevnetTokenSimulation,
         adminArg: admin.address,
         accreditor: accreditor.address,
       }),
@@ -501,7 +556,11 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
   const [mint] = await findMintPda({ lot });
   const [position] = await findPositionPda({ lot, owner: orgs.khunou });
   const [vaultAuthority] = await findVaultAuthorityPda({ position });
-  const [vault] = await findAssociatedTokenPda({ owner: vaultAuthority, mint, tokenProgram: TOKEN_2022 });
+  const [vault] = await findAssociatedTokenPda({
+    owner: vaultAuthority,
+    mint,
+    tokenProgram: TOKEN_2022,
+  });
   const validUntil = NOW + 570n;
   const text = envelope(
     THETIS_PROGRAM_ADDRESS,
@@ -533,7 +592,9 @@ async function world(mode: "fiat" | "simulation" = "fiat"): Promise<World> {
         custodian: orgs.kopano,
         classPolicy,
         custodianClass,
-        intake: (await findIntakePda({ protocol, custodian: orgs.kopano, intakeDigest: INTAKE }))[0],
+        intake: (
+          await findIntakePda({ protocol, custodian: orgs.kopano, intakeDigest: INTAKE })
+        )[0],
         lot,
         mint,
         mintAuthority: (await findMintAuthorityPda({ mint }))[0],
@@ -676,7 +737,11 @@ function data<T>(response: Response, status = 200): T {
 }
 
 function errorOf(response: Response) {
-  return JSON.parse(response.body ?? "{}").error as { code: string; message: string; detail?: string };
+  return JSON.parse(response.body ?? "{}").error as {
+    code: string;
+    message: string;
+    detail?: string;
+  };
 }
 
 async function create(w: World, org: OrgKey, kind: string, args: Record<string, string>) {
@@ -686,19 +751,38 @@ async function create(w: World, org: OrgKey, kind: string, args: Record<string, 
   );
 }
 
-function signTextRequest(view: CommandView, wallet: KeyPairSigner, role: string, bytes?: Uint8Array) {
+function signTextRequest(
+  view: CommandView,
+  wallet: KeyPairSigner,
+  role: string,
+  bytes?: Uint8Array,
+) {
   if (!view.text) throw new Error("command has no text");
   const message = new Uint8Array(getBase64Encoder().encode(view.text.messageBase64));
   return (async () => ({
     role,
     wallet: wallet.address,
     messageSha256: view.text?.messageSha256 ?? "",
-    signature: getBase58Decoder().decode(await signBytes(wallet.keyPair.privateKey, bytes ?? message)),
+    signature: getBase58Decoder().decode(
+      await signBytes(wallet.keyPair.privateKey, bytes ?? message),
+    ),
   }))();
 }
 
-async function signText(w: World, org: OrgKey, view: CommandView, role: string, wallet: KeyPairSigner) {
-  return call(w, "POST", `/v1/commands/${view.id}/signatures`, people[org], await signTextRequest(view, wallet, role));
+async function signText(
+  w: World,
+  org: OrgKey,
+  view: CommandView,
+  role: string,
+  wallet: KeyPairSigner,
+) {
+  return call(
+    w,
+    "POST",
+    `/v1/commands/${view.id}/signatures`,
+    people[org],
+    await signTextRequest(view, wallet, role),
+  );
 }
 
 async function requestTransaction(w: World, org: OrgKey, view: CommandView, wallet: KeyPairSigner) {
@@ -747,9 +831,10 @@ async function run(
 
 function confirmed(view: CommandView, event: string) {
   expect(view.error, JSON.stringify(view.error)).toBeNull();
-  expect(view.status).toBe("confirmed");
-  expect(view.confirmedCommitment).toBe("confirmed");
-  expect(view.outcome?.event).toBe(event);
+  const shown = JSON.stringify({ status: view.status, error: view.error, outcome: view.outcome });
+  expect(view.status, shown).toBe("confirmed");
+  expect(view.confirmedCommitment, shown).toBe("confirmed");
+  expect(view.outcome?.event, shown).toBe(event);
   expect(view.transaction?.explorerUrl).toBe(
     `https://explorer.solana.com/tx/${view.transaction?.signature}?cluster=devnet`,
   );
@@ -802,13 +887,30 @@ async function setValuation(w: World, facility: string, validForDays = "30") {
   );
 }
 
-async function pledge(w: World, facility: string, lender: Actor = lenderOne(), quantityKg = "5000000") {
-  return run(w, "khunou", "pledge", { facility, lot: w.lot, quantityKg }, { borrower: khunou(), lender });
+async function pledge(
+  w: World,
+  facility: string,
+  lender: Actor = lenderOne(),
+  quantityKg = "5000000",
+) {
+  return run(
+    w,
+    "khunou",
+    "pledge",
+    { facility, lot: w.lot, quantityKg },
+    { borrower: khunou(), lender },
+  );
 }
 
 async function advance(w: World, loan: string, amountMinor = "60000000") {
   return confirmed(
-    await run(w, "lenderOne", "record_advance", { loan, amountMinor }, { borrower: khunou(), lender: lenderOne() }),
+    await run(
+      w,
+      "lenderOne",
+      "record_advance",
+      { loan, amountMinor },
+      { borrower: khunou(), lender: lenderOne() },
+    ),
     "AdvanceRecorded",
   );
 }
@@ -843,12 +945,20 @@ async function bankEvidence(org: OrgKey = "lenderOne") {
   const { id: versionId } = mustSucceed(
     await person.client
       .from("evidence_versions")
-      .insert({ object_id: objectId, version: 1, storage_path: storagePath, mime: "application/pdf", uploaded_by: person.id })
+      .insert({
+        object_id: objectId,
+        version: 1,
+        storage_path: storagePath,
+        mime: "application/pdf",
+        uploaded_by: person.id,
+      })
       .select("id")
       .single(),
   );
   mustSucceed(
-    await person.client.storage.from("originals").upload(storagePath, bytes, { contentType: "application/pdf" }),
+    await person.client.storage
+      .from("originals")
+      .upload(storagePath, bytes, { contentType: "application/pdf" }),
   );
   return versionId as string;
 }
@@ -910,24 +1020,32 @@ beforeAll(async () => {
     people[key] = { id: created.data.user.id, token: signedIn.data.session.access_token, client };
   }
   const values = (Object.keys(ORGS) as OrgKey[])
-    .map((key) => `('${orgIds[key]}', '${key.toLowerCase()}-${namespace}', '${ORGS[key].name}', '${ORGS[key].kind}', true)`)
+    .map(
+      (key) =>
+        `('${orgIds[key]}', '${key.toLowerCase()}-${namespace}', '${ORGS[key].name}', '${ORGS[key].kind}', true)`,
+    )
     .join(",\n");
   const members = (Object.keys(ORGS) as OrgKey[])
     .map((key) => `('${orgIds[key]}', '${people[key].id}', 'admin')`)
     .join(",\n");
-  execFileSync(
-    "supabase",
-    [
-      "db",
-      "query",
-      "--local",
-      `insert into public.organisations (id, slug, name, kind, synthetic) values ${values};
-       insert into public.memberships (organisation_id, user_id, member_role) values ${members};`,
-    ],
-    { cwd: projectRoot, timeout: 15_000 },
-  );
+  // One statement per query: production grants forbid membership inserts, so the local
+  // database is written directly; every route call uses a user's own token.
+  for (const statement of [
+    `insert into public.organisations (id, slug, name, kind, synthetic) values ${values}`,
+    `insert into public.memberships (organisation_id, user_id, member_role) values ${members}`,
+  ]) {
+    execFileSync("supabase", ["db", "query", "--local", statement], {
+      cwd: projectRoot,
+      timeout: 15_000,
+    });
+  }
 
-  [payer, admin, accreditor, orgAdmin] = await Promise.all([signer(), signer(), signer(), signer()]);
+  [payer, admin, accreditor, orgAdmin] = await Promise.all([
+    signer(),
+    signer(),
+    signer(),
+    signer(),
+  ]);
   for (const key of Object.keys(WALLETS) as WalletKey[]) wallets[key] = await signer();
 
   // Link each linked wallet through the API's own wallet-link routes.
@@ -941,7 +1059,10 @@ beforeAll(async () => {
         wallet: wallets[key].address,
       }),
     );
-    const signature = await signBytes(wallets[key].keyPair.privateKey, new TextEncoder().encode(challenge.message));
+    const signature = await signBytes(
+      wallets[key].keyPair.privateKey,
+      new TextEncoder().encode(challenge.message),
+    );
     data(
       await call(linkWorld, "POST", "/v1/wallet-links", people[org], {
         challengeId: challenge.challengeId,
@@ -957,7 +1078,8 @@ beforeAll(async () => {
   const directory = await mkdtemp(join(tmpdir(), "thetis-sponsor-"));
   sponsorPath = join(directory, "sponsor.json");
   await writeFile(sponsorPath, JSON.stringify([...seed, ...publicKey]), { mode: 0o600 });
-  sponsorAddress = (await createKeyPairSignerFromBytes(new Uint8Array([...seed, ...publicKey]))).address;
+  sponsorAddress = (await createKeyPairSignerFromBytes(new Uint8Array([...seed, ...publicKey])))
+    .address;
 }, 60_000);
 
 afterEach(() => {
@@ -977,15 +1099,28 @@ describe("relay commands on the real program", () => {
         w,
         "khunou",
         "create_release_intent",
-        { loan, buyer: orgIds.buyer, quantityKg: "2000000", priceMinor: "40000000", topUpMinor: "0", expiresInHours: "24" },
+        {
+          loan,
+          buyer: orgIds.buyer,
+          quantityKg: "2000000",
+          priceMinor: "40000000",
+          topUpMinor: "0",
+          expiresInHours: "24",
+        },
         { seller: khunou() },
       ),
       "ReleaseIntentCreated",
     );
     const intent = intentView.intent;
     if (!intent) throw new Error("no intent");
-    confirmed(await confirmPayment(w, loan, "Release", "40000000", "BANK-REL-0001", intent), "PaymentConfirmed");
-    const sale = confirmed(await run(w, "buyer", "sell_pledged", { intent }, { buyer: buyer() }), "PledgedSold");
+    confirmed(
+      await confirmPayment(w, loan, "Release", "40000000", "BANK-REL-0001", intent),
+      "PaymentConfirmed",
+    );
+    const sale = confirmed(
+      await run(w, "buyer", "sell_pledged", { intent }, { buyer: buyer() }),
+      "PledgedSold",
+    );
     expect(sale.payment).toBeTruthy();
     expect(sale.lot).toBe(w.lot);
 
@@ -994,8 +1129,14 @@ describe("relay commands on the real program", () => {
       "PaymentConfirmed",
     );
     if (!repayment.payment) throw new Error("no payment");
-    confirmed(await run(w, "lenderOne", "repay", { payment: repayment.payment }, { lender: lenderOne() }), "Repaid");
-    confirmed(await run(w, "lenderOne", "close_loan", { loan }, { lender: lenderOne() }), "LoanClosed");
+    confirmed(
+      await run(w, "lenderOne", "repay", { payment: repayment.payment }, { lender: lenderOne() }),
+      "Repaid",
+    );
+    confirmed(
+      await run(w, "lenderOne", "close_loan", { loan }, { lender: lenderOne() }),
+      "LoanClosed",
+    );
     expect(loanAccount(w, loan).status).toBe(3); // Closed
     expect(loanAccount(w, loan).principal).toBe(0n);
   }, 120_000);
@@ -1029,7 +1170,10 @@ describe("relay commands on the real program", () => {
     const clock = w.svm.getClock();
     clock.unixTimestamp += DAY;
     w.svm.setClock(clock);
-    confirmed(await run(w, "lenderOne", "liquidate", { loan }, { lender: lenderOne() }), "Liquidated");
+    confirmed(
+      await run(w, "lenderOne", "liquidate", { loan }, { lender: lenderOne() }),
+      "Liquidated",
+    );
     expect(loanAccount(w, loan).status).toBe(1); // Recovery
   }, 120_000);
 
@@ -1037,23 +1181,35 @@ describe("relay commands on the real program", () => {
     const w = await world();
     const { loan } = await pledgedLoan(w);
     await advance(w, loan);
-    const repayment = confirmed(await confirmPayment(w, loan, "Repayment", "1000000", "BANK-REP-0002"), "PaymentConfirmed");
+    const repayment = confirmed(
+      await confirmPayment(w, loan, "Repayment", "1000000", "BANK-REP-0002"),
+      "PaymentConfirmed",
+    );
     if (!repayment.payment) throw new Error("no payment");
-    confirmed(await run(w, "lenderOne", "repay", { payment: repayment.payment }, { lender: lenderOne() }), "Repaid");
+    confirmed(
+      await run(w, "lenderOne", "repay", { payment: repayment.payment }, { lender: lenderOne() }),
+      "Repaid",
+    );
     const before = loanAccount(w, loan).revision;
     const correction = confirmed(
       await run(
         w,
         "lenderOne",
         "correct_payment",
-        { target: repayment.payment, correctionReference: "CORR-0001", evidenceVersionId: await finalizedEvidence(w) },
+        {
+          target: repayment.payment,
+          correctionReference: "CORR-0001",
+          evidenceVersionId: await finalizedEvidence(w),
+        },
         { lender: lenderOne() },
       ),
       "PaymentCorrected",
     );
     expect(correction.loan).toBe(loan);
     expect(loanAccount(w, loan).revision).toBe(before + 1n);
-    const corrected = decodePaymentAttestation(w.svm.getAccount(address(repayment.payment)) as never).data;
+    const corrected = decodePaymentAttestation(
+      w.svm.getAccount(address(repayment.payment)) as never,
+    ).data;
     expect(corrected.status).not.toBe(0); // no longer Unconsumed
   }, 120_000);
 
@@ -1061,7 +1217,10 @@ describe("relay commands on the real program", () => {
     const w = await world("simulation");
     const facility = await openFacility(w);
     await setValuation(w, facility);
-    confirmed(await run(w, "lenderOne", "deposit", { amountMinor: "60000000" }, { depositor: lenderOne() }), "Deposited");
+    confirmed(
+      await run(w, "lenderOne", "deposit", { amountMinor: "60000000" }, { depositor: lenderOne() }),
+      "Deposited",
+    );
     const pledged = confirmed(await pledge(w, facility), "Pledged");
     if (!pledged.loan) throw new Error("no loan");
     confirmed(
@@ -1075,10 +1234,25 @@ describe("relay commands on the real program", () => {
       "Borrowed",
     );
     confirmed(
-      await run(w, "khunou", "repay_simulated", { loan: pledged.loan, amountMinor: "10000000" }, { payer: khunou() }),
+      await run(
+        w,
+        "khunou",
+        "repay_simulated",
+        { loan: pledged.loan, amountMinor: "10000000" },
+        { payer: khunou() },
+      ),
       "Repaid",
     );
-    confirmed(await run(w, "lenderOne", "withdraw", { amountMinor: "10000000" }, { depositor: lenderOne() }), "Withdrawn");
+    confirmed(
+      await run(
+        w,
+        "lenderOne",
+        "withdraw",
+        { amountMinor: "10000000" },
+        { depositor: lenderOne() },
+      ),
+      "Withdrawn",
+    );
     expect(loanAccount(w, pledged.loan).principal).toBe(30_000_000n);
     // A fiat-only kind is refused before anything is built.
     const refused = await call(w, "POST", "/v1/commands", people.lenderOne, {
@@ -1100,6 +1274,7 @@ describe("relay commands on the real program", () => {
     const w = await world();
     const facility = await openFacility(w);
     const view = await create(w, "khunou", "pledge", { facility, lot: w.lot, quantityKg: "1000" });
+    const sentBefore = w.chain.sent.length;
 
     const unlinked = await signText(w, "khunou", view, "borrower", wallets.khunouUnlinked);
     expect(unlinked.statusCode).toBe(409);
@@ -1111,10 +1286,16 @@ describe("relay commands on the real program", () => {
     expect(errorOf(unscoped).detail).toMatch(/scope/);
 
     const stale = await signTextRequest(view, wallets.khunou, "borrower");
-    const staleResponse = await call(w, "POST", `/v1/commands/${view.id}/signatures`, people.khunou, {
-      ...stale,
-      messageSha256: "0".repeat(64),
-    });
+    const staleResponse = await call(
+      w,
+      "POST",
+      `/v1/commands/${view.id}/signatures`,
+      people.khunou,
+      {
+        ...stale,
+        messageSha256: "0".repeat(64),
+      },
+    );
     expect(staleResponse.statusCode).toBe(409);
     expect(errorOf(staleResponse).code).toBe("STALE_TEXT");
 
@@ -1123,7 +1304,12 @@ describe("relay commands on the real program", () => {
       "POST",
       `/v1/commands/${view.id}/signatures`,
       people.khunou,
-      await signTextRequest(view, wallets.khunou, "borrower", new TextEncoder().encode("another text")),
+      await signTextRequest(
+        view,
+        wallets.khunou,
+        "borrower",
+        new TextEncoder().encode("another text"),
+      ),
     );
     expect(wrong.statusCode).toBe(422);
     expect(errorOf(wrong).code).toBe("BAD_SIGNATURE");
@@ -1138,10 +1324,12 @@ describe("relay commands on the real program", () => {
     expect(errorOf(otherOrg).code).toBe("NOT_AUTHORISED");
 
     const fine = data<CommandView>(await signText(w, "khunou", view, "borrower", wallets.khunou));
-    expect(fine.signers.find((s) => s.role === "borrower")?.signed?.wallet).toBe(wallets.khunou.address);
+    expect(fine.signers.find((s) => s.role === "borrower")?.signed?.wallet).toBe(
+      wallets.khunou.address,
+    );
     const again = await signText(w, "khunou", view, "borrower", wallets.khunou);
     expect(errorOf(again).code).toBe("ALREADY_SIGNED");
-    expect(w.chain.sent).toHaveLength(1); // only open_facility reached the chain
+    expect(w.chain.sent).toHaveLength(sentBefore); // nothing refused reached the chain
   }, 120_000);
 
   it("a text expires 30 seconds before validUntil and renew issues a fresh text with the signatures cleared", async () => {
@@ -1158,13 +1346,23 @@ describe("relay commands on the real program", () => {
     const late = await signText(w, "lenderOne", view, "lender", wallets.lenderOne);
     expect(late.statusCode).toBe(409);
     expect(errorOf(late).code).toBe("TEXT_EXPIRED");
-    const expired = data<CommandView>(await call(w, "GET", `/v1/commands/${view.id}`, people.lenderOne));
+    const expired = data<CommandView>(
+      await call(w, "GET", `/v1/commands/${view.id}`, people.lenderOne),
+    );
     expect(expired.status).toBe("expired");
     expect(expired.signers.find((s) => s.role === "borrower")?.signed).not.toBeNull();
 
-    const notInitiator = await call(w, "POST", `/v1/commands/${view.id}/renew`, people.lenderOne, {});
+    const notInitiator = await call(
+      w,
+      "POST",
+      `/v1/commands/${view.id}/renew`,
+      people.lenderOne,
+      {},
+    );
     expect(errorOf(notInitiator).code).toBe("NOT_AUTHORISED");
-    const renewed = data<CommandView>(await call(w, "POST", `/v1/commands/${view.id}/renew`, people.khunou, {}));
+    const renewed = data<CommandView>(
+      await call(w, "POST", `/v1/commands/${view.id}/renew`, people.khunou, {}),
+    );
     expect(renewed.status).toBe("awaiting_signatures");
     expect(renewed.text?.version).toBe(2);
     expect(renewed.text?.messageSha256).not.toBe(view.text?.messageSha256);
@@ -1172,8 +1370,12 @@ describe("relay commands on the real program", () => {
     const again = await call(w, "POST", `/v1/commands/${view.id}/renew`, people.khunou, {});
     expect(errorOf(again).code).toBe("COMMAND_STATE");
 
-    let current = data<CommandView>(await signText(w, "khunou", renewed, "borrower", wallets.khunou));
-    current = data<CommandView>(await signText(w, "lenderOne", current, "lender", wallets.lenderOne));
+    let current = data<CommandView>(
+      await signText(w, "khunou", renewed, "borrower", wallets.khunou),
+    );
+    current = data<CommandView>(
+      await signText(w, "lenderOne", current, "lender", wallets.lenderOne),
+    );
     confirmed(current, "Pledged");
   }, 120_000);
 
@@ -1205,12 +1407,17 @@ describe("relay commands on the real program", () => {
       maxLtvBps: "6000",
     });
     w.chain.dropSends = true;
-    const lost = data<CommandView>(await signTransactionAs(w, "lenderOne", view, wallets.lenderOne));
+    const lost = data<CommandView>(
+      await signTransactionAs(w, "lenderOne", view, wallets.lenderOne),
+    );
     expect(lost.status).toBe("awaiting_signatures");
     expect(lost.transaction).toBeNull();
     expect(lost.signers[0]?.signed).toBeNull();
     w.chain.dropSends = false;
-    confirmed(data<CommandView>(await signTransactionAs(w, "lenderOne", lost, wallets.lenderOne)), "FacilityOpened");
+    confirmed(
+      data<CommandView>(await signTransactionAs(w, "lenderOne", lost, wallets.lenderOne)),
+      "FacilityOpened",
+    );
   }, 120_000);
 
   it("a signed transaction whose message differs from the issued one is TRANSACTION_MISMATCH", async () => {
@@ -1232,17 +1439,42 @@ describe("relay commands on the real program", () => {
     });
     expect(stale.statusCode).toBe(422);
     expect(errorOf(stale).code).toBe("TRANSACTION_MISMATCH");
-    // Signed by a wallet other than the one that requested it.
-    const otherWallet = await call(w, "POST", `/v1/commands/${view.id}/transaction`, people.lenderOne, {
-      transactionBase64: await walletSigns(second.transactionBase64, wallets.lenderTwo),
-    });
+    // The lender's slot holds a signature by another wallet.
+    const issued = getTransactionDecoder().decode(
+      getBase64Encoder().encode(second.transactionBase64),
+    );
+    const forged = {
+      ...issued,
+      signatures: {
+        ...issued.signatures,
+        [wallets.lenderOne.address]: await signBytes(
+          wallets.lenderTwo.keyPair.privateKey,
+          issued.messageBytes,
+        ),
+      },
+    } as Transaction;
+    const otherWallet = await call(
+      w,
+      "POST",
+      `/v1/commands/${view.id}/transaction`,
+      people.lenderOne,
+      {
+        transactionBase64: getBase64Decoder().decode(getTransactionEncoder().encode(forged)),
+      },
+    );
     expect(errorOf(otherWallet).code).toBe("TRANSACTION_MISMATCH");
     // Unsigned.
-    const unsigned = await call(w, "POST", `/v1/commands/${view.id}/transaction`, people.lenderOne, {
-      transactionBase64: second.transactionBase64,
-    });
+    const unsigned = await call(
+      w,
+      "POST",
+      `/v1/commands/${view.id}/transaction`,
+      people.lenderOne,
+      {
+        transactionBase64: second.transactionBase64,
+      },
+    );
     expect(errorOf(unsigned).code).toBe("TRANSACTION_MISMATCH");
-    expect(w.chain.sent).toHaveLength(0);
+    expect(w.chain.sent).toHaveLength(0); // nothing was sent for the refused transactions
     confirmed(
       data<CommandView>(
         await call(w, "POST", `/v1/commands/${view.id}/transaction`, people.lenderOne, {
@@ -1257,7 +1489,10 @@ describe("relay commands on the real program", () => {
     const w = await world();
     const { loan } = await pledgedLoan(w);
     await advance(w, loan);
-    const first = confirmed(await confirmPayment(w, loan, "Repayment", "1000000", "BANK-REP-0003"), "PaymentConfirmed");
+    const first = confirmed(
+      await confirmPayment(w, loan, "Repayment", "1000000", "BANK-REP-0003"),
+      "PaymentConfirmed",
+    );
     const repeat = await call(w, "POST", "/v1/commands", people.lenderOne, {
       kind: "confirm_payment",
       organisationId: orgIds.lenderOne,
@@ -1271,7 +1506,10 @@ describe("relay commands on the real program", () => {
       },
     });
     expect(repeat.statusCode).toBe(409);
-    expect(errorOf(repeat)).toMatchObject({ code: "PAYMENT_ALREADY_RECORDED", detail: first.payment });
+    expect(errorOf(repeat)).toMatchObject({
+      code: "PAYMENT_ALREADY_RECORDED",
+      detail: first.payment,
+    });
     // Evidence of another organisation is not this lender's bank record.
     const foreign = await call(w, "POST", "/v1/commands", people.lenderOne, {
       kind: "confirm_payment",
@@ -1304,9 +1542,15 @@ describe("relay commands on the real program", () => {
     expect(sign.statusCode).toBe(404);
     const renew = await call(w, "POST", `/v1/commands/${view.id}/renew`, people.outsider, {});
     expect(renew.statusCode).toBe(404);
-    const request = await call(w, "POST", `/v1/commands/${view.id}/transaction-request`, people.outsider, {
-      wallet: wallets.lenderOne.address,
-    });
+    const request = await call(
+      w,
+      "POST",
+      `/v1/commands/${view.id}/transaction-request`,
+      people.outsider,
+      {
+        wallet: wallets.lenderOne.address,
+      },
+    );
     expect(request.statusCode).toBe(404);
     // Nor create one in another organisation's name.
     const foreign = await call(w, "POST", "/v1/commands", people.outsider, {

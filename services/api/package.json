@@ -24,7 +24,6 @@
     "@solana/kit": "8.6.0",
     "@supabase/supabase-js": "2.119.0",
     "@thetis/contracts": "workspace:*",
-    "@thetis/domain": "workspace:*",
     "@thetis/sponsor": "workspace:*"
   }
 }

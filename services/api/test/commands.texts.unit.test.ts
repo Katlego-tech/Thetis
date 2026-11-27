@@ -18,9 +18,9 @@ import {
 
 // program-lending.md §6.2 known-answer inputs.
 const PROGRAM = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
-const INSTANCE = Uint8Array.from(
-  [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff],
-);
+const INSTANCE = Uint8Array.from([
+  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+]);
 const FACILITY = new Uint8Array(16).fill(0x11);
 const VALID_UNTIL = 1_795_098_725n;
 const LOT = "CR-0001";
@@ -205,9 +205,9 @@ describe("signed texts", () => {
         }),
       ).toString("hex"),
     ).toBe(sha256(`thetis-facility-terms-v1\n${lender}\n${borrower}\nUSD\n2\n1\n1200\n6000`));
-    expect(Buffer.from(sourceDigest("Synthetic test price, not a market quote")).toString("hex")).toBe(
-      sha256("thetis-valuation-source-v1\nSynthetic test price, not a market quote"),
-    );
+    expect(
+      Buffer.from(sourceDigest("Synthetic test price, not a market quote")).toString("hex"),
+    ).toBe(sha256("thetis-valuation-source-v1\nSynthetic test price, not a market quote"));
     expect(Buffer.from(paymentId(lender, "BANK-REF-0001")).toString("hex")).toBe(
       sha256(`thetis-payment-v1\n${lender}\nBANK-REF-0001`),
     );

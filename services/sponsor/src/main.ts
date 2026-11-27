@@ -1,5 +1,10 @@
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
-import { type Address, createKeyPairFromBytes, getAddressFromPublicKey, isAddress } from "@solana/kit";
+import {
+  type Address,
+  createKeyPairFromBytes,
+  getAddressFromPublicKey,
+  isAddress,
+} from "@solana/kit";
 import { THETIS_PROGRAM_ADDRESS } from "@thetis/contracts";
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from "aws-lambda";
 import { SponsorRefusedError } from "./allowlist.ts";
@@ -9,7 +14,9 @@ type DirectRequest =
   | { op: "address" }
   | { op: "sign"; transactionBase64: string; lookupTable: string | null };
 
-let keys: Promise<{ keyPair: CryptoKeyPair; address: Address }> | undefined;
+let keys:
+  | Promise<{ keyPair: Awaited<ReturnType<typeof createKeyPairFromBytes>>; address: Address }>
+  | undefined;
 
 /** The key is read once from Secrets Manager: a JSON array of 64 numbers. */
 function sponsorKeys() {

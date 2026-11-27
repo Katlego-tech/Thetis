@@ -56,7 +56,8 @@ async function guarded<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T>
 
 function tableFrom(data: Uint8Array) {
   const bytes = Buffer.from(data);
-  if (bytes.length < 56 || (bytes.length - 56) % 32 !== 0 || bytes.readUInt32LE(0) !== 1) return null;
+  if (bytes.length < 56 || (bytes.length - 56) % 32 !== 0 || bytes.readUInt32LE(0) !== 1)
+    return null;
   const addresses: Address[] = [];
   for (let offset = 56; offset < bytes.length; offset += 32) {
     addresses.push(getAddressDecoder().decode(bytes.subarray(offset, offset + 32)));
@@ -78,7 +79,8 @@ export function rpcChain(url: string): ChainPort {
         return BigInt(time);
       });
     },
-    blockHeight: () => guarded((abortSignal) => rpc.getBlockHeight(confirmed).send({ abortSignal })),
+    blockHeight: () =>
+      guarded((abortSignal) => rpc.getBlockHeight(confirmed).send({ abortSignal })),
     latestBlockhash: () =>
       guarded(async (abortSignal) => {
         const { value } = await rpc.getLatestBlockhash(confirmed).send({ abortSignal });
@@ -102,7 +104,15 @@ export function rpcChain(url: string): ChainPort {
         const filters = [
           { dataSize: BigInt(dataSize) },
           ...(memcmp
-            ? [{ memcmp: { offset: BigInt(memcmp.offset), bytes: memcmp.bytes, encoding: "base58" as const } }]
+            ? [
+                {
+                  memcmp: {
+                    offset: BigInt(memcmp.offset),
+                    bytes: memcmp.bytes,
+                    encoding: "base58" as const,
+                  },
+                },
+              ]
             : []),
         ];
         const found = await rpc
@@ -112,7 +122,18 @@ export function rpcChain(url: string): ChainPort {
             filters: filters as never,
           })
           .send({ abortSignal });
-        return (found as unknown as { pubkey: Address; account: { data: [string, string]; owner: Address; lamports: bigint; executable: boolean; space: bigint } }[]).map(
+        return (
+          found as unknown as {
+            pubkey: Address;
+            account: {
+              data: [string, string];
+              owner: Address;
+              lamports: bigint;
+              executable: boolean;
+              space: bigint;
+            };
+          }[]
+        ).map(
           ({ pubkey, account }) =>
             ({
               address: pubkey,

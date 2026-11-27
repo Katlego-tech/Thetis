@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from "aws-lambda";
+import { ChainUnavailableError } from "./commands/chain.ts";
+import {
+  type CommandDependencies,
+  commandRoute,
+  defaultDependencies,
+  isCommandPath,
+} from "./commands/routes.ts";
+import { RELAY_ERRORS, RelayError } from "./commands/views.ts";
 import { decodeBase58, verifyEd25519 } from "./ed25519.ts";
 import type { AccessClients } from "./supabase.ts";
 import { ID_PATTERN } from "./voice/agent.ts";
@@ -22,6 +30,7 @@ const errors = {
   WALLET_INVALID: [422, "The wallet must be a base58-encoded Solana public key."],
   INTERNAL: [500, "An internal error occurred."],
   VOICE_UNAVAILABLE: [503, "Voice is unavailable."],
+  ...RELAY_ERRORS,
 } as const;
 
 type ErrorCode = keyof typeof errors;
@@ -29,10 +38,12 @@ type ErrorCode = keyof typeof errors;
 class RouteError extends Error {
   // A declared field, not a parameter property: `node src/local.ts` runs in strip-only mode.
   readonly code: ErrorCode;
+  readonly detail: string | undefined;
 
-  constructor(code: ErrorCode) {
+  constructor(code: ErrorCode, detail?: string) {
     super(code);
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -311,6 +322,7 @@ async function lotEvidence(caller: SupabaseClient, lotId: string) {
 export async function route(
   event: APIGatewayProxyEventV2,
   clients: AccessClients,
+  commands: () => Promise<CommandDependencies> = defaultDependencies,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const { rawPath, requestContext } = event;
   const { method } = requestContext.http;
@@ -342,7 +354,9 @@ export async function route(
     const isDownload = method === "GET" && /^\/v1\/evidence\/[^/]+\/download-url$/.test(rawPath);
     const isSession = method === "POST" && rawPath === "/v1/conversations/session";
     const isLotEvidence = method === "GET" && /^\/v1\/voice\/lots\/[^/]+\/evidence$/.test(rawPath);
+    const isCommand = isCommandPath(rawPath);
     if (
+      !isCommand &&
       !isInvitation &&
       !isChallenge &&
       !isComplete &&
@@ -367,6 +381,16 @@ export async function route(
     const caller = clients.caller(token);
 
     let data: object;
+    if (isCommand) {
+      const result = await commandRoute(
+        method,
+        rawPath,
+        (fields) => requestBody(event, fields),
+        { userId: user.id, caller, service: clients.service },
+        commands,
+      );
+      return json(result.status, { data: result.data }, cors);
+    }
     if (isInvitation) {
       data = await createInvitation(event, caller, clients);
     } else if (isChallenge) {
@@ -390,11 +414,23 @@ export async function route(
     }
     return json(200, { data }, cors);
   } catch (error) {
-    const code = error instanceof RouteError ? error.code : "INTERNAL";
+    let code: ErrorCode = "INTERNAL";
+    let detail: string | undefined;
+    if (error instanceof RouteError || error instanceof RelayError) {
+      code = error.code;
+      detail = error.detail;
+    } else if (error instanceof ChainUnavailableError) {
+      code = "CHAIN_UNAVAILABLE";
+    }
     if (code === "INTERNAL" || code === "VOICE_UNAVAILABLE") {
       console.error(code, { requestId: requestContext.requestId });
+      detail = undefined;
     }
     const [status, message] = errors[code];
-    return json(status, { error: { code, message } }, cors);
+    return json(
+      status,
+      { error: { code, message, ...(detail !== undefined && { detail }) } },
+      cors,
+    );
   }
 }

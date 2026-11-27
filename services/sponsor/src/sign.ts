@@ -1,4 +1,5 @@
 import {
+  type createKeyPairFromBytes,
   getBase64Decoder,
   getBase64Encoder,
   getTransactionDecoder,
@@ -9,7 +10,7 @@ import { checkSponsorTransaction, type SponsorContext } from "./allowlist.ts";
 
 /** Checks the allowlist, then adds the sponsor's signature and returns the wire transaction. */
 export async function signAsSponsor(
-  keyPair: CryptoKeyPair,
+  keyPair: Awaited<ReturnType<typeof createKeyPairFromBytes>>,
   wireBase64: string,
   context: SponsorContext,
 ): Promise<string> {

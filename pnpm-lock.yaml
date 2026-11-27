@@ -219,9 +219,6 @@ importers:
       '@thetis/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@thetis/domain':
-        specifier: workspace:*
-        version: link:../../packages/domain
       '@thetis/sponsor':
         specifier: workspace:*
         version: link:../sponsor

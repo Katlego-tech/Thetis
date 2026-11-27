@@ -2,6 +2,11 @@
 -- and sends, and the address lookup table of each instance. Written only by the API's service
 -- client (compare-and-set on revision); parties read their commands under RLS. Nothing here is
 -- authority: the program checks every signature, revision and limit.
+-- The API writes these rows directly with the service role, so the row checks below run as
+-- service_role and need the pure value-check functions (still closed to anon and authenticated).
+grant execute on function private.is_address(text), private.is_u64(text), private.is_i64(text)
+  to service_role;
+
 create type public.command_kind as enum ('open_facility', 'set_valuation', 'pledge', 'record_advance',
   'confirm_payment', 'correct_payment', 'repay', 'create_release_intent', 'sell_pledged', 'liquidate',
   'close_loan', 'deposit', 'withdraw', 'borrow', 'repay_simulated');

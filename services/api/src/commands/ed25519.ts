@@ -19,8 +19,18 @@ export function sharedMessageInstruction(
   entries.forEach(({ wallet, signature }, index) => {
     if (signature.length !== 64) throw new Error("Ed25519 signatures are 64 bytes");
     const signatureOffset = entriesAt + 96 * index;
-    const fields = [signatureOffset, 0xffff, signatureOffset + 64, 0xffff, messageOffset, message.length, 0xffff];
-    fields.forEach((value, field) => view.setUint16(2 + 14 * index + 2 * field, value, true));
+    const fields = [
+      signatureOffset,
+      0xffff,
+      signatureOffset + 64,
+      0xffff,
+      messageOffset,
+      message.length,
+      0xffff,
+    ];
+    fields.forEach((value, field) => {
+      view.setUint16(2 + 14 * index + 2 * field, value, true);
+    });
     data.set(signature, signatureOffset);
     data.set(getAddressEncoder().encode(wallet), signatureOffset + 64);
   });
