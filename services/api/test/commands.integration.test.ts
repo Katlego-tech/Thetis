@@ -2903,15 +2903,23 @@ describe("record_observation on the real program", () => {
   it("a second observation prepared at the same count fails as StaleRevision once the first lands", async () => {
     const w = await world();
     const { batch } = await shippedBatch(w);
-    const first = await create(w, "mosela", "record_observation", (await observationArgs(w, "mosela", batch)).args);
-    const second = await create(w, "mosela", "record_observation", (await observationArgs(w, "mosela", batch)).args);
+    const first = await create(
+      w,
+      "mosela",
+      "record_observation",
+      (await observationArgs(w, "mosela", batch)).args,
+    );
+    const second = await create(
+      w,
+      "mosela",
+      "record_observation",
+      (await observationArgs(w, "mosela", batch)).args,
+    );
     confirmed(
       data<CommandView>(await signText(w, "mosela", first, "observer", wallets.mosela)),
       "ObservationRecorded",
     );
-    const view = data<CommandView>(
-      await signText(w, "mosela", second, "observer", wallets.mosela),
-    );
+    const view = data<CommandView>(await signText(w, "mosela", second, "observer", wallets.mosela));
     failedWith(view, "StaleRevision");
     expect(decodeManifestBatch(w.svm.getAccount(batch) as never).data.observationCount).toBe(1);
   });

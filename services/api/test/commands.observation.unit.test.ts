@@ -268,7 +268,7 @@ describe("record_observation transaction (field-app.md T067r.2 folds)", () => {
     expect(keys).toStrictEqual(candidates);
   });
 
-  it("measures the demo observation at 818 bytes and the widest at 934, both under 1,232", async () => {
+  it("measures the demo observation at 1,027 bytes and the widest at 1,151, both under 1,232", async () => {
     const demo = await observationSize({
       lotId: "CR-0001",
       holder: "Mosela Haulage",
@@ -281,7 +281,7 @@ describe("record_observation transaction (field-app.md T067r.2 folds)", () => {
       validUntil: 1_795_098_725n,
     });
     expect(demo.text.length).toBe(513);
-    expect(demo.bytes).toBe(818);
+    expect(demo.bytes).toBe(1_027);
     const widest = await observationSize({
       lotId: "L".repeat(16),
       holder: "N".repeat(48),
@@ -294,7 +294,7 @@ describe("record_observation transaction (field-app.md T067r.2 folds)", () => {
       validUntil: I64_MAX,
     });
     expect(widest.text.length).toBe(629);
-    expect(widest.bytes).toBe(934);
+    expect(widest.bytes).toBe(1_151);
     expect(widest.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
   });
 });

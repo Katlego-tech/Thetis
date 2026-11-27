@@ -61,12 +61,14 @@ import {
   getOpenFacilityInstruction,
   getPledgeInstruction,
   getRecordAdvanceInstruction,
+  getRecordObservationInstruction,
   getRepayInstruction,
   getSellPledgedInstruction,
   getSetValuationInstruction,
   getWithdrawInstruction,
   type Loan,
   type ManifestBatch,
+  ObservationKind,
   type Organisation,
   PaymentPurpose,
   PaymentStatus,
@@ -90,6 +92,8 @@ import {
   intakeDigest,
   issueLotMessage,
   normaliseTicket,
+  type ObservationKindName,
+  observationMessage,
   paymentId,
   pledgeMessage,
   releaseIntentMessage,
@@ -116,6 +120,7 @@ const SCOPES = {
   ISSUE: 1 << 0,
   PLEDGE: 1 << 5,
   CARRY: 1 << 10,
+  OBSERVE: 1 << 11,
   BUY: 1 << 6,
   LEND: 1 << 7,
   POOL: 1 << 8,
@@ -301,6 +306,14 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     event: "CustodyHandedOver",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
   },
+  record_observation: {
+    mode: "both",
+    args: ["batch", "kind", "locationCode", "evidenceVersionId", "observedAt"],
+    // field-app.md §4.3: every field role but handover's next_holder keeps the relay pre-check.
+    signers: [text("observer", "OBSERVE")],
+    event: "ObservationRecorded",
+    textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+  },
 };
 
 /** The addresses of a kind's program-signer PDAs, read from its plan (fold 25). */
@@ -345,6 +358,8 @@ const ARG_RULES: Record<string, (value: string) => boolean> = {
   to: (v) => UUID.test(v),
   batch: isBase58Address,
   lotId: (v) => /^[A-Z0-9-]{1,16}$/.test(v),
+  kind: (v) => v === "Border" || v === "Checkpoint",
+  locationCode: (v) => /^[A-Z0-9-]{1,16}$/.test(v),
   weighbridgeTicket: (v) =>
     Buffer.byteLength(v) >= 1 &&
     Buffer.byteLength(v) <= 64 &&
@@ -552,9 +567,19 @@ export interface PrepareContext {
   initiator: Organisationish;
   args: Record<string, string>;
   /** EVIDENCE_INVALID checks with the caller's client (§6.5.5); returns the sha256 hex. */
-  evidenceDigest(versionId: string, lenderOrgId: string): Promise<string>;
+  evidenceDigest(versionId: string, expected: EvidenceExpectation): Promise<string>;
   /** WALLET_NOT_LINKED unless `wallet` is one of the caller's active links for the org. */
   callerLinks(organisationId: string): Promise<string[]>;
+}
+
+/** What a finalized evidence version must be for a kind (field-app.md T067r.2 fold 32): the
+ * owner organisation, the purpose and, for custody evidence, the subject. */
+export interface EvidenceExpectation {
+  ownerOrgId: string;
+  purpose: "bank" | "transport";
+  subject?: { kind: "batch"; ref: string };
+  /** The EVIDENCE_INVALID detail; the lending kinds send none. */
+  detail?: string;
 }
 
 export interface Prepared {
@@ -723,6 +748,16 @@ async function readOrigin(context: PrepareContext, subject: Uint8Array) {
 
 const BATCH_STAGES = ["AtSource", "InTransit", "Arrived"] as const;
 
+/** Chain roles that can hold OBSERVE (setup.rs role scopes): exactly the Checkpoint set. Any
+ * other caller is refused before a text exists (field-app.md T067r.2 fold 31); the Border arm of
+ * the role rule stays the program's (WrongRole on chain). */
+const OBSERVER_ROLES: readonly number[] = [
+  Role.Custodian,
+  Role.Transporter,
+  Role.Terminal,
+  Role.Inspector,
+];
+
 const PREPARE: Record<CommandKind, Preparer> = {
   async handover(context) {
     const { args } = context;
@@ -792,6 +827,80 @@ const PREPARE: Record<CommandKind, Preparer> = {
       text: message,
       validUntil: until,
       signers: stored("handover", [holder, to]),
+      lot: shipment.lot,
+      facility: null,
+      loan: null,
+      intent: null,
+      payment: null,
+    };
+  },
+
+  async record_observation(context) {
+    const { args } = context;
+    if (!OBSERVER_ROLES.includes(context.initiator.role)) {
+      notAuthorised("only a custodian, transporter, terminal or inspector records an observation");
+    }
+    const batchAddress = args.batch as Address;
+    const batch = (await context.reader.read(
+      "batch",
+      batchAddress,
+      decodeManifestBatch as never,
+      "ManifestBatch",
+    )) as ManifestBatch;
+    const shipment = (await context.reader.read(
+      "shipment",
+      batch.shipment,
+      decodeShipment as never,
+      "Shipment",
+    )) as Shipment;
+    const lot = await readLot(context, shipment.lot);
+    const holder = await context.reader.organisation("holderOrg", batch.holder);
+    const observer = context.initiator;
+    const observedAt = BigInt(args.observedAt as string);
+    if (observedAt > context.chainTime) throw new RelayError("VALIDATION", "observedAt");
+    const digestHex = await context.evidenceDigest(args.evidenceVersionId as string, {
+      ownerOrgId: observer.uuid,
+      purpose: "transport",
+      subject: { kind: "batch", ref: batchAddress },
+      detail: "transport evidence of this batch",
+    });
+    const kind = args.kind as ObservationKindName;
+    const locationCode = args.locationCode as string;
+    const until = validUntil(context, "record_observation");
+    const message = observationMessage(
+      context.programId,
+      context.instanceId,
+      lot.lotId,
+      Uint8Array.from(shipment.shipmentId as ArrayLike<number>),
+      batch.index + 1,
+      batch.batchCount,
+      holder.name,
+      observer.name,
+      kind,
+      locationCode,
+      Uint8Array.from(Buffer.from(digestHex, "hex")),
+      observedAt,
+      batch.observationCount,
+      until,
+    );
+    return {
+      plan: {
+        shipment: batch.shipment,
+        batch: batchAddress,
+        lot: shipment.lot,
+        holderOrg: batch.holder,
+        observerOrg: observer.address,
+        observationKind: kind,
+        locationCode,
+        evidenceDigest: digestHex,
+        observedAt: String(observedAt),
+        expectedObservation: String(batch.observationCount),
+        validUntil: String(until),
+      },
+      fields: textFields(message),
+      text: message,
+      validUntil: until,
+      signers: stored("record_observation", [observer]),
       lot: shipment.lot,
       facility: null,
       loan: null,
@@ -1155,7 +1264,10 @@ const PREPARE: Record<CommandKind, Preparer> = {
       paymentId: id,
     });
     await checkNotRecorded(context, payment);
-    const digest = await context.evidenceDigest(args.evidenceVersionId as string, f.lender.uuid);
+    const digest = await context.evidenceDigest(args.evidenceVersionId as string, {
+      ownerOrgId: f.lender.uuid,
+      purpose: "bank",
+    });
     const amount = BigInt(args.amountMinor as string);
     return {
       plan: {
@@ -1212,7 +1324,10 @@ const PREPARE: Record<CommandKind, Preparer> = {
       paymentId: id,
     });
     await checkNotRecorded(context, payment);
-    const digest = await context.evidenceDigest(args.evidenceVersionId as string, f.lender.uuid);
+    const digest = await context.evidenceDigest(args.evidenceVersionId as string, {
+      ownerOrgId: f.lender.uuid,
+      purpose: "bank",
+    });
     return {
       plan: {
         lenderOrg: f.data.lender,
@@ -1785,6 +1900,23 @@ export async function buildInstruction(input: BuildInput): Promise<Instruction> 
         handover: a(plan.handover),
         manifestDigest: bytes(plan.manifestDigest),
         expectedSequence: n(plan.expectedSequence),
+        validUntil: n(plan.validUntil),
+      });
+    case "record_observation":
+      return getRecordObservationInstruction({
+        sponsor,
+        protocol,
+        observerOrg: a(plan.observerOrg),
+        observerAuthority: await authority(protocol, wallets.observer),
+        holderOrg: a(plan.holderOrg),
+        shipment: a(plan.shipment),
+        batch: a(plan.batch),
+        lot: a(plan.lot),
+        kind: ObservationKind[a(plan.observationKind) as ObservationKindName],
+        locationCode: a(plan.locationCode),
+        evidenceDigest: bytes(plan.evidenceDigest),
+        observedAt: n(plan.observedAt),
+        expectedObservation: Number(n(plan.expectedObservation)),
         validUntil: n(plan.validUntil),
       });
     case "issue_lot":
