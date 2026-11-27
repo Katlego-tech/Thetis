@@ -2098,7 +2098,7 @@ async function lendingScenario(
         ...(target ? { target: target.address as Address } : {}),
         payment: payment.address as Address,
         paymentId: payment.paymentId,
-        purpose: payment.purpose,
+        purpose: payment.purpose as PaymentPurpose,
         amount: payment.amount,
         currency: usd,
         evidenceDigest: payment.evidenceDigest,

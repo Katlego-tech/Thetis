@@ -6,27 +6,45 @@ import {
   AccountRole,
   type Decoder,
   getBase58Encoder,
+  isOption,
   isSolanaError,
   SOLANA_ERROR__CODECS__ENUM_DISCRIMINATOR_OUT_OF_RANGE,
+  unwrapOption,
 } from "@solana/kit";
 import {
   DocumentKind,
+  getAdvanceRecordedEventDecoder,
   getAuthorityDelegatedEventDecoder,
   getAuthorityRevokedEventDecoder,
+  getBorrowedEventDecoder,
   getClassRegisteredEventDecoder,
   getCustodianClassAccreditedEventDecoder,
+  getDepositedEventDecoder,
   getDocumentAttestedEventDecoder,
   getDocumentRevokedEventDecoder,
+  getFacilityOpenedEventDecoder,
+  getLiquidatedEventDecoder,
+  getLoanClosedEventDecoder,
   getLotIssuedEventDecoder,
   getLotSplitEventDecoder,
   getOrganisationAccreditedEventDecoder,
   getPauseChangedEventDecoder,
+  getPaymentConfirmedEventDecoder,
+  getPaymentCorrectedEventDecoder,
+  getPledgedEventDecoder,
+  getPledgedSoldEventDecoder,
+  getPoolOpenedEventDecoder,
   getProtocolInitializedEventDecoder,
   getRelationshipDeclaredEventDecoder,
+  getReleaseIntentCreatedEventDecoder,
+  getRepaidEventDecoder,
   getUnitsRedeemedEventDecoder,
   getUnitsTransferredEventDecoder,
+  getValuationSetEventDecoder,
+  getWithdrawnEventDecoder,
   identifyThetisEvent,
   identifyThetisInstruction,
+  PaymentPurpose,
   parseThetisInstruction,
   Role,
   THETIS_PROGRAM_ADDRESS,
@@ -57,6 +75,20 @@ export const HANDLED_INSTRUCTIONS = [
   "Transfer",
   "Split",
   "Redeem",
+  "OpenFacility",
+  "SetValuation",
+  "Pledge",
+  "RecordAdvance",
+  "ConfirmPayment",
+  "Repay",
+  "CreateReleaseIntent",
+  "SellPledged",
+  "Liquidate",
+  "CloseLoan",
+  "OpenPool",
+  "Deposit",
+  "Withdraw",
+  "Borrow",
 ] as const;
 
 export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
@@ -76,6 +108,21 @@ export const HANDLED_EVENTS = [
   "UnitsTransferred",
   "LotSplit",
   "UnitsRedeemed",
+  "FacilityOpened",
+  "ValuationSet",
+  "Pledged",
+  "AdvanceRecorded",
+  "PaymentConfirmed",
+  "PaymentCorrected",
+  "Repaid",
+  "ReleaseIntentCreated",
+  "PledgedSold",
+  "Liquidated",
+  "LoanClosed",
+  "PoolOpened",
+  "Deposited",
+  "Withdrawn",
+  "Borrowed",
 ] as const;
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
@@ -123,8 +170,11 @@ export const PROTOCOL_ACCOUNT_POSITION: Readonly<Record<InstructionName, number>
   SetValuation: 2,
 };
 
-/** The one event each instruction may emit, and whether it must. */
-const EMITS: Record<HandledInstruction, { event: HandledEvent; required: boolean }> = {
+/** The one event each instruction may emit, and whether it must (live-lending.md §4.1.2). */
+const EMITS: Record<
+  Exclude<HandledInstruction, "ConfirmPayment">,
+  { event: HandledEvent; required: boolean }
+> = {
   InitializeProtocol: { event: "ProtocolInitialized", required: true },
   RegisterClass: { event: "ClassRegistered", required: true },
   AccreditOrganisation: { event: "OrganisationAccredited", required: true },
@@ -140,7 +190,37 @@ const EMITS: Record<HandledInstruction, { event: HandledEvent; required: boolean
   Transfer: { event: "UnitsTransferred", required: true },
   Split: { event: "LotSplit", required: true },
   Redeem: { event: "UnitsRedeemed", required: true },
+  OpenFacility: { event: "FacilityOpened", required: true },
+  SetValuation: { event: "ValuationSet", required: true },
+  Pledge: { event: "Pledged", required: true },
+  RecordAdvance: { event: "AdvanceRecorded", required: true },
+  Repay: { event: "Repaid", required: true },
+  CreateReleaseIntent: { event: "ReleaseIntentCreated", required: true },
+  SellPledged: { event: "PledgedSold", required: true },
+  Liquidate: { event: "Liquidated", required: true },
+  CloseLoan: { event: "LoanClosed", required: true },
+  OpenPool: { event: "PoolOpened", required: true },
+  Deposit: { event: "Deposited", required: true },
+  Withdraw: { event: "Withdrawn", required: true },
+  Borrow: { event: "Borrowed", required: true },
 };
+
+/**
+ * The event an invocation may emit and whether it must. ConfirmPayment emits PaymentCorrected
+ * when it names a `target`, else PaymentConfirmed.
+ */
+export function expectedEvent(invocation: {
+  instruction: HandledInstruction;
+  accounts: Record<string, string | undefined>;
+}): { event: HandledEvent; required: boolean } {
+  if (invocation.instruction === "ConfirmPayment") {
+    return {
+      event: invocation.accounts.target === undefined ? "PaymentConfirmed" : "PaymentCorrected",
+      required: true,
+    };
+  }
+  return EMITS[invocation.instruction];
+}
 
 /** Event field = instruction account. */
 const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
@@ -179,6 +259,77 @@ const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
     ["lot", "lot"],
     ["owner", "owner"],
   ],
+  FacilityOpened: [
+    ["facility", "facility"],
+    ["lender", "lenderOrg"],
+    ["borrower", "borrowerOrg"],
+  ],
+  ValuationSet: [
+    ["valuation", "valuation"],
+    ["facility", "facility"],
+  ],
+  Pledged: [
+    ["loan", "loan"],
+    ["lock", "lock"],
+    ["position", "position"],
+    ["lot", "lot"],
+  ],
+  AdvanceRecorded: [["loan", "loan"]],
+  PaymentConfirmed: [
+    ["payment", "payment"],
+    ["loan", "loan"],
+    ["subject", "subject"],
+  ],
+  PaymentCorrected: [
+    ["payment", "payment"],
+    ["target", "target"],
+    ["loan", "loan"],
+  ],
+  Repaid: [
+    ["loan", "loan"],
+    ["payment", "payment"],
+    ["pool", "pool"],
+  ],
+  ReleaseIntentCreated: [
+    ["intent", "intent"],
+    ["loan", "loan"],
+    ["seller", "sellerOrg"],
+    ["buyer", "buyerOrg"],
+  ],
+  PledgedSold: [
+    ["intent", "intent"],
+    ["loan", "loan"],
+    ["payment", "payment"],
+    ["lot", "lot"],
+    ["sellerPosition", "sellerPosition"],
+    ["buyerPosition", "buyerPosition"],
+  ],
+  Liquidated: [
+    ["loan", "loan"],
+    ["lock", "lock"],
+  ],
+  LoanClosed: [
+    ["loan", "loan"],
+    ["position", "position"],
+  ],
+  PoolOpened: [
+    ["pool", "pool"],
+    ["mint", "mint"],
+  ],
+  Deposited: [
+    ["pool", "pool"],
+    ["organisation", "depositorOrg"],
+    ["wallet", "depositor"],
+  ],
+  Withdrawn: [
+    ["pool", "pool"],
+    ["organisation", "depositorOrg"],
+    ["wallet", "depositor"],
+  ],
+  Borrowed: [
+    ["loan", "loan"],
+    ["pool", "pool"],
+  ],
 };
 
 const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
@@ -196,12 +347,28 @@ const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
   UnitsTransferred: getUnitsTransferredEventDecoder,
   LotSplit: getLotSplitEventDecoder,
   UnitsRedeemed: getUnitsRedeemedEventDecoder,
+  FacilityOpened: getFacilityOpenedEventDecoder,
+  ValuationSet: getValuationSetEventDecoder,
+  Pledged: getPledgedEventDecoder,
+  AdvanceRecorded: getAdvanceRecordedEventDecoder,
+  PaymentConfirmed: getPaymentConfirmedEventDecoder,
+  PaymentCorrected: getPaymentCorrectedEventDecoder,
+  Repaid: getRepaidEventDecoder,
+  ReleaseIntentCreated: getReleaseIntentCreatedEventDecoder,
+  PledgedSold: getPledgedSoldEventDecoder,
+  Liquidated: getLiquidatedEventDecoder,
+  LoanClosed: getLoanClosedEventDecoder,
+  PoolOpened: getPoolOpenedEventDecoder,
+  Deposited: getDepositedEventDecoder,
+  Withdrawn: getWithdrawnEventDecoder,
+  Borrowed: getBorrowedEventDecoder,
 };
 
 /** Event fields that hold an enum, by event, with the generated name table of each. */
 const ENUM_FIELDS: Partial<Record<HandledEvent, Record<string, Record<number, string>>>> = {
   OrganisationAccredited: { role: Role as unknown as Record<number, string> },
   DocumentAttested: { kind: DocumentKind as unknown as Record<number, string> },
+  PaymentConfirmed: { purpose: PaymentPurpose as unknown as Record<number, string> },
 };
 
 export type DecodedEvent = {
@@ -218,6 +385,8 @@ export type Invocation = {
   instruction: HandledInstruction;
   /** Instruction account name to address; an absent optional account is undefined. */
   accounts: Record<string, string | undefined>;
+  /** The addresses after the IDL-named accounts, in order (live-lending.md §4.1.2). */
+  remaining: string[];
   events: DecodedEvent[];
 };
 
@@ -284,6 +453,7 @@ function jsonValue(
     return name;
   }
   if (typeof value === "string" || typeof value === "boolean") return value;
+  if (value === undefined) return null;
   throw halt(
     "EVENT_DECODE_FAILED",
     signature,
@@ -335,7 +505,10 @@ function decodeEvent(base64: string, index: number, signature: string): DecodedE
       `event ${handled} (line ${index}) leaves ${bytes.length - offset} bytes unread`,
     );
   }
-  const fields = value as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  for (const [field, entry] of Object.entries(value as Record<string, unknown>)) {
+    fields[field] = isOption(entry) ? unwrapOption(entry, () => undefined) : entry;
+  }
   const data: Record<string, JsonValue> = {};
   for (const [field, entry] of Object.entries(fields)) {
     data[field] = jsonValue(handled, field, entry, signature);
@@ -572,12 +745,14 @@ export function decodeTransaction(
       );
     }
     const named: Record<string, string | undefined> = {};
-    for (const [account, meta] of Object.entries(
+    const entries = Object.entries(
       result.accounts as Record<string, { address: string } | undefined>,
-    )) {
+    );
+    for (const [account, meta] of entries) {
       named[account] = meta?.address;
     }
-    return [{ position, instruction: name, accounts: named }];
+    const remaining = accounts.slice(entries.length).map((meta) => meta.address);
+    return [{ position, instruction: name, accounts: named, remaining }];
   });
 
   // Events first, for every invocation, then pairing.
@@ -592,7 +767,7 @@ export function decodeTransaction(
   }));
   const invocations: Invocation[] = [];
   for (const entry of decoded) {
-    const emits = EMITS[entry.instruction];
+    const emits = expectedEvent(entry);
     const allowed = entry.events.length === 1 || (entry.events.length === 0 && !emits.required);
     if (!allowed || entry.events.some((event) => event.name !== emits.event)) {
       throw halt(
@@ -610,6 +785,19 @@ export function decodeTransaction(
             `${event.name}.${field} is not the ${entry.instruction} account ${account}`,
             [String(event.value[field]), String(entry.accounts[account])],
           );
+        }
+      }
+      if (event.name === "Repaid") {
+        const pooled = event.value.pool !== undefined;
+        if (pooled !== (event.value.poolRevision !== undefined)) {
+          throw halt(
+            "EVENT_MISMATCH",
+            signature,
+            pooled ? "Repaid.pool without poolRevision" : "Repaid.poolRevision without pool",
+          );
+        }
+        if (pooled && entry.remaining.length < 1) {
+          throw halt("EVENT_MISMATCH", signature, "simulated Repay names no pool share");
         }
       }
     }

@@ -20,25 +20,46 @@ import {
   decodeClassPolicy,
   decodeCustodianClass,
   decodeDocumentAttestation,
+  decodeFacility,
   decodeIntakeIdentity,
+  decodeLoan,
+  decodeLockAllocation,
   decodeLot,
   decodeOrganisation,
+  decodePaymentAttestation,
+  decodePoolShare,
   decodePosition,
   decodeProtocol,
+  decodeReleaseIntent,
+  decodeSimulationPool,
+  decodeValuation,
+  type Facility,
   findPositionPda,
   type IntakeIdentity,
+  IntentStatus,
+  type Loan,
+  LoanStatus,
+  type LockAllocation,
+  LockControl,
   type Lot,
   LotState,
   type Organisation,
+  type PaymentAttestation,
+  PaymentPurpose,
+  PaymentStatus,
+  type PoolShare,
   type Position,
   type Protocol,
   QuantityUnit,
+  type ReleaseIntent,
   Restriction,
   Role,
   SettlementMode,
+  type SimulationPool,
   ThetisAccountError,
   toI64String,
   toU64String,
+  type Valuation,
 } from "@thetis/contracts";
 import type { DecodedEvent, HandledEvent, Invocation } from "./decode.ts";
 import { HaltError, type HaltReason } from "./errors.ts";
@@ -58,7 +79,15 @@ export type Kind =
   | "DocumentAttestation"
   | "IntakeIdentity"
   | "Lot"
-  | "Position";
+  | "Position"
+  | "Facility"
+  | "Valuation"
+  | "Loan"
+  | "LockAllocation"
+  | "PaymentAttestation"
+  | "ReleaseIntent"
+  | "SimulationPool"
+  | "PoolShare";
 
 export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   Protocol: "chain_protocols",
@@ -70,6 +99,14 @@ export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   IntakeIdentity: "chain_intakes",
   Lot: "chain_lots",
   Position: "chain_positions",
+  Facility: "chain_facilities",
+  Valuation: "chain_valuations",
+  Loan: "chain_loans",
+  LockAllocation: "chain_locks",
+  PaymentAttestation: "chain_payments",
+  ReleaseIntent: "chain_release_intents",
+  SimulationPool: "chain_pools",
+  PoolShare: "chain_pool_shares",
 };
 
 export const TABLE_KIND = Object.fromEntries(
@@ -85,7 +122,15 @@ export type AccountData =
   | { kind: "DocumentAttestation"; data: DocumentAttestation }
   | { kind: "IntakeIdentity"; data: IntakeIdentity }
   | { kind: "Lot"; data: Lot }
-  | { kind: "Position"; data: Position };
+  | { kind: "Position"; data: Position }
+  | { kind: "Facility"; data: Facility }
+  | { kind: "Valuation"; data: Valuation }
+  | { kind: "Loan"; data: Loan }
+  | { kind: "LockAllocation"; data: LockAllocation }
+  | { kind: "PaymentAttestation"; data: PaymentAttestation }
+  | { kind: "ReleaseIntent"; data: ReleaseIntent }
+  | { kind: "SimulationPool"; data: SimulationPool }
+  | { kind: "PoolShare"; data: PoolShare };
 
 type GuardedDecoder = (account: MaybeEncodedAccount) => { exists: boolean; data?: unknown };
 
@@ -99,6 +144,14 @@ const DECODERS: Record<Kind, GuardedDecoder> = {
   IntakeIdentity: decodeIntakeIdentity as unknown as GuardedDecoder,
   Lot: decodeLot as unknown as GuardedDecoder,
   Position: decodePosition as unknown as GuardedDecoder,
+  Facility: decodeFacility as unknown as GuardedDecoder,
+  Valuation: decodeValuation as unknown as GuardedDecoder,
+  Loan: decodeLoan as unknown as GuardedDecoder,
+  LockAllocation: decodeLockAllocation as unknown as GuardedDecoder,
+  PaymentAttestation: decodePaymentAttestation as unknown as GuardedDecoder,
+  ReleaseIntent: decodeReleaseIntent as unknown as GuardedDecoder,
+  SimulationPool: decodeSimulationPool as unknown as GuardedDecoder,
+  PoolShare: decodePoolShare as unknown as GuardedDecoder,
 };
 
 export type DecodeFailure = { address: string; enumError: boolean; message: string };
@@ -106,7 +159,8 @@ export type DecodeFailure = { address: string; enumError: boolean; message: stri
 /**
  * The guarded decode of one account as the expected kind. Never throws for a bad account: the
  * failure comes back so a caller can list every failing address. `protocol` is the instance the
- * account must belong to (the Protocol account has no such field).
+ * account must belong to. The Protocol account and a PoolShare have no such field: a PoolShare
+ * belongs to its pool's instance, which its row's dependencies check (live-lending.md §4.1.5).
  */
 export function decodeAccountAs(
   kind: Kind,
@@ -120,7 +174,7 @@ export function decodeAccountAs(
   try {
     const decoded = DECODERS[kind](account) as unknown as Account<{ protocol?: string }>;
     const data = decoded.data;
-    if (kind !== "Protocol" && data.protocol !== protocol) {
+    if (kind !== "Protocol" && kind !== "PoolShare" && data.protocol !== protocol) {
       return {
         failure: {
           address,
@@ -180,10 +234,25 @@ export class UnknownEnumError extends Error {
   }
 }
 
-/** What a row builder needs from other accounts: organisation ids and custodian classes. */
+/** An account whose currency bytes are not three capital letters (live-lending.md §3.1). */
+export class CurrencyError extends Error {
+  constructor() {
+    super("currency is not three capital letters");
+    this.name = "CurrencyError";
+  }
+}
+
+/**
+ * What a row builder needs from other accounts: organisation ids, custodian classes, a
+ * facility's lender and currency digits, a loan's facility, and whether a pool is the stream's.
+ */
 export interface Resolver {
   organisationId(address: string): string;
   custodianOf(classAddress: string): string;
+  facility(address: string): { lender: string; currencyDecimals: number };
+  loanFacility(address: string): string;
+  /** Records that the pool must be the stream's; a pool that is not is a missing dependency. */
+  pool(address: string): void;
 }
 
 function variant(enumName: string, names: unknown, value: number): string {
@@ -198,6 +267,13 @@ export function uuidFromBytes(bytes: ReadonlyUint8Array): string {
 }
 
 const hex = (bytes: ReadonlyUint8Array) => Buffer.from(bytes as Uint8Array).toString("hex");
+const currencyText = (bytes: ReadonlyUint8Array) => {
+  const values = [...(bytes as Uint8Array)];
+  if (values.length !== 3 || values.some((byte) => byte < 0x41 || byte > 0x5a)) {
+    throw new CurrencyError();
+  }
+  return String.fromCharCode(...values);
+};
 const optionalI64 = (value: unknown): JsonValue => {
   const unwrapped = unwrapOption(value as Parameters<typeof unwrapOption>[0]);
   return unwrapped === null ? null : toI64String(unwrapped as bigint);
@@ -319,6 +395,135 @@ export function accountColumns(account: AccountData, resolver: Resolver): Row {
         revision: toU64String(data.revision),
       };
     }
+    case "Facility": {
+      const { data } = account;
+      return {
+        lender: data.lender,
+        lender_org_id: resolver.organisationId(data.lender),
+        borrower: data.borrower,
+        borrower_org_id: resolver.organisationId(data.borrower),
+        facility_id_hex: hex(data.facilityId),
+        currency: currencyText(data.currency),
+        currency_decimals: data.currencyDecimals,
+        terms_version: data.termsVersion,
+        rate_bps: data.rateBps,
+        max_ltv_bps: data.maxLtvBps,
+        terms_digest_hex: hex(data.termsDigest),
+        loan_count: data.loanCount,
+      };
+    }
+    case "Valuation": {
+      const { data } = account;
+      return {
+        facility: data.facility,
+        class_policy: data.classPolicy,
+        grade: data.grade,
+        custodian_class: data.custodianClass,
+        value_per_kg: toU64String(data.valuePerKg),
+        haircut_bps: data.haircutBps,
+        valid_until: toI64String(data.validUntil),
+        source_digest_hex: hex(data.sourceDigest),
+        version: data.version,
+        set_at: toI64String(data.setAt),
+      };
+    }
+    case "Loan": {
+      const { data } = account;
+      return {
+        facility: data.facility,
+        lender_org_id: resolver.organisationId(resolver.facility(data.facility).lender),
+        borrower: data.borrower,
+        borrower_org_id: resolver.organisationId(data.borrower),
+        lot: data.lot,
+        position: data.position,
+        loan_index: data.index,
+        status: variant("LoanStatus", LoanStatus, data.status),
+        rate_bps: data.rateBps,
+        terms_version: data.termsVersion,
+        principal: toU64String(data.principal),
+        booked_interest: toU64String(data.bookedInterest),
+        accrual_remainder: toU64String(data.accrualRemainder),
+        accrued_at: toI64String(data.accruedAt),
+        open_exceptions: data.openExceptions,
+        revision: toU64String(data.revision),
+      };
+    }
+    case "LockAllocation": {
+      const { data } = account;
+      return {
+        loan: data.loan,
+        position: data.position,
+        quantity_kg: toU64String(data.quantityKg),
+        control: variant("LockControl", LockControl, data.control),
+      };
+    }
+    case "PaymentAttestation": {
+      const { data } = account;
+      return {
+        lender: data.lender,
+        lender_org_id: resolver.organisationId(data.lender),
+        loan: data.loan,
+        payment_id_hex: hex(data.paymentId),
+        purpose: variant("PaymentPurpose", PaymentPurpose, data.purpose),
+        subject: data.subject,
+        amount: toU64String(data.amount),
+        currency: currencyText(data.currency),
+        evidence_digest_hex: hex(data.evidenceDigest),
+        observed_at: toI64String(data.observedAt),
+        status: variant("PaymentStatus", PaymentStatus, data.status),
+        applied: toU64String(data.applied),
+        surplus: toU64String(data.surplus),
+      };
+    }
+    case "ReleaseIntent": {
+      const { data } = account;
+      const facility = resolver.facility(resolver.loanFacility(data.loan));
+      return {
+        loan: data.loan,
+        lot: data.lot,
+        position: data.position,
+        seller: data.seller,
+        seller_org_id: resolver.organisationId(data.seller),
+        buyer: data.buyer,
+        buyer_org_id: resolver.organisationId(data.buyer),
+        lender: facility.lender,
+        lender_org_id: resolver.organisationId(facility.lender),
+        currency_decimals: facility.currencyDecimals,
+        nonce: toU64String(data.nonce),
+        quantity_kg: toU64String(data.quantityKg),
+        price: toU64String(data.price),
+        top_up: toU64String(data.topUp),
+        currency: currencyText(data.currency),
+        expires_at: toI64String(data.expiresAt),
+        position_revision: toU64String(data.positionRevision),
+        status: variant("IntentStatus", IntentStatus, data.status),
+      };
+    }
+    case "SimulationPool": {
+      const { data } = account;
+      return {
+        mint: data.mint,
+        vault: data.vault,
+        currency: currencyText(data.currency),
+        currency_decimals: data.currencyDecimals,
+        cash_minor: toU64String(data.cashMinor),
+        total_shares: toU64String(data.totalShares),
+        lent_minor: toU64String(data.lentMinor),
+        income_minor: toU64String(data.incomeMinor),
+        revision: toU64String(data.revision),
+      };
+    }
+    case "PoolShare": {
+      const { data } = account;
+      resolver.pool(data.pool);
+      return {
+        pool: data.pool,
+        organisation: data.organisation,
+        org_id: resolver.organisationId(data.organisation),
+        shares: toU64String(data.shares),
+        lent_minor: toU64String(data.lentMinor),
+      };
+    }
   }
 }
 
@@ -346,16 +551,42 @@ export type SlotRows = { transactions: Row[]; events: Row[]; upserts: Upsert[] }
 
 type Planned = { address: string; kind: Kind };
 
+/** The Phase 2 keys of an event row (live-lending.md §4.1.3); null where the event has none. */
+type LendingKeys = {
+  facility: string | null;
+  loan: string | null;
+  loanRevision: bigint | null;
+  pool: string | null;
+  poolRevision: bigint | null;
+  valuation: string | null;
+  valuationVersion: number | null;
+  created: string | null;
+};
+
+const NO_KEYS: LendingKeys = {
+  facility: null,
+  loan: null,
+  loanRevision: null,
+  pool: null,
+  poolRevision: null,
+  valuation: null,
+  valuationVersion: null,
+  created: null,
+};
+
 type Plan = {
   transaction: SlotTransaction;
   invocation: Invocation;
   event: DecodedEvent;
-  scope: "registry" | "organisation" | "lot";
+  scope: "registry" | "organisation" | "lot" | "facility" | "pool";
   lot: string | null;
   revision: bigint | null;
+  keys: LendingKeys;
+  /** A voided PaymentCorrected: it names its loan's revision without advancing it. */
+  voided: boolean;
   fetch: Planned[];
   creates: Planned[];
-  /** The transfer recipient's Position: created when absent (init_if_needed). */
+  /** Created when absent (init_if_needed): a transfer's or sale's recipient, a deposit's share. */
   mayCreate: Planned[];
 };
 
@@ -384,10 +615,19 @@ async function planEvent(
     event,
     lot: null,
     revision: null,
+    keys: NO_KEYS,
+    voided: false,
     fetch: [] as Planned[],
     creates: [] as Planned[],
     mayCreate: [] as Planned[],
   };
+  const facilityKeys = (keys: Partial<LendingKeys>): LendingKeys => ({
+    ...NO_KEYS,
+    facility: accounts.facility ?? null,
+    ...keys,
+  });
+  // A required account of the instruction: the parse names every one.
+  const ixAccount = (name: string) => accounts[name] as string;
   const name: HandledEvent = event.name;
   const accounts = invocation.accounts;
   const optional = (kind: Kind, address: string | undefined): Planned[] =>
@@ -511,6 +751,202 @@ async function planEvent(
         ],
       };
     }
+    case "FacilityOpened": {
+      const planned = { address: text("facility"), kind: "Facility" as const };
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ created: planned.address }),
+        fetch: [planned],
+        creates: [planned],
+      };
+    }
+    case "ValuationSet": {
+      const planned = { address: text("valuation"), kind: "Valuation" as const };
+      const version = value.version as number;
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ valuation: planned.address, valuationVersion: version }),
+        fetch: [planned],
+        creates: version === 1 ? [planned] : [],
+      };
+    }
+    case "Pledged": {
+      const loan = { address: text("loan"), kind: "Loan" as const };
+      const lock = { address: text("lock"), kind: "LockAllocation" as const };
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ loan: loan.address, loanRevision: value.revision as bigint }),
+        fetch: [
+          loan,
+          lock,
+          { address: text("position"), kind: "Position" },
+          { address: ixAccount("facility"), kind: "Facility" },
+        ],
+        creates: [loan, lock],
+      };
+    }
+    case "AdvanceRecorded":
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ loan: text("loan"), loanRevision: value.revision as bigint }),
+        fetch: [{ address: text("loan"), kind: "Loan" }],
+      };
+    case "PaymentConfirmed": {
+      const planned = { address: text("payment"), kind: "PaymentAttestation" as const };
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ loan: text("loan"), created: planned.address }),
+        fetch: [planned],
+        creates: [planned],
+      };
+    }
+    case "PaymentCorrected": {
+      const planned = { address: text("payment"), kind: "PaymentAttestation" as const };
+      const voided = value.voided as boolean;
+      return {
+        ...base,
+        scope: "facility",
+        voided,
+        keys: facilityKeys({
+          loan: text("loan"),
+          loanRevision: voided ? null : (value.loanRevision as bigint),
+          created: planned.address,
+        }),
+        fetch: [
+          planned,
+          { address: text("target"), kind: "PaymentAttestation" },
+          { address: text("loan"), kind: "Loan" },
+        ],
+        creates: [planned],
+      };
+    }
+    case "Repaid": {
+      const payment = value.payment as string | undefined;
+      const pool = value.pool as string | undefined;
+      const share = invocation.remaining[0];
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({
+          loan: text("loan"),
+          loanRevision: value.revision as bigint,
+          ...(pool === undefined ? {} : { pool, poolRevision: value.poolRevision as bigint }),
+        }),
+        fetch: [
+          { address: text("loan"), kind: "Loan" },
+          ...optional("PaymentAttestation", payment),
+          ...(pool === undefined
+            ? []
+            : [
+                { address: pool, kind: "SimulationPool" as const },
+                ...optional("PoolShare", share),
+              ]),
+        ],
+      };
+    }
+    case "ReleaseIntentCreated": {
+      const planned = { address: text("intent"), kind: "ReleaseIntent" as const };
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ loan: text("loan"), created: planned.address }),
+        fetch: [planned],
+        creates: [planned],
+      };
+    }
+    case "PledgedSold": {
+      const lot = text("lot");
+      const buyer = { address: text("buyerPosition"), kind: "Position" as const };
+      return {
+        ...base,
+        scope: "lot",
+        lot,
+        revision: value.lotRevision as bigint,
+        keys: { ...NO_KEYS, loan: text("loan"), loanRevision: value.revision as bigint },
+        fetch: [
+          { address: lot, kind: "Lot" },
+          { address: text("loan"), kind: "Loan" },
+          { address: ixAccount("lock"), kind: "LockAllocation" },
+          { address: text("intent"), kind: "ReleaseIntent" },
+          { address: text("payment"), kind: "PaymentAttestation" },
+          { address: text("sellerPosition"), kind: "Position" },
+          buyer,
+        ],
+        mayCreate: [buyer],
+      };
+    }
+    case "Liquidated":
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ loan: text("loan"), loanRevision: value.revision as bigint }),
+        fetch: [
+          { address: text("loan"), kind: "Loan" },
+          { address: text("lock"), kind: "LockAllocation" },
+        ],
+      };
+    case "LoanClosed":
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({ loan: text("loan"), loanRevision: value.revision as bigint }),
+        fetch: [
+          { address: text("loan"), kind: "Loan" },
+          { address: ixAccount("lock"), kind: "LockAllocation" },
+          { address: text("position"), kind: "Position" },
+        ],
+      };
+    case "PoolOpened": {
+      const planned = { address: text("pool"), kind: "SimulationPool" as const };
+      return {
+        ...base,
+        scope: "pool",
+        keys: { ...NO_KEYS, pool: planned.address, created: planned.address },
+        fetch: [planned],
+        creates: [planned],
+      };
+    }
+    case "Deposited": {
+      const share = { address: ixAccount("share"), kind: "PoolShare" as const };
+      return {
+        ...base,
+        scope: "pool",
+        keys: { ...NO_KEYS, pool: text("pool"), poolRevision: value.poolRevision as bigint },
+        fetch: [{ address: text("pool"), kind: "SimulationPool" }, share],
+        mayCreate: [share],
+      };
+    }
+    case "Withdrawn":
+      return {
+        ...base,
+        scope: "pool",
+        keys: { ...NO_KEYS, pool: text("pool"), poolRevision: value.poolRevision as bigint },
+        fetch: [
+          { address: text("pool"), kind: "SimulationPool" },
+          { address: ixAccount("share"), kind: "PoolShare" },
+        ],
+      };
+    case "Borrowed":
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({
+          loan: text("loan"),
+          loanRevision: value.revision as bigint,
+          pool: text("pool"),
+          poolRevision: value.poolRevision as bigint,
+        }),
+        fetch: [
+          { address: text("loan"), kind: "Loan" },
+          { address: text("pool"), kind: "SimulationPool" },
+          { address: ixAccount("lenderShare"), kind: "PoolShare" },
+        ],
+      };
   }
 }
 
@@ -600,6 +1036,12 @@ export async function projectSlot(
         });
         entryOf(value.child as string).creators.push(plan);
         break;
+      case "PledgedSold":
+        entryOf(value.lot as string).revisions.push({
+          revision: value.lotRevision as bigint,
+          plan,
+        });
+        break;
       default:
         break;
     }
@@ -656,6 +1098,161 @@ export async function projectSlot(
       }
     }
     eventRevision.set(lot, revisions.at(-1) ?? base);
+  }
+
+  // Loans, pools and valuations (live-lending.md §4.1.4).
+  const signaturesOf = (list: Plan[]) =>
+    [...new Set(list.map((plan) => plan.transaction.signature))].sort(sortText).join(", ");
+  const inSequence = (named: string, base: bigint, revisions: bigint[]) => {
+    for (const [index, revision] of revisions.entries()) {
+      const expected = base + 1n + BigInt(index);
+      if (revision !== expected) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} carries revisions [${revisions.join(", ")}] after ${base}, expected ${expected} at position ${index}`,
+        );
+      }
+    }
+  };
+  const loanEventRevision = new Map<string, bigint>();
+  const loanNames = [
+    ...new Set(
+      plans
+        .filter(
+          (plan) => plan.keys.loan !== null && (plan.keys.loanRevision !== null || plan.voided),
+        )
+        .map((plan) => plan.keys.loan as string),
+    ),
+  ].sort(sortText);
+  for (const loan of loanNames) {
+    const naming = plans.filter((plan) => plan.keys.loan === loan);
+    const advancing = naming.filter((plan) => plan.keys.loanRevision !== null);
+    const voided = naming.filter((plan) => plan.voided);
+    const pledges = naming.filter((plan) => plan.event.name === "Pledged");
+    const named = `loan ${loan} (signatures ${signaturesOf([...advancing, ...voided])})`;
+    const row = storedRow("Loan", loan);
+    let base: bigint;
+    if (pledges.length > 0) {
+      if (pledges.length > 1) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} is pledged by ${pledges.length} events of one slot`,
+        );
+      }
+      if (row) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} is pledged again while it is stored`,
+        );
+      }
+      base = -1n;
+    } else {
+      if (!row) {
+        throw stepHalt(
+          "sequence",
+          "EVENT_GAP",
+          `${named} has no stored row and no Pledged of this slot creates it`,
+        );
+      }
+      base = BigInt(row.event_revision as string);
+    }
+    const revisions = advancing.map((plan) => plan.keys.loanRevision as bigint).sort(sortBig);
+    inSequence(named, base, revisions);
+    const next = revisions.at(-1) ?? base;
+    const floor = base < 0n ? 0n : base;
+    for (const plan of voided) {
+      const repeated = (plan.event.value as Record<string, unknown>).loanRevision as bigint;
+      const fits =
+        revisions.length === 0 ? repeated === base : repeated >= floor && repeated <= next;
+      if (!fits) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named}: a voided correction repeats revision ${repeated}, outside ${floor} to ${next}`,
+        );
+      }
+    }
+    loanEventRevision.set(loan, next);
+  }
+
+  const poolEventRevision = new Map<string, bigint>();
+  const poolNames = [
+    ...new Set(
+      plans
+        .filter(
+          (plan) =>
+            plan.keys.pool !== null &&
+            (plan.keys.poolRevision !== null || plan.event.name === "PoolOpened"),
+        )
+        .map((plan) => plan.keys.pool as string),
+    ),
+  ].sort(sortText);
+  for (const pool of poolNames) {
+    const naming = plans.filter((plan) => plan.keys.pool === pool);
+    const opened = naming.filter((plan) => plan.event.name === "PoolOpened");
+    const advancing = naming.filter((plan) => plan.keys.poolRevision !== null);
+    const named = `pool ${pool} (signatures ${signaturesOf([...opened, ...advancing])})`;
+    const row = storedRow("SimulationPool", pool);
+    let base: bigint;
+    if (opened.length > 0) {
+      if (opened.length > 1 || row) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          row ? `${named} is opened again while it is stored` : `${named} is opened twice`,
+        );
+      }
+      base = 0n;
+    } else {
+      if (!row) {
+        throw stepHalt(
+          "sequence",
+          "EVENT_GAP",
+          `${named} has no stored row and no PoolOpened of this slot creates it`,
+        );
+      }
+      base = BigInt(row.event_revision as string);
+    }
+    const revisions = advancing.map((plan) => plan.keys.poolRevision as bigint).sort(sortBig);
+    inSequence(named, base, revisions);
+    poolEventRevision.set(pool, revisions.at(-1) ?? base);
+  }
+
+  const valuationEventVersion = new Map<string, number>();
+  const valuationNames = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.keys.valuation !== null)
+        .map((plan) => plan.keys.valuation as string),
+    ),
+  ].sort(sortText);
+  for (const valuation of valuationNames) {
+    const naming = plans.filter((plan) => plan.keys.valuation === valuation);
+    const versions = naming
+      .map((plan) => BigInt(plan.keys.valuationVersion as number))
+      .sort(sortBig);
+    const named = `valuation ${valuation} (signatures ${signaturesOf(naming)})`;
+    const row = storedRow("Valuation", valuation);
+    if (!row && (versions[0] as bigint) > 1n) {
+      throw stepHalt(
+        "sequence",
+        "EVENT_GAP",
+        `${named} has no stored row and its lowest version is ${versions[0]}`,
+      );
+    }
+    if (row && versions.includes(1n)) {
+      throw stepHalt(
+        "sequence",
+        "REVISION_SEQUENCE",
+        `${named} is set at version 1 again while it is stored`,
+      );
+    }
+    const base = row ? BigInt(row.event_version as number) : 0n;
+    inSequence(named, base, versions);
+    valuationEventVersion.set(valuation, Number(versions.at(-1) as bigint));
   }
 
   // Creation check, account by account.
@@ -728,20 +1325,40 @@ export async function projectSlot(
   // Dependencies: this slot's accounts first, then stored rows, until nothing is missing.
   const organisations = new Map<string, string>();
   const classes = new Map<string, string>();
+  const facilities = new Map<string, { lender: string; currencyDecimals: number }>();
+  const loans = new Map<string, string>();
+  const pools = new Set<string>();
   for (const [address, { account }] of read) {
     if (account.kind === "Organisation")
       organisations.set(address, uuidFromBytes(account.data.orgId));
     if (account.kind === "CustodianClass") classes.set(address, account.data.custodian);
+    if (account.kind === "Facility") {
+      facilities.set(address, {
+        lender: account.data.lender,
+        currencyDecimals: account.data.currencyDecimals,
+      });
+    }
+    if (account.kind === "Loan") loans.set(address, account.data.facility);
+    if (account.kind === "SimulationPool") pools.add(address);
   }
   const PLACEHOLDER_ORGANISATION = "00000000-0000-0000-0000-000000000000";
-  // Contains characters outside the base58 alphabet, so no real address can equal it.
+  // Contain characters outside the base58 alphabet, so no real address can equal them.
   const PLACEHOLDER_CUSTODIAN = "0-unresolved-custodian";
-  const missing = { organisations: new Set<string>(), classes: new Set<string>() };
+  const PLACEHOLDER_LENDER = "0-unresolved-lender";
+  const PLACEHOLDER_FACILITY = "0-unresolved-facility";
+  const placeholders = new Set([PLACEHOLDER_CUSTODIAN, PLACEHOLDER_LENDER]);
+  const missing = {
+    organisations: new Set<string>(),
+    classes: new Set<string>(),
+    facilities: new Set<string>(),
+    loans: new Set<string>(),
+    pools: new Set<string>(),
+  };
   const resolver: Resolver = {
     organisationId(address) {
       const known = organisations.get(address);
       if (known !== undefined) return known;
-      if (address !== PLACEHOLDER_CUSTODIAN) missing.organisations.add(address);
+      if (!placeholders.has(address)) missing.organisations.add(address);
       return PLACEHOLDER_ORGANISATION;
     },
     custodianOf(classAddress) {
@@ -749,6 +1366,21 @@ export async function projectSlot(
       if (known !== undefined) return known;
       missing.classes.add(classAddress);
       return PLACEHOLDER_CUSTODIAN;
+    },
+    facility(address) {
+      const known = facilities.get(address);
+      if (known !== undefined) return known;
+      if (address !== PLACEHOLDER_FACILITY) missing.facilities.add(address);
+      return { lender: PLACEHOLDER_LENDER, currencyDecimals: 0 };
+    },
+    loanFacility(address) {
+      const known = loans.get(address);
+      if (known !== undefined) return known;
+      missing.loans.add(address);
+      return PLACEHOLDER_FACILITY;
+    },
+    pool(address) {
+      if (!pools.has(address)) missing.pools.add(address);
     },
   };
 
@@ -778,18 +1410,21 @@ export async function projectSlot(
     };
   };
 
-  const columnsOf = (account: AccountData): Row => {
+  const columnsOf = (address: string, account: AccountData): Row => {
     try {
       return accountColumns(account, resolver);
     } catch (error) {
       if (error instanceof UnknownEnumError) {
         throw stepHalt("fetch", "UNKNOWN_ENUM", `${account.kind}: ${error.message}`);
       }
+      if (error instanceof CurrencyError) {
+        throw stepHalt("fetch", "ACCOUNT_DECODE_FAILED", `${address}: ${error.message}`);
+      }
       throw error;
     }
   };
   const build = () => {
-    for (const [, { account }] of read) columnsOf(account);
+    for (const [address, { account }] of read) columnsOf(address, account);
     for (const plan of plans) {
       if (plan.scope === "organisation") resolver.organisationId(eventOrganisation(plan));
     }
@@ -800,15 +1435,41 @@ export async function projectSlot(
     }
   };
   let resolved = false;
-  for (let round = 0; round < 4 && !resolved; round += 1) {
-    missing.organisations.clear();
-    missing.classes.clear();
+  for (let round = 0; round < 6 && !resolved; round += 1) {
+    for (const set of Object.values(missing)) set.clear();
     build();
-    if (missing.organisations.size === 0 && missing.classes.size === 0) {
+    if (Object.values(missing).every((set) => set.size === 0)) {
       resolved = true;
       break;
     }
     const unresolved: string[] = [];
+    if (missing.loans.size > 0) {
+      const found = await store.storedRows(stream, "chain_loans", [...missing.loans]);
+      for (const address of missing.loans) {
+        const row = found.get(address);
+        if (row) loans.set(address, row.facility as string);
+        else unresolved.push(`Loan ${address}`);
+      }
+    }
+    if (missing.facilities.size > 0) {
+      const found = await store.storedRows(stream, "chain_facilities", [...missing.facilities]);
+      for (const address of missing.facilities) {
+        const row = found.get(address);
+        if (row) {
+          facilities.set(address, {
+            lender: row.lender as string,
+            currencyDecimals: row.currency_decimals as number,
+          });
+        } else unresolved.push(`Facility ${address}`);
+      }
+    }
+    if (missing.pools.size > 0) {
+      const found = await store.storedRows(stream, "chain_pools", [...missing.pools]);
+      for (const address of missing.pools) {
+        if (found.has(address)) pools.add(address);
+        else unresolved.push(`SimulationPool ${address}`);
+      }
+    }
     if (missing.classes.size > 0) {
       const found = await store.storedRows(stream, "chain_custodian_classes", [...missing.classes]);
       for (const address of missing.classes) {
@@ -857,7 +1518,7 @@ export async function projectSlot(
       slot: readSlot,
       commitment: "confirmed",
       last_signature: lastSignature.get(address) ?? null,
-      ...columnsOf(account),
+      ...columnsOf(address, account),
     };
     if (account.kind === "Organisation") {
       const slug = slugs.get(row.org_id as string);
@@ -879,6 +1540,21 @@ export async function projectSlot(
         row.issued_owner_org_id = previous?.issued_owner_org_id as string;
         row.issued_at = previous?.issued_at as string;
       }
+    }
+    if (account.kind === "Loan" || account.kind === "SimulationPool") {
+      const previous = storedRow(account.kind, address);
+      const revision = (account.kind === "Loan" ? loanEventRevision : poolEventRevision).get(
+        address,
+      );
+      row.event_revision =
+        revision === undefined ? (previous?.event_revision as string) : toU64String(revision);
+    }
+    if (account.kind === "Valuation") {
+      const version = valuationEventVersion.get(address);
+      row.event_version =
+        version === undefined
+          ? (storedRow("Valuation", address)?.event_version as number)
+          : version;
     }
     upserts.push({ table, row });
   }
@@ -902,6 +1578,14 @@ export async function projectSlot(
       org_id:
         plan.scope === "organisation" ? resolver.organisationId(eventOrganisation(plan)) : null,
       data: event.data,
+      facility: plan.keys.facility,
+      loan: plan.keys.loan,
+      loan_revision: plan.keys.loanRevision === null ? null : toU64String(plan.keys.loanRevision),
+      pool: plan.keys.pool,
+      pool_revision: plan.keys.poolRevision === null ? null : toU64String(plan.keys.poolRevision),
+      valuation: plan.keys.valuation,
+      valuation_version: plan.keys.valuationVersion,
+      created: plan.keys.created,
     });
   }
   const counts = new Map<string, number>();

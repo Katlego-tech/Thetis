@@ -15,7 +15,7 @@ import {
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import type { memoryStore, ReadModelStore, Stream } from "../../src/indexer/store.ts";
-import { counts, eventKeys, expectHalt, harness, RECONCILE_MS, rows } from "../fixtures/harness.ts";
+import { counts, eventKeys, expectHalt, harness, rows } from "../fixtures/harness.ts";
 import {
   bytesOf,
   editEvent,
@@ -496,7 +496,7 @@ describe("Phase 2 lending", () => {
     await expectHalt(third, await third.poll(), "REVISION_SEQUENCE", {
       step: "sequence",
       signature: null,
-      mentions: [twice.loan],
+      mentions: [twice.loan, "pledged by 2 events"],
     });
     expect((await third.checkpoint())?.indexedThroughSlot).toBe(slot.slot - 1000);
   });
@@ -662,32 +662,35 @@ describe("Phase 2 lending", () => {
     expect(scans).toContainEqual({ offset8: scenario.protocol, dataSize: null });
     expect(scans).toContainEqual({ offset8: scenario.pool, dataSize: 89 });
 
-    // The loan's account moves on chain with no event the indexer could see.
-    const history = scenario.history;
-    const last = history.at(-1);
+    // The loan's account moves on chain with no event the indexer could see, before the
+    // indexer reads it: its row then holds the moved revision, and only the event revision
+    // tells the two apart.
+    const moved = await poolHistory();
+    const last = moved.history.at(-1);
     if (!last) throw new Error("empty history");
-    const data = history
-      .flatMap((entry) => (entry.accounts[scenario.loan] ? [entry.accounts[scenario.loan]] : []))
+    const data = moved.history
+      .flatMap((entry) => (entry.accounts[moved.loan] ? [entry.accounts[moved.loan]] : []))
       .at(-1)?.data as Uint8Array;
     const loan = getLoanDecoder().decode(data);
-    history.push({
+    moved.history.push({
       slot: last.slot + 500,
       blockTime: null,
       transactions: [],
       accounts: {
-        [scenario.loan]: thetis(
-          bytesOf(getLoanEncoder(), { ...loan, revision: loan.revision + 1n }),
-        ),
+        [moved.loan]: thetis(bytesOf(getLoanEncoder(), { ...loan, revision: loan.revision + 1n })),
       },
     });
-    chain.setHistory(history);
-    chain.setConfirmedSlot(last.slot + 1000);
-    chain.setFinalizedSlot(last.slot + 1000);
-    pool.h.advance(RECONCILE_MS + 1);
-    await expectPoolHalt(pool, await pool.h.poll(), "EVENT_GAP", {
+    const second = await poolHarness(moved.history, moved);
+    let result = "ok";
+    for (let i = 0; i < 5 && result !== "halted"; i += 1) result = await second.h.poll();
+    await expectPoolHalt(second, result, "EVENT_GAP", {
       step: "reconcile",
       signature: null,
-      mentions: [scenario.loan],
+      mentions: [moved.loan],
+    });
+    expect(row(second.h.store, "chain_loans", moved.loan)).toMatchObject({
+      revision: String(loan.revision + 1n),
+      event_revision: String(loan.revision),
     });
   });
 
@@ -695,10 +698,11 @@ describe("Phase 2 lending", () => {
     const scenario = await lendingHistory();
     const open = stepTx(scenario, "openFacility");
     const slot = slotOf(scenario.history, open.signature);
-    const account = slot.accounts[scenario.facility];
-    if (!account) throw new Error("no facility account");
-    // discriminator 8, protocol, lender and borrower 32 each, facility id 16: currency at 120.
-    account.data.set(new TextEncoder().encode("usd"), 120);
+    // Every state of the facility: discriminator 8, protocol, lender and borrower 32 each,
+    // facility id 16, so the currency starts at byte 120.
+    for (const entry of scenario.history) {
+      entry.accounts[scenario.facility]?.data.set(new TextEncoder().encode("usd"), 120);
+    }
     const h = await harness(scenario.history);
     await expectHalt(h, await h.poll(), "ACCOUNT_DECODE_FAILED", {
       step: "fetch",
