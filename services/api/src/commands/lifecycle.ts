@@ -4,23 +4,13 @@
 import { createHash } from "node:crypto";
 import {
   type Address,
-  appendTransactionMessageInstructions,
-  compileTransaction,
-  compressTransactionMessageUsingAddressLookupTables,
-  createTransactionMessage,
   getBase58Decoder,
   getBase58Encoder,
   getBase64Decoder,
-  getBase64EncodedWireTransaction,
   getBase64Encoder,
   getTransactionDecoder,
-  type Instruction,
-  pipe,
-  setTransactionMessageFeePayer,
-  setTransactionMessageLifetimeUsingBlockhash,
   type Transaction,
 } from "@solana/kit";
-import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as contracts from "@thetis/contracts";
 import {
@@ -33,6 +23,14 @@ import {
 } from "@thetis/contracts";
 import { verifyEd25519 } from "../ed25519.ts";
 import { type ChainPort, ChainUnavailableError } from "./chain.ts";
+import {
+  admittedKeys,
+  commandInstructions,
+  compileCommandWire,
+  MAX_TRANSACTION_BYTES,
+  measureCommand,
+  tableCandidates,
+} from "./compile.ts";
 import { sharedMessageInstruction } from "./ed25519.ts";
 import { ensureTableKeys, LookupTableFullError } from "./lookup-table.ts";
 import {
@@ -44,6 +42,7 @@ import {
   Reader,
   readProtocol,
   scopeBit,
+  tableSignerAddresses,
   uuidBytes,
   validateArgs,
 } from "./plan.ts";
@@ -76,14 +75,11 @@ export interface Caller {
 }
 
 const EXPIRY_MARGIN = 30n;
-const COMPUTE_UNITS = 400_000;
 const POLL_MS = 1_000;
 const POLL_FOR_MS = 20_000;
 const REBROADCAST_MS = 2_000;
 const UNKNOWN_AFTER_MS = 60_000;
 const MAX_SENDS = 3;
-const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
-const ED25519 = "Ed25519SigVerify111111111111111111111111111";
 
 /** Per process: when each submitted command's status was last read successfully. */
 const lastRead = new Map<string, number>();
@@ -539,7 +535,13 @@ async function notLanded(relay: Relay, context: Caller, row: CommandRow): Promis
   if (textExpired(row, chainTime) || row.sends >= MAX_SENDS) {
     return transition(context, row, { status: "expired" });
   }
-  const built = await compileCommand(relay, context, row, walletsOf(row));
+  let built: Awaited<ReturnType<typeof compileCommand>>;
+  try {
+    built = await compileCommand(relay, context, row, walletsOf(row));
+  } catch (error) {
+    if (isTooLarge(error)) return transition(context, row, tooLargePatch(error));
+    throw error;
+  }
   const wire = await sponsorSign(relay, built.wire, built.table);
   const next = await update(context, row, {
     transaction_base64: wire,
@@ -656,51 +658,44 @@ async function compileCommand(
     sponsor,
     wallets,
   });
-  const instructions: Instruction[] = [getSetComputeUnitLimitInstruction({ units: COMPUTE_UNITS })];
+  let ed25519 = null;
   if (row.message_base64) {
     const message = new Uint8Array(getBase64Encoder().encode(row.message_base64));
     const textRoles = row.signers.filter((s) => s.method === "text");
-    instructions.push(
-      sharedMessageInstruction(
-        textRoles.map((s) => {
-          const signed = row.signatures.find((x) => x.role === s.role);
-          if (!signed) throw new RelayError("COMMAND_STATE");
-          return {
-            wallet: signed.wallet as Address,
-            signature: new Uint8Array(getBase58Encoder().encode(signed.signature)),
-          };
-        }),
-        message,
-      ),
+    ed25519 = sharedMessageInstruction(
+      textRoles.map((s) => {
+        const signed = row.signatures.find((x) => x.role === s.role);
+        if (!signed) throw new RelayError("COMMAND_STATE");
+        return {
+          wallet: signed.wallet as Address,
+          signature: new Uint8Array(getBase58Encoder().encode(signed.signature)),
+        };
+      }),
+      message,
     );
   }
-  instructions.push(thetis);
-  // Table keys: every account except signers, the invoked programs and the protocol, which
-  // stays static so the sponsor can check it; and only accounts that exist on chain now, so an
-  // account the instruction creates stays static and unsigned requests can't fill the table
-  // (fold 9).
-  const signerKeys = new Set(Object.values(wallets));
-  const candidates = [
-    ...new Set(
-      (thetis.accounts ?? [])
-        .filter((meta) => meta.role < 2)
-        .map((meta) => meta.address)
-        .filter(
-          (key) =>
-            key !== relay.protocol &&
-            !signerKeys.has(key) &&
-            key !== sponsor &&
-            key !== relay.programId &&
-            key !== COMPUTE_BUDGET &&
-            key !== ED25519,
-        ),
-    ),
-  ];
+  const instructions = commandInstructions(thetis, ed25519);
+  // Table keys (compile.ts): every account except signers, the invoked programs and the
+  // protocol, which stays static so the sponsor can check it; and only accounts that exist on
+  // chain now, so an account the instruction creates stays static and unsigned requests can't
+  // fill the table (fold 9). A kind's program-signer PDAs (field-app.md fold 25) and the fixed
+  // program and sysvar addresses (PR #69 fold 27) are the exceptions.
+  const candidates = tableCandidates(thetis, {
+    protocol: relay.protocol,
+    sponsor,
+    signers: Object.values(wallets),
+  });
   const onChain = await relay.chain.accounts(candidates);
-  const existing = candidates.filter((_, index) => onChain[index]?.exists === true);
+  const keys = admittedKeys(
+    candidates,
+    candidates.map((_, index) => onChain[index]?.exists === true),
+    tableSignerAddresses(row.kind, row.plan),
+  );
+  // PR #69 fold 26: refused before the sponsor signs, the table changes or anything is stored.
+  tooLarge(measureCommand(instructions, sponsor, keys));
   let table: Awaited<ReturnType<typeof ensureTableKeys>>;
   try {
-    table = await ensureTableKeys({ ...relay, service: context.service }, existing);
+    table = await ensureTableKeys({ ...relay, service: context.service }, keys);
   } catch (error) {
     if (error instanceof LookupTableFullError) throw new RelayError("LOOKUP_TABLE_FULL");
     if (error instanceof SponsorUnavailableError)
@@ -708,24 +703,33 @@ async function compileCommand(
     throw error;
   }
   const { blockhash, lastValidBlockHeight } = await relay.chain.latestBlockhash();
-  const message = pipe(
-    createTransactionMessage({ version: 0 }),
-    (m) => setTransactionMessageFeePayer(sponsor, m),
-    (m) =>
-      setTransactionMessageLifetimeUsingBlockhash(
-        { blockhash: blockhash as never, lastValidBlockHeight },
-        m,
-      ),
-    (m) => appendTransactionMessageInstructions(instructions, m),
+  const built = compileCommandWire(
+    instructions,
+    sponsor,
+    { blockhash: blockhash as never, lastValidBlockHeight },
+    { address: table.table, keys: table.addresses.filter((key) => key !== relay.protocol) },
   );
-  const tables = { [table.table]: table.addresses.filter((key) => key !== relay.protocol) };
-  const compiled = compileTransaction(
-    compressTransactionMessageUsingAddressLookupTables(message, tables),
-  );
+  tooLarge(built.bytes);
+  return { wire: built.wire, table: table.table, lastValidBlockHeight };
+}
+
+function tooLarge(bytes: number) {
+  if (bytes > MAX_TRANSACTION_BYTES)
+    throw new RelayError("TRANSACTION_TOO_LARGE", `${bytes} bytes`);
+}
+
+function isTooLarge(error: unknown): error is RelayError {
+  return error instanceof RelayError && error.code === "TRANSACTION_TOO_LARGE";
+}
+
+/** PR #69 fold 26: a text command that can't fit one transaction ends expired with the error,
+ * nothing signed by the sponsor and nothing sent; renew clears the error. */
+function tooLargePatch(error: RelayError, signatures?: StoredSignature[]): Partial<CommandRow> {
   return {
-    wire: getBase64EncodedWireTransaction(compiled),
-    table: table.table,
-    lastValidBlockHeight,
+    status: "expired",
+    ...(signatures ? { signatures } : {}),
+    error_code: error.code,
+    error_detail: error.detail ?? null,
   };
 }
 
@@ -852,7 +856,13 @@ export async function postSignature(
     if (complete && !hasTxSigner(row.kind)) {
       // The last text signature submits: build, sponsor-sign, then one compare-and-set.
       const withSignatures = { ...row, signatures };
-      const built = await compileCommand(relay, context, withSignatures, walletsOf(withSignatures));
+      let built: Awaited<ReturnType<typeof compileCommand>>;
+      try {
+        built = await compileCommand(relay, context, withSignatures, walletsOf(withSignatures));
+      } catch (error) {
+        if (isTooLarge(error)) await update(context, row, tooLargePatch(error, signatures));
+        throw error;
+      }
       const wire = await sponsorSign(relay, built.wire, built.table);
       const fresh = await reread(context, row.id);
       if (fresh.revision !== row.revision) {
