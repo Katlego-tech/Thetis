@@ -21,6 +21,7 @@ import {
   AUTHORITY_LIFETIME_SECS,
   type Chain,
   CUSTODIAN_CLASSES,
+  check,
   DELEGATIONS,
   DemoError,
   estimateCost,
@@ -461,5 +462,66 @@ describe("demo reset (demo.md §5)", () => {
     );
     expect(run.chain.submitted).toEqual([]);
     expect(run.stack.resets()).toBe(0);
+  });
+  it("demo:check passes only with the indexed cast, no Authority for mosela-refused and every wallet linked", async () => {
+    const dir = await keysDir();
+    const cast = await castFile(dir);
+    const first = deps(dir);
+    const result = await reset({ scenario: "phone", run: 1, yes: true }, first.deps);
+    const run = result.runFile;
+    if (run === null) throw new Error("no run file");
+    const rows = (refusedAuthority: boolean, unlinked: string | null) => {
+      const stack = fakeStack();
+      const slugOf = (key: string) => (key === "mosela-refused" ? "mosela" : key);
+      stack.query = async (sql: string) => {
+        if (/indexer_checkpoints/.test(sql)) return [{ protocol: run.protocol, status: "live" }];
+        if (/chain_organisations/.test(sql))
+          return organisations.map((o) => ({ org_id: o.id, synthetic: true }));
+        if (/chain_custodian_classes/.test(sql)) {
+          return CUSTODIAN_CLASSES.map((c) => ({
+            site_code: c.site,
+            approved_capacity_kg: c.approvedKg.toString(),
+          }));
+        }
+        if (/chain_authorities/.test(sql)) {
+          const found: Record<string, unknown>[] = DELEGATIONS.map((d) => ({
+            wallet: cast.wallets[d.key],
+            scopes: d.scopes,
+            expires_at: String(run.expiresAt),
+            revoked_at: null,
+          }));
+          if (refusedAuthority) {
+            found.push({
+              wallet: cast.wallets["mosela-refused"],
+              scopes: 3072,
+              expires_at: "1",
+              revoked_at: null,
+            });
+          }
+          return found;
+        }
+        if (/signer_links/.test(sql)) {
+          return Object.entries(cast.wallets)
+            .filter(([key]) => key !== unlinked)
+            .map(([key, wallet]) => ({ wallet, slug: slugOf(key) }));
+        }
+        return [];
+      };
+      return stack;
+    };
+    const quiet = { keysDir: dir, repoRoots: [repoRoot], log: () => {} };
+    expect((await check("fiat-demo-run-01", { ...quiet, stack: rows(false, null) })).ok).toBe(true);
+    const refused = await check("fiat-demo-run-01", { ...quiet, stack: rows(true, null) });
+    expect(refused.ok).toBe(false);
+    expect(refused.items.filter((i) => !i.ok).map((i) => i.item)).toEqual([
+      "mosela-refused holds no Authority",
+    ]);
+    const unlinked = await check("fiat-demo-run-01", {
+      ...quiet,
+      stack: rows(false, "lender-two"),
+    });
+    expect(unlinked.items.filter((i) => !i.ok).map((i) => i.item)).toEqual([
+      "lender-two wallet linked to lender-two",
+    ]);
   });
 });
