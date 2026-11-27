@@ -105,7 +105,8 @@ create function pg_temp.tx(n int, slot bigint, events int) returns jsonb languag
     'protocol', pg_temp.a('protocol'), 'event_count', events, 'other_instance', false)
 $$;
 
--- An event row: the Phase 1 keys, the eight Phase 2 keys as null, then `keys` over them.
+-- An event row: the Phase 1 keys, the eight Phase 2 keys and the seven Phase 3 keys as null,
+-- then `keys` over them.
 create function pg_temp.ev(n int, idx int, slot bigint, instruction text, event text, scope text,
   keys jsonb) returns jsonb language sql immutable as $$
   select jsonb_build_object('network', 'devnet', 'program_id', pg_temp.a('program'),
@@ -113,7 +114,9 @@ create function pg_temp.ev(n int, idx int, slot bigint, instruction text, event 
     'protocol', pg_temp.a('protocol'), 'instruction', instruction, 'event', event, 'scope', scope,
     'lot', null, 'lot_revision', null, 'org_id', null, 'data', jsonb_build_object('synthetic', true),
     'facility', null, 'loan', null, 'loan_revision', null, 'pool', null, 'pool_revision', null,
-    'valuation', null, 'valuation_version', null, 'created', null) || keys
+    'valuation', null, 'valuation_version', null, 'created', null,
+    'shipment', null, 'shipment_revision', null, 'batch', null, 'batch_sequence', null,
+    'observation_index', null, 'acceptance', null, 'acceptance_version', null) || keys
 $$;
 
 create function pg_temp.up(tbl text, address text, slot bigint, n int, fields jsonb) returns jsonb
@@ -202,7 +205,7 @@ create function pg_temp.intent(status text, slot bigint, n int) returns jsonb la
     'lender', pg_temp.a('lender1'), 'lender_org_id', pg_temp.org('lender-one'),
     'currency_decimals', 2, 'nonce', '1', 'quantity_kg', '2000000', 'price', '40000000',
     'top_up', '0', 'currency', 'USD', 'expires_at', '1795086400', 'position_revision', '1',
-    'status', status))
+    'status', status, 'cancelled_by', null))
 $$;
 
 create function pg_temp.batch(expected bigint, through bigint, txs jsonb, evs jsonb, ups jsonb)

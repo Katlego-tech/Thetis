@@ -712,7 +712,7 @@ const CAPACITY_KG = 10_000_000n;
 
 let built: Promise<{ fixture: Fixture; seed: History; lots: History }> | null = null;
 
-async function lotPda(protocol: string, lotId: string) {
+export async function lotPda(protocol: string, lotId: string) {
   return pda([text.encode("lot"), addressBytes.encode(protocol as Address), text.encode(lotId)]);
 }
 
@@ -1676,8 +1676,8 @@ type PaymentState = {
 };
 
 const LENDING_LOT_ID = "CR-0001";
-const fill = (length: number, byte: number) => new Uint8Array(length).fill(byte);
-const unix = (iso: string) => BigInt(Date.parse(iso) / 1000);
+export const fill = (length: number, byte: number) => new Uint8Array(length).fill(byte);
+export const unix = (iso: string) => BigInt(Date.parse(iso) / 1000);
 
 function applyPayment(principal: bigint, interestNow: bigint, received: bigint) {
   const debt = principal + interestNow;
