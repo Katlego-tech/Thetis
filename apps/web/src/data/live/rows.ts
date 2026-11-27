@@ -58,7 +58,7 @@ export interface ChainCustodianClassRow extends ProjectionColumns {
   reserved_inbound_kg: string;
 }
 export interface ChainDocumentRow extends ProjectionColumns {
-  kind: "Origin";
+  kind: "Origin" | "Departure";
   subject_hex: string;
   version: number;
   issuer: string;
@@ -87,8 +87,8 @@ export interface ChainLotRow extends ProjectionColumns {
   root: string;
   mint: string;
   supply_kg: string;
-  state: "Stored" | "Redeemed";
-  restriction: "Normal";
+  state: "Stored" | "Redeemed" | "Prepared" | "InTransit" | "Loaded";
+  restriction: "Normal" | "ReviewRequired" | "Disputed" | "Frozen";
   expires_at: string;
   revision: string;
   live_children: number;
@@ -374,8 +374,8 @@ export const SNAPSHOT_TABLES = {
       root: { kind: "address" },
       mint: { kind: "address" },
       supply_kg: { kind: "u64" },
-      state: { kind: { oneOf: ["Stored", "Redeemed"] } },
-      restriction: { kind: { oneOf: ["Normal"] } },
+      state: { kind: { oneOf: ["Stored", "Redeemed", "Prepared", "InTransit", "Loaded"] } },
+      restriction: { kind: { oneOf: ["Normal", "ReviewRequired", "Disputed", "Frozen"] } },
       expires_at: { kind: "i64" },
       revision: { kind: "u64" },
       live_children: { kind: "number" },
@@ -419,7 +419,7 @@ export const SNAPSHOT_TABLES = {
     filter: "chain",
     columns: {
       ...projection,
-      kind: { kind: { oneOf: ["Origin"] } },
+      kind: { kind: { oneOf: ["Origin", "Departure"] } },
       subject_hex: { kind: "hex64" },
       version: { kind: "number" },
       issuer: { kind: "address" },

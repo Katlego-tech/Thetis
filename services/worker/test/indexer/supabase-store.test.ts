@@ -9,6 +9,7 @@ import { getBase58Decoder } from "@solana/kit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StoreCodeError } from "../../src/indexer/errors.ts";
 import { type memoryStore, type ReadModelStore, supabaseStore } from "../../src/indexer/store.ts";
+import { custodyHistory } from "../fixtures/custody.ts";
 import { counts, eventKeys, harness, rows } from "../fixtures/harness.ts";
 import { mergeHistories, simulationSeed } from "../fixtures/instances.ts";
 import {
@@ -127,6 +128,15 @@ function wipeLending() {
   );
 }
 
+/** The Phase 3 tables, wiped by the custody test itself (TABLES feeds sqlCounts). */
+const CUSTODY_TABLES = ["chain_batches", "chain_shipments"];
+
+function wipeCustody() {
+  asPostgres(
+    `begin; ${CUSTODY_TABLES.map((table) => `delete from public.${table};`).join(" ")} commit;`,
+  );
+}
+
 function lendingCounts() {
   const output = asPostgres(
     `select ${LENDING_TABLES.map((table) => `(select count(*) from public.${table})`).join(", ")}`,
@@ -234,6 +244,13 @@ describe("supabaseStore", () => {
       valuation: null,
       valuation_version: null,
       created: null,
+      shipment: null,
+      shipment_revision: null,
+      batch: null,
+      batch_sequence: null,
+      observation_index: null,
+      acceptance: null,
+      acceptance_version: null,
       data: {
         lot: f.lot,
         from: f.org("khunou"),
@@ -411,6 +428,13 @@ describe("supabaseStore", () => {
             valuation: null,
             valuation_version: null,
             created: null,
+            shipment: null,
+            shipment_revision: null,
+            batch: null,
+            batch_sequence: null,
+            observation_index: null,
+            acceptance: null,
+            acceptance_version: null,
             data: { loan: scenario.loan, revision: "1" },
           },
         ],
@@ -423,6 +447,142 @@ describe("supabaseStore", () => {
       expect(sqlCounts()).toEqual(expected);
       expect((await store.checkpoint(h.stream))?.indexedThroughSlot).toBe(last);
     } finally {
+      wipeLending();
+    }
+  }, 120_000);
+  it("supabaseStore applies the shipment history, reads intents by position, and reports REVISION_SEQUENCE for a repeated shipment revision on the local Supabase", async () => {
+    wipe();
+    wipeLending();
+    wipeCustody();
+    try {
+      const reference = await harness((await custodyHistory({ secondIntent: true })).history);
+      await reference.pollUntilLive();
+      const expected = counts(reference.store);
+      const tables = [...LENDING_TABLES, ...CUSTODY_TABLES];
+      const expectedRows = Object.fromEntries(
+        tables.map((table) => [table, rows(reference.store, table).length]),
+      );
+      const tableCounts = () => {
+        const output = asPostgres(
+          `select ${tables.map((table) => `(select count(*) from public.${table})`).join(", ")}`,
+        );
+        const values = output.split("|").map(Number);
+        return Object.fromEntries(tables.map((table, index) => [table, values[index]]));
+      };
+
+      const scenario = await custodyHistory({ secondIntent: true });
+      const store: ReadModelStore = supabaseStore(local.url, local.key);
+      const h = await harness(scenario.history, {
+        store,
+        organisations: await seedOrganisations(),
+      });
+      const first = await h.pollUntilLive();
+      const last = scenario.steps.registerB2?.slot as number;
+      expect(first.indexedThroughSlot).toBe(last);
+      expect(sqlCounts()).toEqual(expected);
+      expect(tableCounts()).toEqual(expectedRows);
+      expect(
+        asPostgres(
+          `select string_agg(shipment || ':' || shipment_revision, ',' order by shipment_revision::numeric, shipment) from public.chain_events where shipment = '${scenario.shipments.s1}' and shipment_revision is not null`,
+        ),
+      ).toBe(`${scenario.shipments.s1}:0,${scenario.shipments.s1}:1`);
+      expect(
+        asPostgres(
+          `select status || '|' || event_revision || '|' || event_registered || '|' || commitment from public.chain_shipments where address = '${scenario.shipments.s1}'`,
+        ),
+      ).toBe("Cancelled|1|1|finalized");
+      expect(
+        asPostgres(
+          `select subject_address from public.chain_documents where address = '${scenario.document}'`,
+        ),
+      ).toBe(scenario.lot);
+
+      // rowsByColumn reads both intents of the position, keyed by address, with their marks.
+      const [intent1, intent2] = scenario.intents as [string, string];
+      const read = await store.rowsByColumn(h.stream, "chain_release_intents", "position", [
+        scenario.position,
+        scenario.lot,
+      ]);
+      expect([...read.keys()].sort()).toEqual([intent1, intent2].sort());
+      expect(read.get(intent1)).toMatchObject({
+        position: scenario.position,
+        cancelled_by: scenario.shipments.s1,
+      });
+      expect(read.get(intent2)).toMatchObject({ position: scenario.position, cancelled_by: null });
+      expect(
+        (await store.rowsByColumn(h.stream, "chain_release_intents", "position", [])).size,
+      ).toBe(0);
+
+      // Replaying after the checkpoint is deleted writes nothing twice.
+      asPostgres("delete from public.indexer_checkpoints");
+      h.restart();
+      await h.pollUntilLive();
+      expect(sqlCounts()).toEqual(expected);
+      expect(tableCounts()).toEqual(expectedRows);
+
+      // Another signature repeating (S1, 1) is REVISION_SEQUENCE, with the shipment named.
+      const blockTime = "2026-11-28T01:00:00.000Z";
+      const signature = syntheticSignature(231);
+      const batch = {
+        stream: h.stream,
+        expectedThroughSlot: last,
+        throughSlot: last + 1,
+        transactions: [
+          {
+            network: "devnet",
+            program_id: PROGRAM,
+            signature,
+            slot: last + 1,
+            block_time: blockTime,
+            succeeded: true,
+            protocol: scenario.protocol,
+            event_count: 1,
+            other_instance: false,
+          },
+        ],
+        events: [
+          {
+            network: "devnet",
+            program_id: PROGRAM,
+            signature,
+            event_index: 0,
+            slot: last + 1,
+            block_time: blockTime,
+            protocol: scenario.protocol,
+            instruction: "CancelShipment",
+            event: "ShipmentCancelled",
+            scope: "lot",
+            lot: scenario.lot,
+            lot_revision: "4",
+            org_id: null,
+            facility: null,
+            loan: null,
+            loan_revision: null,
+            pool: null,
+            pool_revision: null,
+            valuation: null,
+            valuation_version: null,
+            created: null,
+            shipment: scenario.shipments.s1,
+            shipment_revision: "1",
+            batch: null,
+            batch_sequence: null,
+            observation_index: null,
+            acceptance: null,
+            acceptance_version: null,
+            data: { shipment: scenario.shipments.s1, revision: "1" },
+          },
+        ],
+        upserts: [],
+      };
+      await expect(store.apply(batch)).rejects.toMatchObject({
+        code: "REVISION_SEQUENCE",
+        detail: expect.stringContaining(scenario.shipments.s1),
+      });
+      expect(sqlCounts()).toEqual(expected);
+      expect((await store.checkpoint(h.stream))?.indexedThroughSlot).toBe(last);
+    } finally {
+      wipeCustody();
       wipeLending();
     }
   }, 120_000);

@@ -60,7 +60,9 @@ create function pg_temp.ev(n int, slot bigint) returns jsonb language sql immuta
     'event', 'ProtocolInitialized', 'scope', 'registry', 'lot', null, 'lot_revision', null,
     'org_id', null, 'data', jsonb_build_object('protocol', pg_temp.protocol()),
     'facility', null, 'loan', null, 'loan_revision', null, 'pool', null, 'pool_revision', null,
-    'valuation', null, 'valuation_version', null, 'created', null)
+    'valuation', null, 'valuation_version', null, 'created', null,
+    'shipment', null, 'shipment_revision', null, 'batch', null, 'batch_sequence', null,
+    'observation_index', null, 'acceptance', null, 'acceptance_version', null)
 $$;
 
 create function pg_temp.batch(expected bigint, through bigint, txs jsonb,

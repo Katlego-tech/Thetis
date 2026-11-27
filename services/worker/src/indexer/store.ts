@@ -23,7 +23,9 @@ export type ProjectionTable =
   | "chain_payments"
   | "chain_release_intents"
   | "chain_pools"
-  | "chain_pool_shares";
+  | "chain_pool_shares"
+  | "chain_shipments"
+  | "chain_batches";
 export type JsonValue =
   | string
   | number
@@ -89,6 +91,16 @@ export interface ReadModelStore {
     organisations: { address: string; slug: string | null; synthetic: boolean | null }[],
   ): Promise<void>;
   reset(stream: Stream): Promise<HaltRecord>;
+  /**
+   * The stream's rows of `table` whose `column` is one of `values`, keyed by address
+   * (live-custody.md §6.3). `chain_loading_intents` is only passed once its table exists.
+   */
+  rowsByColumn(
+    stream: Stream,
+    table: "chain_release_intents" | "chain_loading_intents",
+    column: "position",
+    values: string[],
+  ): Promise<Map<string, Row>>;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -113,6 +125,8 @@ export const PROJECTION_TABLES: readonly ProjectionTable[] = [
   "chain_release_intents",
   "chain_pools",
   "chain_pool_shares",
+  "chain_shipments",
+  "chain_batches",
 ];
 
 /** Columns every projection table starts with and every row carries. */
@@ -157,6 +171,7 @@ export const ACCOUNT_COLUMNS: Record<ProjectionTable, readonly string[]> = {
     "sha256_hex",
     "valid_until",
     "revoked_at",
+    "subject_address",
   ],
   chain_intakes: ["custodian", "custodian_org_id", "intake_digest_hex", "lot", "retired"],
   chain_lots: [
@@ -279,6 +294,50 @@ export const ACCOUNT_COLUMNS: Record<ProjectionTable, readonly string[]> = {
     "revision",
   ],
   chain_pool_shares: ["pool", "organisation", "org_id", "shares", "lent_minor"],
+  chain_shipments: [
+    "shipment_id_hex",
+    "lot",
+    "position",
+    "owner",
+    "owner_org_id",
+    "source",
+    "source_custodian",
+    "source_custodian_org_id",
+    "destination",
+    "destination_custodian",
+    "destination_custodian_org_id",
+    "committed_kg",
+    "locked_kg",
+    "batch_count",
+    "manifest_root_hex",
+    "departure_document",
+    "registered_count",
+    "registered_kg",
+    "departed_count",
+    "departed_kg",
+    "arrived_count",
+    "arrived_kg",
+    "status",
+    "prepared_at",
+    "revision",
+  ],
+  chain_batches: [
+    "shipment",
+    "lot",
+    "batch_index",
+    "batch_count",
+    "quantity_kg",
+    "carrier",
+    "load_digest_hex",
+    "manifest_digest_hex",
+    "holder",
+    "holder_org_id",
+    "stage",
+    "sequence",
+    "observation_count",
+    "departed_at",
+    "arrived_at",
+  ],
 };
 
 /** Columns that come from events or from Supabase, not from the account read. */
@@ -297,9 +356,11 @@ export const EXTRA_COLUMNS: Record<ProjectionTable, readonly string[]> = {
   chain_loans: ["event_revision"],
   chain_locks: [],
   chain_payments: [],
-  chain_release_intents: [],
+  chain_release_intents: ["cancelled_by"],
   chain_pools: ["event_revision"],
   chain_pool_shares: [],
+  chain_shipments: ["event_revision", "event_registered"],
+  chain_batches: ["event_sequence", "event_observations"],
 };
 
 const TRANSACTION_COLUMNS = [
@@ -336,6 +397,13 @@ const EVENT_COLUMNS = [
   "valuation",
   "valuation_version",
   "created",
+  "shipment",
+  "shipment_revision",
+  "batch",
+  "batch_sequence",
+  "observation_index",
+  "acceptance",
+  "acceptance_version",
 ];
 
 /** The program keys an event row may carry beside (lot, lot_revision), each unique per stream. */
@@ -344,6 +412,10 @@ const EVENT_KEYS: { name: string; columns: string[] }[] = [
   { name: "pool", columns: ["pool", "pool_revision"] },
   { name: "valuation", columns: ["valuation", "valuation_version"] },
   { name: "created account", columns: ["created"] },
+  { name: "shipment", columns: ["shipment", "shipment_revision"] },
+  { name: "batch sequence", columns: ["batch", "batch_sequence"] },
+  { name: "batch observation", columns: ["batch", "observation_index"] },
+  { name: "acceptance", columns: ["acceptance", "acceptance_version"] },
 ];
 
 function sameKeys(row: Row, columns: readonly string[]): boolean {
@@ -589,6 +661,14 @@ export function supabaseStore(url: string, serviceRoleKey: string): ReadModelSto
     async reset(stream) {
       return (await call("indexer_reset", { stream: streamJson(stream) })) as HaltRecord;
     },
+
+    async rowsByColumn(stream, table, column, values) {
+      if (values.length === 0) return new Map();
+      const rows = await readIn(table, column, values, 100, (query) =>
+        query.eq("network", stream.network).eq("protocol", stream.protocol),
+      );
+      return new Map(rows.map((row) => [row.address as string, stripTimestamps(row)]));
+    },
   };
 }
 
@@ -777,6 +857,15 @@ export function memoryStore(
         for (const column of EXTRA_COLUMNS[entry.table]) next[column] = row[column] as JsonValue;
       }
       rows.set(row.address, structuredClone(next));
+    }
+    if (
+      entry.table === "chain_documents" &&
+      (row.kind === "Departure") !== (row.subject_address !== null)
+    ) {
+      throw new StoreCodeError(
+        "ROW_INVALID",
+        "a document has a subject_address exactly when it is a Departure document",
+      );
     }
     if (entry.table === "chain_lots") {
       const lotId = (rows.get(row.address) as Row).lot_id;
@@ -1024,6 +1113,28 @@ export function memoryStore(
           if ((event.valuation === null) !== (event.valuation_version === null)) {
             throw wrong("a valuation and its version come together");
           }
+          // chain_events_shipment_scope … chain_events_custody_created (live-custody.md §6.2.3).
+          if (event.scope === "shipment" && event.shipment === null) {
+            throw wrong("a shipment-scoped event must name its shipment");
+          }
+          if (event.shipment_revision !== null && event.shipment === null) {
+            throw wrong("a shipment revision needs its shipment");
+          }
+          if (
+            (event.batch_sequence !== null || event.observation_index !== null) &&
+            event.batch === null
+          ) {
+            throw wrong("a batch sequence or observation index needs its batch");
+          }
+          if (event.batch_sequence !== null && event.observation_index !== null) {
+            throw wrong("an event carries a batch sequence or an observation index, not both");
+          }
+          if ((event.acceptance === null) !== (event.acceptance_version === null)) {
+            throw wrong("an acceptance and its version come together");
+          }
+          if ((event.scope === "loading" || event.scope === "incident") && event.created === null) {
+            throw wrong("a loading or incident event must name the account it creates");
+          }
           counts.set(owner.signature as string, (counts.get(owner.signature as string) ?? 0) + 1);
         }
         for (const transaction of batch.transactions) {
@@ -1157,6 +1268,16 @@ export function memoryStore(
         row.halted_at = null;
         return cleared;
       });
+    },
+
+    async rowsByColumn(_stream, name, column, values) {
+      const found = new Map<string, Row>();
+      if (!isProjectionTable(name)) return found;
+      const wanted = new Set(values);
+      for (const [address, row] of table(name)) {
+        if (wanted.has(row[column] as string)) found.set(address, structuredClone(row));
+      }
+      return found;
     },
 
     rows(name) {
