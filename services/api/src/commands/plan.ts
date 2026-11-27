@@ -142,8 +142,12 @@ export interface KindSpec {
   /** Plan keys of program-signer PDAs that never hold an account (field-app.md fold 25): they
    * may enter the lookup table although they don't exist on chain. Derived from the plan, never
    * from a signer's wallet. */
-  tableSigners?: readonly string[];
+  tableSigners?: readonly ProgramSignerKey[];
 }
+
+/** The plan keys a kind may name in `tableSigners` (field-app.md PR #69 fold 27): typed, so a
+ * misspelt key does not compile. */
+export type ProgramSignerKey = "mintAuthority" | "vaultAuthority";
 
 const tx = (role: SignerRole, scope: ScopeName | null, preCheckAuthority = true): SignerSpec => ({
   role,
@@ -286,7 +290,7 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     signers: [text("custodian", "ISSUE")],
     event: "LotIssued",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
-    // With the five accounts it creates static, the transaction is 1,256 bytes otherwise.
+    // Program-signer PDAs that never hold an account go into the table (fold 25; sizes, fold 28).
     tableSigners: ["mintAuthority", "vaultAuthority"],
   },
   handover: {
@@ -298,6 +302,20 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
   },
 };
+
+/** The addresses of a kind's program-signer PDAs, read from its plan (fold 25). */
+export function tableSignerAddresses(
+  kind: CommandKind,
+  plan: Readonly<Record<string, string>>,
+): Set<Address> {
+  return new Set(
+    (KIND_SPECS[kind].tableSigners ?? []).map((key) => {
+      const value = plan[key];
+      if (!value) throw new RelayError("INTERNAL", `plan has no ${key}`);
+      return value as Address;
+    }),
+  );
+}
 
 export function scopeBit(scope: string): number | null {
   return scope in SCOPES ? SCOPES[scope as ScopeName] : null;
@@ -417,7 +435,8 @@ function hex(bytes: ReadonlyUint8Array): string {
 
 type Decoder<T> = (account: MaybeEncodedAccount) => { exists: boolean; data?: T };
 
-/** Reads accounts fresh at `confirmed`; a missing or wrong account is ACCOUNT_MISSING. */
+/** Reads accounts fresh at `confirmed`; a missing, foreign-owned or wrong account is
+ * ACCOUNT_MISSING. */
 export class Reader {
   readonly chain: ChainPort;
   readonly protocol: Address;
@@ -444,6 +463,10 @@ export class Reader {
   async read<T>(role: string, address: Address, decode: Decoder<T>, kindName: string): Promise<T> {
     const account = await this.raw(address);
     if (!account.exists) throw new RelayError("ACCOUNT_MISSING", `${role}: ${address}`);
+    // PR #69 fold 29: the owner is checked here, whatever the decoder checks.
+    if (account.programAddress !== THETIS_PROGRAM_ADDRESS) {
+      throw new RelayError("ACCOUNT_MISSING", `${address}: not a ${kindName}`);
+    }
     let decoded: { exists: boolean; data?: T };
     try {
       decoded = decode(account);

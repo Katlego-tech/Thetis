@@ -157,6 +157,10 @@ export const RELAY_ERRORS = {
   BLOCKHASH_EXPIRED: [409, "The transaction is too old. Request a new one."],
   TOKEN_ACCOUNT_MISSING: [409, "The wallet has no token account for the pool's test token."],
   ROLE_INVALID: [422, "That role is not a signer of this command."],
+  TRANSACTION_TOO_LARGE: [
+    422,
+    "The transaction for this command is larger than devnet's 1,232 bytes. Nothing was sent.",
+  ],
   TRANSACTION_MISMATCH: [422, "The signed transaction is not the one Thetis issued."],
   TOO_MANY_OPEN_COMMANDS: [
     429,

@@ -541,19 +541,21 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
 
 describe("Reader owner check (field-app.md PR #69 fold 29)", () => {
   it("refuses an account another program owns before decoding, whatever the decoder checks", async () => {
-    const [protocol, custodian, classPolicy, address, otherProgram] = await Promise.all(
+    const [protocol, custodian, classPolicy, address, otherProgram] = (await Promise.all(
       Array.from({ length: 5 }, newKey),
+    )) as [Address, Address, Address, Address, Address];
+    const data = new Uint8Array(
+      getCustodianClassEncoder().encode({
+        protocol,
+        custodian,
+        classPolicy,
+        siteCode: "KOPANO-YARD-1",
+        approvedCapacityKg: 10_000_000n,
+        occupiedKg: 0n,
+        reservedInboundKg: 0n,
+        bump: 255,
+      }),
     );
-    const data = getCustodianClassEncoder().encode({
-      protocol,
-      custodian,
-      classPolicy,
-      siteCode: "KOPANO-YARD-1",
-      approvedCapacityKg: 10_000_000n,
-      occupiedKg: 0n,
-      reservedInboundKg: 0n,
-      bump: 255,
-    });
     const account = (programAddress: Address): MaybeEncodedAccount => ({
       exists: true,
       address,

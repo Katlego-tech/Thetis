@@ -91,6 +91,11 @@ function accountMissingLabel(detail: string | null | undefined, v: RelayCopyVars
   }
 }
 
+/** The relay refused a text too long for one devnet transaction (TRANSACTION_TOO_LARGE). */
+export function transactionTooLargeCopy(detail: string | null | undefined): string {
+  return `This text is too long for one devnet transaction (${detail ?? "over the limit"}; devnet takes 1,232). Nothing was sent. Shorter organisation names or a shorter lot ID make it smaller.`;
+}
+
 /** Copy for a relay error (nothing was sent), or null when the code has none (re-fetch, sign in). */
 export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars): string | null {
   if (REFETCH_CODES.has(code) || code === "NOT_AUTHENTICATED") return null;
@@ -116,6 +121,8 @@ export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars
     case "COMMANDS_UNAVAILABLE":
     case "LOOKUP_TABLE_FULL":
       return `Signing is not available on this Thetis server right now (${code}). Nothing was sent.`;
+    case "TRANSACTION_TOO_LARGE":
+      return transactionTooLargeCopy(v.detail);
     case "NOT_FOUND":
       return "Thetis can't find this command, or it is not one of yours.";
     case "TOO_MANY_OPEN_COMMANDS":
