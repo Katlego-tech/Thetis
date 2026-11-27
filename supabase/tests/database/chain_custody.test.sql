@@ -519,7 +519,7 @@ set local role service_role;
 select throws_ok(
   $$select public.indexer_apply(pg_temp.one(900, 1000, 10,
     pg_temp.ev(10, 0, 1000, 'RegisterBatch', 'BatchRegistered', 'shipment', jsonb_build_object(
-      'batch', pg_temp.a('b1'), 'created', pg_temp.a('b1'))), '[]'::jsonb))$$,
+      'batch', pg_temp.a('b1'))), '[]'::jsonb))$$,
   'P0001', 'ROW_INVALID', '5. a shipment-scoped event without shipment is ROW_INVALID');
 select throws_ok(
   $$select public.indexer_apply(pg_temp.one(900, 1000, 10,

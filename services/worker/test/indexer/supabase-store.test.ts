@@ -522,7 +522,7 @@ describe("supabaseStore", () => {
 
       // Another signature repeating (S1, 1) is REVISION_SEQUENCE, with the shipment named.
       const blockTime = "2026-11-28T01:00:00.000Z";
-      const signature = syntheticSignature(272);
+      const signature = syntheticSignature(231);
       const batch = {
         stream: h.stream,
         expectedThroughSlot: last,

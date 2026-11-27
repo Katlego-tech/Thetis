@@ -16,6 +16,7 @@ import {
   getAdvanceRecordedEventDecoder,
   getAuthorityDelegatedEventDecoder,
   getAuthorityRevokedEventDecoder,
+  getBatchRegisteredEventDecoder,
   getBorrowedEventDecoder,
   getClassRegisteredEventDecoder,
   getCustodianClassAccreditedEventDecoder,
@@ -38,6 +39,8 @@ import {
   getRelationshipDeclaredEventDecoder,
   getReleaseIntentCreatedEventDecoder,
   getRepaidEventDecoder,
+  getShipmentCancelledEventDecoder,
+  getShipmentPreparedEventDecoder,
   getUnitsRedeemedEventDecoder,
   getUnitsTransferredEventDecoder,
   getValuationSetEventDecoder,
@@ -89,6 +92,9 @@ export const HANDLED_INSTRUCTIONS = [
   "Deposit",
   "Withdraw",
   "Borrow",
+  "PrepareShipment",
+  "RegisterBatch",
+  "CancelShipment",
 ] as const;
 
 export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
@@ -123,6 +129,9 @@ export const HANDLED_EVENTS = [
   "Deposited",
   "Withdrawn",
   "Borrowed",
+  "ShipmentPrepared",
+  "BatchRegistered",
+  "ShipmentCancelled",
 ] as const;
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
@@ -204,6 +213,9 @@ const EMITS: Record<
   Deposit: { event: "Deposited", required: true },
   Withdraw: { event: "Withdrawn", required: true },
   Borrow: { event: "Borrowed", required: true },
+  PrepareShipment: { event: "ShipmentPrepared", required: true },
+  RegisterBatch: { event: "BatchRegistered", required: true },
+  CancelShipment: { event: "ShipmentCancelled", required: true },
 };
 
 /**
@@ -331,6 +343,22 @@ const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
     ["loan", "loan"],
     ["pool", "pool"],
   ],
+  ShipmentPrepared: [
+    ["shipment", "shipment"],
+    ["lot", "lot"],
+    ["owner", "ownerOrg"],
+    ["source", "sourceClass"],
+    ["destination", "destinationClass"],
+    ["departureDocument", "departureDocument"],
+  ],
+  BatchRegistered: [
+    ["batch", "batch"],
+    ["shipment", "shipment"],
+  ],
+  ShipmentCancelled: [
+    ["shipment", "shipment"],
+    ["lot", "lot"],
+  ],
 };
 
 const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
@@ -363,6 +391,9 @@ const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
   Deposited: getDepositedEventDecoder,
   Withdrawn: getWithdrawnEventDecoder,
   Borrowed: getBorrowedEventDecoder,
+  ShipmentPrepared: getShipmentPreparedEventDecoder,
+  BatchRegistered: getBatchRegisteredEventDecoder,
+  ShipmentCancelled: getShipmentCancelledEventDecoder,
 };
 
 /** Event fields that hold an enum, by event, with the generated name table of each. */

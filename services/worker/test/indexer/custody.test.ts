@@ -132,7 +132,7 @@ function repeatLater(scenario: CustodyScenario, name: CustodyStep, k: number): F
   const copy = { ...structuredClone(stepTx(scenario, name)), signature: syntheticSignature(k) };
   scenario.history.push({
     slot: lastSlot(scenario.history) + 1000,
-    blockTime: null,
+    blockTime: "2026-11-28T00:01:00.000Z",
     transactions: [copy],
     accounts: {},
   });
@@ -261,10 +261,11 @@ describe("Phase 3 custody, the shipment part", () => {
       .sort();
     expect(created).toEqual([scenario.facility, scenario.intents[0], s1, b1, s2, b2].sort());
 
-    // 15 custody transactions and events beyond the seed's 10 transactions and 9 events.
+    // 14 custody transactions and events (one per step) beyond the seed's 10 transactions and 9
+    // events.
     expect(allCounts(h.store)).toMatchObject({
-      chain_transactions: 25,
-      chain_events: 24,
+      chain_transactions: 24,
+      chain_events: 23,
       chain_custodian_classes: 2,
       chain_documents: 1,
       chain_lots: 1,

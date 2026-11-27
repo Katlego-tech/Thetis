@@ -188,7 +188,7 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   pledge: 245,
   recordAdvance: 246,
   createReleaseIntent: 247,
-  createReleaseIntent2: 270,
+  createReleaseIntent2: 230,
   attestDeparture: 248,
   prepareS1: 249,
   registerB1: 250,
