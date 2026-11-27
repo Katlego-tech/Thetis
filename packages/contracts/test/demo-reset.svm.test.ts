@@ -2,7 +2,7 @@
 // throwaway generated here, the local Supabase is the in-memory fake, and nothing reaches devnet.
 // The issue text in the lender case is a test-only builder over the relay's envelope: the script
 // itself takes T067r's issueLotMessage and refuses while it is missing (demo-reset.test.ts).
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type Address,
@@ -11,6 +11,7 @@ import {
   getAddressDecoder,
   getAddressEncoder,
   getProgramDerivedAddress,
+  getSignatureFromTransaction,
   getTransactionEncoder,
   lamports,
   pipe,
@@ -56,9 +57,15 @@ const NOW = 1_800_000_000n;
 const MAX_TRANSACTION_BYTES = 1_232;
 const ALT_PROGRAM = "AddressLookupTab1e1111111111111111111111111";
 
-type SvmChain = Chain & { svm: LiteSVM; sizes: number[] };
+type SvmChain = Chain & {
+  svm: LiteSVM;
+  sizes: number[];
+  /** Submits whose index (0-based, over the chain's life) lands and then throws, as a dropped confirmation does. */
+  throwAfterLanding: Set<number>;
+};
 
 function svmChain(svm: LiteSVM): SvmChain {
+  const throwAfterLanding = new Set<number>();
   const landed = new Set<string>();
   const sizes: number[] = [];
   const advance = () => {
@@ -72,6 +79,7 @@ function svmChain(svm: LiteSVM): SvmChain {
   return {
     svm,
     sizes,
+    throwAfterLanding,
     rpc: {
       getAccountInfo(address: Address) {
         return {
@@ -112,9 +120,15 @@ function svmChain(svm: LiteSVM): SvmChain {
       if (result instanceof FailedTransactionMetadata) {
         throw new Error(`${result.toString()}\n${result.meta().prettyLogs()}`);
       }
-      landed.add(Buffer.from(Object.values(transaction.signatures)[0] ?? []).toString("hex"));
+      landed.add(getSignatureFromTransaction(transaction));
+      if (throwAfterLanding.has(sizes.length - 1))
+        throw new Error("block height exceeded (the confirmation was lost)");
     },
-    statuses: async (signatures) => signatures.map(() => ({ failed: false, confirmed: true })),
+    // Honest: only a landed signature has a status; anything else is not found.
+    statuses: async (signatures) =>
+      signatures.map((signature) =>
+        landed.has(signature) ? { failed: false, confirmed: true } : null,
+      ),
     blockHeight: async () => svm.getClock().slot,
     lookupTable: async (table) => {
       const account = svm.getAccount(table);
@@ -343,5 +357,48 @@ describe("demo reset in LiteSVM (demo.md §5.8)", () => {
     await expect(reset({ scenario: "phone", run: 1, yes: true }, deps(chain, dir))).rejects.toThrow(
       /Used/,
     );
+  });
+
+  it("a submit that throws after landing is settled on rerun with no duplicate send and one lookup table", async () => {
+    const { chain, dir } = await world();
+    const run = { scenario: "lender", run: 1, yes: true } as const;
+    const text = async () => testIssueText;
+    // Submit 4 is B5 (an organisation); submit 19 is L2, create_lookup_table.
+    chain.throwAfterLanding.add(4);
+    await expect(reset(run, deps(chain, dir, text))).rejects.toThrow(/may still land/);
+    const runFile = () =>
+      JSON.parse(readFileSync(join(dir, "runs", "fiat-lend-run-01.json"), "utf8")) as {
+        transactions: { step: string; status: string; account?: string }[];
+        lookupTable: string | null;
+      };
+    expect(runFile().transactions.at(-1)?.status).toBe("pending");
+    expect(chain.sizes).toHaveLength(5);
+
+    chain.throwAfterLanding.add(19);
+    await expect(reset(run, deps(chain, dir, text))).rejects.toThrow(
+      /create_lookup_table: sending failed/,
+    );
+    const afterTable = runFile();
+    expect(
+      afterTable.transactions.find((t) => t.step === "accredit_organisation mosela")?.status,
+    ).toBe("confirmed");
+    const created = afterTable.transactions.filter((t) => t.step === "create_lookup_table");
+    expect(created).toHaveLength(1);
+    expect(created[0]?.status).toBe("pending");
+    expect(created[0]?.account).toBe(afterTable.lookupTable);
+    expect(chain.sizes).toHaveLength(20);
+
+    const done = await reset(run, deps(chain, dir, text));
+    expect(done.sent).toEqual(["extend_lookup_table", "issue_lot CR-0001"]);
+    // 22 transactions in all: nothing was sent twice, and there was only ever one lookup table.
+    expect(chain.sizes).toHaveLength(22);
+    const final = runFile();
+    expect(final.transactions.every((t) => t.status === "confirmed")).toBe(true);
+    expect(final.transactions.map((t) => t.step)).toHaveLength(22);
+    expect(new Set(final.transactions.map((t) => t.step)).size).toBe(22);
+    expect(final.transactions.filter((t) => t.step === "create_lookup_table")).toHaveLength(1);
+    expect(final.lookupTable).toBe(created[0]?.account);
+    const lot = await fetchMaybeLot(chain.rpc, await lotPda(await protocolOf("fiat-lend-run-01")));
+    expect(lot.exists).toBe(true);
   });
 });

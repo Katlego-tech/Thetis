@@ -1,7 +1,7 @@
 // Tests for scripts/demo-reset.ts (demo.md §5). They live here for the same reason as
 // seed-demo.test.ts: scripts/ is not a workspace package. Nothing here touches a network or a
 // database: the chain and the local Supabase are in-memory fakes. Every key is a throwaway.
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   type Address,
@@ -10,23 +10,39 @@ import {
   getAddressEncoder,
   getProgramDerivedAddress,
 } from "@solana/kit";
+import { getMintSize, getTokenSize } from "@solana-program/token";
 import {
   findProtocolPda,
+  getAuthorityEncoder,
+  getClassPolicyEncoder,
+  getCustodianClassEncoder,
+  getIntakeIdentitySize,
+  getLotEncoder,
+  getOrganisationEncoder,
+  getOrganisationNameSize,
+  getPositionSize,
   getProtocolEncoder,
+  getProtocolSize,
   SettlementMode,
   THETIS_PROGRAM_ADDRESS,
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  ACCOUNT_BYTES,
   AUTHORITY_LIFETIME_SECS,
+  bindIssueLotMessage,
   type Chain,
   CUSTODIAN_CLASSES,
   check,
   DELEGATIONS,
   DemoError,
+  devnetChain,
   estimateCost,
+  ISSUE_LOT_MESSAGE_PARAMS,
+  ISSUER_KEY,
   instanceIdFor,
   loadIssueText,
+  localStack,
   NEEDS_T067R,
   nextFreeRun,
   parseArgs,
@@ -37,6 +53,7 @@ import {
   reset,
   resetCast,
   SCOPE,
+  STATE_MAX,
 } from "../../../scripts/demo-reset.ts";
 import {
   castFile,
@@ -46,6 +63,13 @@ import {
   repoRoot,
   seedSql,
 } from "./demo-reset.fakes.ts";
+import {
+  DO_BLOCK,
+  INSERT_NO_RETURNING,
+  INSERT_RETURNING_NO_ROWS,
+  SELECT_NO_ROWS,
+  SELECT_ONE_ROW,
+} from "./fixtures/supabase-db-query-2.122.1.ts";
 
 // ------------------------------------------------------------------------- fakes
 
@@ -103,7 +127,13 @@ function memoryChain(options: { balance?: bigint; now?: bigint } = {}) {
   return chain;
 }
 
-function deps(dir: string, chain = memoryChain(), stack = fakeStack(), sql = seedSql) {
+function deps(
+  dir: string,
+  chain = memoryChain(),
+  stack = fakeStack(),
+  sql = seedSql,
+  issueText: () => Promise<((fields: unknown) => Uint8Array) | null> = async () => null,
+) {
   const lines: string[] = [];
   return {
     chain,
@@ -116,7 +146,7 @@ function deps(dir: string, chain = memoryChain(), stack = fakeStack(), sql = see
       repoRoots: [repoRoot],
       seedSql: sql,
       log: (line: string) => lines.push(line),
-      issueText: async () => null,
+      issueText,
       sleep: async () => {},
     },
   };
@@ -324,6 +354,29 @@ describe("demo reset (demo.md §5)", () => {
       /3200/,
       { stack: fakeStack({ listening: [3200] }) },
     );
+    await refuse(
+      async (dir) => {
+        await castFile(dir);
+      },
+      /3100 \(the web app\)/,
+      { stack: fakeStack({ listening: [3100] }) },
+    );
+    // 6. The worker polled less than 120 s ago; a checkpoint polled long ago does not refuse.
+    await refuse(
+      async (dir) => {
+        await castFile(dir);
+      },
+      /worker polled in the last 120 s/,
+      { stack: fakeStack({ checkpointAge: 45 }) },
+    );
+    {
+      const dir = await keysDir();
+      await castFile(dir);
+      const old = deps(dir, memoryChain(), fakeStack({ checkpointAge: 600 }));
+      await expect(
+        reset({ scenario: "phone", run: 1, yes: true }, old.deps),
+      ).resolves.toBeDefined();
+    }
     // 7. A Used run, and an instance holding other values.
     {
       const chain = memoryChain();
@@ -514,6 +567,7 @@ describe("demo reset (demo.md §5)", () => {
     const refused = await check("fiat-demo-run-01", { ...quiet, stack: rows(true, null) });
     expect(refused.ok).toBe(false);
     expect(refused.items.filter((i) => !i.ok).map((i) => i.item)).toEqual([
+      "exactly 7 Authorities on fiat-demo-run-01",
       "mosela-refused holds no Authority",
     ]);
     const unlinked = await check("fiat-demo-run-01", {
@@ -524,4 +578,437 @@ describe("demo reset (demo.md §5)", () => {
       "lender-two wallet linked to lender-two",
     ]);
   });
+
+  // --------------------------------------------------------------- PR #68 review folds (27 Nov)
+
+  it("localStack.query reads the CLI's JSON rows and treats a bare command tag as zero rows (CLI 2.122.1)", async () => {
+    const query = (stdout: string, sql = "select 1") =>
+      localStack(repoRoot, () => stdout).query(sql);
+    expect(await query(SELECT_NO_ROWS)).toEqual([]);
+    expect(await query(SELECT_ONE_ROW)).toEqual([{ n: null, one: 1 }]);
+    expect(
+      await query(INSERT_RETURNING_NO_ROWS, "insert into x select 1 where false returning a"),
+    ).toEqual([]);
+    expect(await query(INSERT_NO_RETURNING, "insert into x select 1 where false")).toEqual([]);
+    expect(await query(DO_BLOCK, "do $$ begin perform 1; end $$")).toEqual([]);
+    await expect(
+      query("Error: connection refused\n", "select value\nfrom private.settings"),
+    ).rejects.toThrow(/select value/);
+    await expect(query('{"boundary": "x"}\n', "select 2")).rejects.toThrow(DemoError);
+  });
+
+  it("a cast run against the honest fake completes, every write returns rows, and the marker is set", async () => {
+    const dir = await keysDir();
+    const cast = await castFile(dir);
+    const stack = fakeStack();
+    const users = await resetCast(stack, "fiat-demo-run-03", cast, organisations);
+    expect(users).toHaveLength(6);
+    expect(stack.marker()).toBe("fiat-demo-run-03");
+    expect(stack.memberships.size).toBe(7);
+    const writes = stack.calls.filter((sql) => /^\s*insert\b/i.test(sql));
+    expect(writes.length).toBe(7);
+    for (const sql of writes) expect(sql).toMatch(/\breturning\b/i);
+  });
+
+  it("every devnet read asks for confirmed commitment", async () => {
+    const requests: { method: string; args: unknown[] }[] = [];
+    const answers: Record<string, unknown> = {
+      getAccountInfo: { value: null },
+      getSlot: 5n,
+      getBlockTime: 1_800_000_000n,
+      getBalance: { value: 1n },
+      getMinimumBalanceForRentExemption: 1n,
+      getLatestBlockhash: {
+        value: { blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 9n },
+      },
+      getSignatureStatuses: { value: [null] },
+      getBlockHeight: 7n,
+    };
+    const rpc = new Proxy(
+      {},
+      {
+        get:
+          (_target, method: string) =>
+          (...args: unknown[]) => {
+            requests.push({ method, args });
+            return { send: async () => answers[method] };
+          },
+      },
+    );
+    const chain = devnetChain(rpc as never, () => {
+      throw new Error("no subscriptions in this test");
+    });
+    const table = (await generateKeyPairSigner()).address;
+    await chain.programDeployed();
+    await chain.unixTime();
+    await chain.slot();
+    await chain.balance(table);
+    await chain.rent(100);
+    await chain.latestBlockhash();
+    await chain.statuses(["1111111111111111111111111111111111111111111111111111111111111111"]);
+    await chain.blockHeight();
+    await chain.lookupTable(table);
+    // getBlockTime takes a slot only; getSignatureStatuses reports each status's own level.
+    const takesCommitment = requests.filter(
+      (r) => r.method !== "getBlockTime" && r.method !== "getSignatureStatuses",
+    );
+    expect(new Set(takesCommitment.map((r) => r.method))).toEqual(
+      new Set([
+        "getAccountInfo",
+        "getSlot",
+        "getBalance",
+        "getMinimumBalanceForRentExemption",
+        "getLatestBlockhash",
+        "getBlockHeight",
+      ]),
+    );
+    for (const request of takesCommitment) {
+      expect({ method: request.method, config: request.args.at(-1) }).toMatchObject({
+        config: { commitment: "confirmed" },
+      });
+    }
+    expect(requests.filter((r) => r.method === "getAccountInfo")).toHaveLength(2);
+  });
+
+  it("the issue-text binding fails loudly when issueLotMessage's arity or argument names differ", () => {
+    // T067r will export the real builder; this pins the order the script passes its arguments in.
+    expect(ISSUE_LOT_MESSAGE_PARAMS).toEqual([
+      "programId",
+      "instanceId",
+      "lotId",
+      "classCode",
+      "classVersion",
+      "grade",
+      "quantityKg",
+      "owner",
+      "custodian",
+      "siteCode",
+      "intakeDigest",
+      "origin",
+      "validUntil",
+    ]);
+    const params = ISSUE_LOT_MESSAGE_PARAMS.join(", ");
+    const good = new Function(params, "return new Uint8Array([arguments.length]);");
+    const bound = bindIssueLotMessage(good);
+    expect(typeof bound).toBe("function");
+    const fewer = new Function(
+      ISSUE_LOT_MESSAGE_PARAMS.slice(0, 12).join(", "),
+      "return new Uint8Array();",
+    );
+    expect(() => bindIssueLotMessage(fewer)).toThrow(/issueLotMessage/);
+    const swapped: string[] = [...ISSUE_LOT_MESSAGE_PARAMS];
+    [swapped[7], swapped[8]] = [swapped[8] as string, swapped[7] as string];
+    expect(() =>
+      bindIssueLotMessage(new Function(swapped.join(", "), "return new Uint8Array();")),
+    ).toThrow(/custodian/);
+  });
+
+  it("demo:check asserts the exact Authority count and refuses a missing cast file with the template", async () => {
+    const dir = await keysDir();
+    const cast = await castFile(dir);
+    const first = deps(dir);
+    const result = await reset({ scenario: "phone", run: 1, yes: true }, first.deps);
+    const run = result.runFile;
+    if (run === null) throw new Error("no run file");
+    const stack = (extra: number) => {
+      const s = fakeStack();
+      s.query = async (sql: string) => {
+        if (/indexer_checkpoints/.test(sql)) return [{ protocol: run.protocol, status: "live" }];
+        if (/chain_organisations/.test(sql))
+          return organisations.map((o) => ({ org_id: o.id, synthetic: true }));
+        if (/chain_custodian_classes/.test(sql)) {
+          return CUSTODIAN_CLASSES.map((c) => ({
+            site_code: c.site,
+            approved_capacity_kg: c.approvedKg.toString(),
+          }));
+        }
+        if (/chain_authorities/.test(sql)) {
+          const rows: Record<string, unknown>[] = DELEGATIONS.map((d) => ({
+            wallet: cast.wallets[d.key],
+            scopes: d.scopes,
+            expires_at: String(run.expiresAt),
+            revoked_at: null,
+          }));
+          for (let i = 0; i < extra; i += 1) {
+            rows.push({
+              wallet: `Extra${i}`,
+              scopes: 1,
+              expires_at: String(run.expiresAt),
+              revoked_at: null,
+            });
+          }
+          return rows;
+        }
+        if (/signer_links/.test(sql)) {
+          return Object.entries(cast.wallets).map(([key, wallet]) => ({
+            wallet,
+            slug: key === "mosela-refused" ? "mosela" : key,
+          }));
+        }
+        return [];
+      };
+      return s;
+    };
+    const quiet = { keysDir: dir, repoRoots: [repoRoot], log: () => {} };
+    const exact = await check("fiat-demo-run-01", { ...quiet, stack: stack(0) });
+    expect(exact.ok).toBe(true);
+    expect(exact.items.map((i) => i.item)).toContain("exactly 7 Authorities on fiat-demo-run-01");
+    const more = await check("fiat-demo-run-01", { ...quiet, stack: stack(1) });
+    expect(more.items.filter((i) => !i.ok).map((i) => i.item)).toEqual([
+      "exactly 7 Authorities on fiat-demo-run-01",
+    ]);
+
+    rmSync(join(dir, "demo-cast.json"));
+    const lines: string[] = [];
+    await expect(
+      check("fiat-demo-run-01", { ...quiet, log: (line) => lines.push(line), stack: stack(0) }),
+    ).rejects.toThrow(/demo-cast\.json is missing/);
+    expect(lines.join("\n")).toContain('"mosela-refused": ""');
+  });
+
+  it("demo:check of a lender run wants eight Authorities including the seed issuer", async () => {
+    const dir = await keysDir();
+    const cast = await castFile(dir);
+    const issuer = await loadOrCreateKeyForTest(dir);
+    const run = await reset(
+      { scenario: "lender", run: 1, yes: false },
+      deps(dir, memoryChain(), fakeStack(), seedSql, async () => () => new Uint8Array(1)).deps,
+    );
+    // A lender run file, as a --yes run would leave it.
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(join(dir, "runs"), { recursive: true });
+    writeFileSync(
+      join(dir, "runs", "fiat-lend-run-01.json"),
+      JSON.stringify({
+        scenario: "lender",
+        instanceId: "fiat-lend-run-01",
+        protocol: run.protocol,
+        t0: Number(run.t0),
+        expiresAt: Number(run.expiresAt),
+        explorer: "",
+        authorities: [],
+        custodianClasses: [],
+        lookupTable: null,
+        lot: null,
+        transactions: [],
+        supabase: { status: "done", users: [] },
+      }),
+    );
+    const stack = (withIssuer: boolean) => {
+      const s = fakeStack();
+      s.query = async (sql: string) => {
+        if (/indexer_checkpoints/.test(sql)) return [{ protocol: run.protocol, status: "live" }];
+        if (/chain_organisations/.test(sql))
+          return organisations.map((o) => ({ org_id: o.id, synthetic: true }));
+        if (/chain_custodian_classes/.test(sql)) {
+          return CUSTODIAN_CLASSES.map((c) => ({
+            site_code: c.site,
+            approved_capacity_kg: c.approvedKg.toString(),
+          }));
+        }
+        if (/chain_authorities/.test(sql)) {
+          const rows: Record<string, unknown>[] = DELEGATIONS.map((d) => ({
+            wallet: cast.wallets[d.key],
+            scopes: d.scopes,
+            expires_at: String(run.expiresAt),
+            revoked_at: null,
+          }));
+          if (withIssuer) {
+            rows.push({
+              wallet: issuer,
+              scopes: 1,
+              expires_at: String(run.expiresAt),
+              revoked_at: null,
+            });
+          }
+          return rows;
+        }
+        if (/signer_links/.test(sql)) {
+          return Object.entries(cast.wallets).map(([key, wallet]) => ({
+            wallet,
+            slug: key === "mosela-refused" ? "mosela" : key,
+          }));
+        }
+        if (/chain_lots/.test(sql)) return [{ state: "Stored", supply_kg: "5000000" }];
+        return [];
+      };
+      return s;
+    };
+    const quiet = { keysDir: dir, repoRoots: [repoRoot], log: () => {} };
+    const full = await check("fiat-lend-run-01", { ...quiet, stack: stack(true) });
+    expect(full.items.filter((i) => !i.ok)).toEqual([]);
+    expect(full.items.map((i) => i.item)).toContain("exactly 8 Authorities on fiat-lend-run-01");
+    const missing = await check("fiat-lend-run-01", { ...quiet, stack: stack(false) });
+    expect(missing.items.filter((i) => !i.ok).map((i) => i.item)).toEqual([
+      "exactly 8 Authorities on fiat-lend-run-01",
+      `${ISSUER_KEY} Authority (scopes 1)`,
+    ]);
+  });
+
+  it("the dry run reads the marker and the checkpoint and says whether it would wipe", async () => {
+    const dir = await keysDir();
+    await castFile(dir);
+    const same = deps(
+      dir,
+      memoryChain(),
+      fakeStack({ marker: "fiat-demo-run-01", checkpointAge: 30 }),
+    );
+    await reset({ scenario: "phone", run: 1, yes: false }, same.deps);
+    const kept = same.lines.join("\n");
+    expect(kept).toContain("already holds this run's cast (demo_run = fiat-demo-run-01): no wipe");
+    expect(kept).toMatch(/indexer checkpoint .* polled 30 s ago/i);
+    expect(same.stack.calls.some((sql) => /from private\.settings/.test(sql))).toBe(true);
+    expect(same.stack.resets()).toBe(0);
+
+    const other = deps(dir, memoryChain(), fakeStack({ marker: "fiat-demo-run-07" }));
+    await reset({ scenario: "phone", run: 1, yes: false }, other.deps);
+    const wiped = other.lines.join("\n");
+    expect(wiped).toContain("wipes the local Supabase database");
+    expect(wiped).toContain("demo_run = fiat-demo-run-07");
+    expect(wiped).toMatch(/no indexer checkpoint/i);
+    expect(other.stack.resets()).toBe(0);
+  });
+
+  it("a refused lender --yes run creates no seed issuer key", async () => {
+    const dir = await keysDir();
+    await castFile(dir);
+    const poor = deps(
+      dir,
+      memoryChain({ balance: 50_000_000n }),
+      fakeStack(),
+      seedSql,
+      async () => () => new Uint8Array(1),
+    );
+    await expect(reset({ scenario: "lender", run: 1, yes: true }, poor.deps)).rejects.toThrow(
+      /balance/,
+    );
+    expect(existsSync(join(dir, `${ISSUER_KEY}.json`))).toBe(false);
+    const busy = deps(
+      dir,
+      memoryChain(),
+      fakeStack({ listening: [3100] }),
+      seedSql,
+      async () => () => new Uint8Array(1),
+    );
+    await expect(reset({ scenario: "lender", run: 1, yes: true }, busy.deps)).rejects.toThrow(
+      /3100/,
+    );
+    expect(existsSync(join(dir, `${ISSUER_KEY}.json`))).toBe(false);
+  });
+
+  it("the cost check's account sizes equal state.rs and the generated codecs", () => {
+    const state = readFileSync(join(repoRoot, "programs/thetis/src/state.rs"), "utf8");
+    const constant = (name: string) =>
+      Number(new RegExp(`pub const ${name}: usize = (\\d+);`).exec(state)?.[1]);
+    expect(STATE_MAX).toEqual({
+      classCode: constant("MAX_CLASS_CODE"),
+      grades: constant("MAX_GRADES"),
+      grade: constant("MAX_GRADE"),
+      displayName: constant("MAX_DISPLAY_NAME"),
+      related: constant("MAX_RELATED"),
+      siteCode: constant("MAX_SITE_CODE"),
+      lotId: constant("MAX_LOT_ID"),
+    });
+    const key = "11111111111111111111111111111111" as Address;
+    const text = (n: number) => "x".repeat(n);
+    const classPolicy = getClassPolicyEncoder().encode({
+      protocol: key,
+      classCode: text(STATE_MAX.classCode),
+      version: 1,
+      unit: 0,
+      grades: Array(STATE_MAX.grades).fill(text(STATE_MAX.grade)),
+      originRequired: false,
+      lotValiditySecs: 0n,
+      splitInheritsExpiry: false,
+      bump: 0,
+    }).length;
+    const organisation = getOrganisationEncoder().encode({
+      protocol: key,
+      orgId: new Uint8Array(16),
+      role: 0,
+      displayName: text(STATE_MAX.displayName),
+      admin: key,
+      related: Array(STATE_MAX.related).fill(key),
+      bump: 0,
+    }).length;
+    const custodianClass = getCustodianClassEncoder().encode({
+      protocol: key,
+      custodian: key,
+      classPolicy: key,
+      siteCode: text(STATE_MAX.siteCode),
+      approvedCapacityKg: 0n,
+      occupiedKg: 0n,
+      reservedInboundKg: 0n,
+      bump: 0,
+    }).length;
+    const authority = getAuthorityEncoder().encode({
+      protocol: key,
+      organisation: key,
+      wallet: key,
+      scopes: 0,
+      expiresAt: 0n,
+      revokedAt: { __option: "Some", value: 0n },
+      bump: 0,
+    }).length;
+    const lot = getLotEncoder().encode({
+      protocol: key,
+      lotId: text(STATE_MAX.lotId),
+      classPolicy: key,
+      classVersion: 1,
+      grade: text(STATE_MAX.grade),
+      custodianClass: key,
+      intake: key,
+      parent: { __option: "Some", value: key },
+      root: key,
+      mint: key,
+      supplyKg: 0n,
+      state: 0,
+      restriction: 0,
+      expiresAt: 0n,
+      revision: 0n,
+      liveChildren: 0,
+      bump: 0,
+    }).length;
+    expect(ACCOUNT_BYTES).toEqual({
+      Protocol: getProtocolSize(),
+      ClassPolicy: classPolicy,
+      Organisation: organisation,
+      OrganisationName: getOrganisationNameSize(),
+      CustodianClass: custodianClass,
+      Authority: authority,
+      IntakeIdentity: getIntakeIdentitySize(),
+      Lot: lot,
+      Mint: getMintSize(),
+      Position: getPositionSize(),
+      // A Token-2022 account with ImmutableOwner: base, account type byte, one empty TLV entry.
+      Vault: getTokenSize() + 1 + 4,
+      LookupTableHeader: 56,
+    });
+    // The review's figures (state.rs with the 8-byte discriminator), checked once by hand.
+    expect(ACCOUNT_BYTES).toMatchObject({
+      Protocol: 92,
+      ClassPolicy: 168,
+      Organisation: 402,
+      OrganisationName: 8,
+      CustodianClass: 149,
+      Authority: 124,
+      IntakeIdentity: 138,
+      Lot: 300,
+      Position: 137,
+      Mint: 82,
+      Vault: 170,
+    });
+    const planned = new Map(
+      planSteps("lender").flatMap((step) => step.creates.map((c) => [c.label, c.bytes])),
+    );
+    for (const [label, bytes] of planned) {
+      if (label === "lookup table") expect(bytes).toBe(ACCOUNT_BYTES.LookupTableHeader + 32 * 17);
+      else expect(bytes).toBe(ACCOUNT_BYTES[label as keyof typeof ACCOUNT_BYTES]);
+    }
+  });
 });
+
+async function loadOrCreateKeyForTest(dir: string): Promise<string> {
+  const { loadOrCreateKey } = await import("../../../scripts/seed-demo.ts");
+  return (await loadOrCreateKey(dir, ISSUER_KEY)).address;
+}
