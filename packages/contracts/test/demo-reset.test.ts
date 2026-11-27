@@ -599,6 +599,19 @@ describe("demo reset (demo.md §5)", () => {
     await expect(query('{"boundary": "x"}\n', "select 2")).rejects.toThrow(DemoError);
   });
 
+  it("localStack.query also reads a bare JSON array of rows, as a newer Supabase CLI prints it", async () => {
+    const query = (stdout: string, sql = "select 1") =>
+      localStack(repoRoot, () => stdout).query(sql);
+    expect(
+      await query("[]\n", "select value from private.settings where key = 'demo_run'"),
+    ).toEqual([]);
+    expect(await query('[{"value": "fiat-demo-run-01"}]\n')).toEqual([
+      { value: "fiat-demo-run-01" },
+    ]);
+    await expect(query("[1, 2]\n", "select 3")).rejects.toThrow(DemoError);
+    await expect(query("[null]\n", "select 4")).rejects.toThrow(DemoError);
+  });
+
   it("a cast run against the honest fake completes, every write returns rows, and the marker is set", async () => {
     const dir = await keysDir();
     const cast = await castFile(dir);

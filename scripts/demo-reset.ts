@@ -704,8 +704,12 @@ export function parseQueryOutput(stdout: string, sql: string): Record<string, un
   } catch {
     parsed = undefined;
   }
-  const rows = (parsed as { rows?: unknown } | undefined)?.rows;
-  if (typeof parsed === "object" && parsed !== null && Array.isArray(rows)) return rows as Record<string, unknown>[];
+  // CLI 2.122.1 prints { boundary, rows, warning }; a newer CLI prints the rows as a bare array.
+  const rows = Array.isArray(parsed) ? parsed : (parsed as { rows?: unknown } | undefined)?.rows;
+  const isRow = (row: unknown) => typeof row === "object" && row !== null && !Array.isArray(row);
+  if (typeof parsed === "object" && parsed !== null && Array.isArray(rows) && rows.every(isRow)) {
+    return rows as Record<string, unknown>[];
+  }
   const first = sql.trim().split("\n")[0] ?? "";
   throw new DemoError(
     `supabase db query printed neither JSON rows nor a command tag for: ${first}\n${text.slice(0, 200)}`,
