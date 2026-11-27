@@ -7,7 +7,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(39);
+select plan(42);
 
 -- A clean slate inside this transaction (rolled back at the end).
 delete from public.chain_handoff_acceptances;
@@ -428,6 +428,9 @@ select set_eq('select * from pg_temp.acceptance_view()',
   array['acceptance ' || pg_temp.a('acc1'), 'event LoadingAccepted'],
   'lender-one reads the acceptance and its event');
 select pg_temp.as_user(6); -- lender-two, a facility to Khunou and no loan
+select set_eq('select * from pg_temp.intent_view()',
+  array['intent ' || pg_temp.a('li1'), 'event LoadingIntentCreated'],
+  'lender-two, a lot reader through its facility to Khunou (decision 3), reads the intent and its event');
 select is_empty('select * from pg_temp.acceptance_view()',
   'lender-two reads neither the acceptance nor its event');
 select pg_temp.as_user(4); -- mosela, no party of the lot or the loading
@@ -478,9 +481,21 @@ select is((select row(cancelled_by, commitment::text) from public.chain_loading_
 select is((select row(event_version, commitment::text) from public.chain_handoff_acceptances),
   row(2::bigint, 'finalized'::text), 'reconcile does not change event_version');
 
+-- A later upsert carries the mark too, as chain_custody.test.sql's release intent (its section 6):
+-- an indexer_apply with an older account read takes cancelled_by and keeps the row's slot.
+set local role service_role;
+select lives_ok(
+  $$select public.indexer_apply(pg_temp.one(800, 900, 9, null, jsonb_build_array(
+    pg_temp.loading_intent('Open', pg_temp.a('s3'), 750, 9))))$$,
+  'a later batch re-sends the marked intent from an older account read');
+reset role;
+select is((select row(cancelled_by, slot, commitment::text) from public.chain_loading_intents),
+  row(pg_temp.a('s3'), 800::bigint, 'finalized'::text),
+  'cancelled_by survives the later upsert, and the intent keeps its slot and commitment');
+
 -- indexer_reset clears both tables.
 set local role service_role;
-select lives_ok($$select public.indexer_halt(pg_temp.stream(), 800, 'EVENT_GAP', 'sequence: synthetic', null)$$,
+select lives_ok($$select public.indexer_halt(pg_temp.stream(), 900, 'EVENT_GAP', 'sequence: synthetic', null)$$,
   'the stream halts');
 select lives_ok($$select public.indexer_reset(pg_temp.stream())$$, 'indexer_reset clears the stream');
 reset role;

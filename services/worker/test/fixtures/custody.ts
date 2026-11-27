@@ -206,7 +206,9 @@ export type CustodyStep =
   | "openFacility"
   | "setValuation"
   | "pledge"
+  | "pledge2"
   | "recordAdvance"
+  | "recordAdvance2"
   | "createReleaseIntent"
   | "createReleaseIntent2"
   | "attestDeparture"
@@ -225,6 +227,7 @@ export type CustodyStep =
   | "arriveB3"
   | "createLoadingIntent"
   | "acceptLoading"
+  | "acceptLoading2"
   | "reacceptLoading"
   | "recordLoading"
   | "attestDeparture2"
@@ -234,7 +237,7 @@ export type CustodyStep =
  * SYNTHETIC: one signature index per step (live-custody.md §9.1: k from 240; the route steps below
  * 240 because a synthetic signature index stops at 255, T063d.2 pre-check fold 6; 237 is
  * T063d.3's border observation, its pre-check fold 2; 224–229 the loading, T063d.4 pre-check folds 2
- * and 3).
+ * and 3; 220–222 the second loan of the two-loan loading, unused by any other custody step).
  */
 const STEP_SIGNATURE: Record<CustodyStep, number> = {
   accreditKopano: 240,
@@ -243,7 +246,9 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   openFacility: 243,
   setValuation: 244,
   pledge: 245,
+  pledge2: 220,
   recordAdvance: 246,
+  recordAdvance2: 221,
   createReleaseIntent: 247,
   createReleaseIntent2: 230,
   attestDeparture: 248,
@@ -263,6 +268,7 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   // The loading (T063d.4 pre-check fold 2): §9.1's 258–260 exceed 255.
   createLoadingIntent: 224,
   acceptLoading: 225,
+  acceptLoading2: 222,
   recordLoading: 226,
   reacceptLoading: 227,
   attestDeparture2: 228,
@@ -296,6 +302,10 @@ export type CustodyScenario = {
   /** The loading intent (nonce 1) and the Lender One acceptance, in the loading variants only. */
   loadingIntent?: string;
   acceptance?: string;
+  /** Lender One's second loan (index 1), its lock and its acceptance, in the two-loan variant only. */
+  loan2?: string;
+  lock2?: string;
+  acceptance2?: string;
   firstSignature: string;
 };
 
@@ -329,6 +339,14 @@ export type CustodyOptions = {
   loading?: "record" | "ship";
   /** With `loading: "record"`: Lender One accepts again (version 2) before the loading. */
   reaccept?: boolean;
+  /**
+   * Two loans of Lender One's facility on the position (indices 0 and 1, 3,000,000 and
+   * 2,000,000 kg, advances of 30,000,000 and 20,000,000 within the 60% LTV of each lock); with
+   * `loading: "record"`, both are accepted and handed off, triples in ascending loan key order.
+   */
+  twoLoans?: boolean;
+  /** No advance: every loan owes nothing, so a loading leaves it Active (loading.rs step 9). */
+  noAdvance?: boolean;
 };
 
 /**
@@ -418,6 +436,8 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
   });
   const [loan, loanBump] = await findLoanPda({ facility, loanIndex: 0 });
   const [lock, lockBump] = await findLockPda({ loan });
+  const [loan2, loan2Bump] = await findLoanPda({ facility, loanIndex: 1 });
+  const [lock2, lock2Bump] = await findLockPda({ loan: loan2 });
   const usd = text.encode("USD");
   const documentVersion = 1;
   const [document, documentBump] = await getProgramDerivedAddress({
@@ -445,6 +465,10 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
   });
   const [loadingIntent, loadingIntentBump] = await findLoadingIntentPda({ position, nonce: 1n });
   const [acceptance, acceptanceBump] = await findAcceptancePda({ intent: loadingIntent, loan });
+  const [acceptance2, acceptance2Bump] = await findAcceptancePda({
+    intent: loadingIntent,
+    loan: loan2,
+  });
 
   // The two shipments, carried by Mosela Haulage (live-custody.md §9.1): one batch each, or, in
   // the partial variant, two for S2 (T063d.2 pre-check fold 4: program-custody.md §6.3's M2 split).
@@ -535,32 +559,16 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     lotSupply: LOT_KG,
     positionKg: LOT_KG,
     lockedKg: 0n,
-    lockKg: LOT_KG,
     intakeRetired: false,
     loanCount: 0,
     issuedAt: 0n,
     valuationSetAt: 0n,
-    loan: {
-      principal: 0n,
-      bookedInterest: 0n,
-      accrualRemainder: 0n,
-      accruedAt: 0n,
-      revision: 0n,
-      status: LoanStatus.Active as LoanStatus,
-    },
     loading: {
       expiresAt: 0n,
       positionRevision: 0n,
       lockedKg: 0n,
       status: LoadingStatus.Open as LoadingStatus,
       executedAt: null as bigint | null,
-    },
-    acceptance: {
-      version: 0,
-      loanRevision: 0n,
-      principal: 0n,
-      bookedInterest: 0n,
-      acceptedAt: 0n,
     },
     document2ValidUntil: 0n,
     intents: [] as {
@@ -598,6 +606,86 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         arrivedAt: bigint | null;
       }
     >(),
+  };
+
+  // The loans on the position: loan 0, and loan 1 in the two-loan variant. Each carries its lock and
+  // its acceptance of the loading intent, and the chain state the steps change.
+  const newLoan = (
+    index: number,
+    address: Address,
+    bump: number,
+    lockAddress: Address,
+    lockAddressBump: number,
+    acceptanceAddress: Address,
+    acceptanceAddressBump: number,
+    pledgeKg: bigint,
+    advance: bigint,
+  ) => ({
+    index,
+    address,
+    bump,
+    lock: lockAddress,
+    lockBump: lockAddressBump,
+    acceptance: acceptanceAddress,
+    acceptanceBump: acceptanceAddressBump,
+    pledgeKg,
+    advance,
+    lockKg: pledgeKg,
+    principal: 0n,
+    bookedInterest: 0n,
+    accrualRemainder: 0n,
+    accruedAt: 0n,
+    revision: 0n,
+    status: LoanStatus.Active as LoanStatus,
+    accepted: {
+      version: 0,
+      lockQuantityKg: 0n,
+      loanRevision: 0n,
+      principal: 0n,
+      bookedInterest: 0n,
+      acceptedAt: 0n,
+    },
+  });
+  type LoanSlot = ReturnType<typeof newLoan>;
+  const loans: LoanSlot[] = options.twoLoans
+    ? [
+        newLoan(
+          0,
+          loan,
+          loanBump,
+          lock,
+          lockBump,
+          acceptance,
+          acceptanceBump,
+          3_000_000n,
+          30_000_000n,
+        ),
+        newLoan(
+          1,
+          loan2,
+          loan2Bump,
+          lock2,
+          lock2Bump,
+          acceptance2,
+          acceptance2Bump,
+          2_000_000n,
+          20_000_000n,
+        ),
+      ]
+    : [newLoan(0, loan, loanBump, lock, lockBump, acceptance, acceptanceBump, LOT_KG, 60_000_000n)];
+  const loanA = loans[0] as LoanSlot;
+  // The steps of loan 1 end in "2" (pledge2, recordAdvance2, acceptLoading2).
+  const slotOf = (step: CustodyStep): LoanSlot =>
+    (step.endsWith("2") ? loans[1] : loans[0]) as LoanSlot;
+  // record_loading takes the triples in ascending loan key order (loading.rs step 7).
+  const keyOrder = (a: LoanSlot, b: LoanSlot) => {
+    const left = addressBytes.encode(a.address);
+    const right = addressBytes.encode(b.address);
+    for (let i = 0; i < 32; i += 1) {
+      const d = (left[i] as number) - (right[i] as number);
+      if (d !== 0) return d;
+    }
+    return 0;
   };
 
   const enc = {
@@ -696,7 +784,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           bump: valuationBump,
         }),
       ),
-    loan: () =>
+    loan: (slot: LoanSlot = loanA) =>
       thetis(
         bytesOf(getLoanEncoder(), {
           protocol,
@@ -704,28 +792,28 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           borrower: khunou,
           lot,
           position,
-          index: 0,
-          status: state.loan.status,
+          index: slot.index,
+          status: slot.status,
           rateBps: 1200,
           termsVersion: 1,
-          principal: state.loan.principal,
-          bookedInterest: state.loan.bookedInterest,
-          accrualRemainder: state.loan.accrualRemainder,
-          accruedAt: state.loan.accruedAt,
+          principal: slot.principal,
+          bookedInterest: slot.bookedInterest,
+          accrualRemainder: slot.accrualRemainder,
+          accruedAt: slot.accruedAt,
           openExceptions: 0,
-          revision: state.loan.revision,
-          bump: loanBump,
+          revision: slot.revision,
+          bump: slot.bump,
         }),
       ),
-    lock: () =>
+    lock: (slot: LoanSlot = loanA) =>
       thetis(
         bytesOf(getLockAllocationEncoder(), {
           protocol,
-          loan,
+          loan: slot.address,
           position,
-          quantityKg: state.lockKg,
+          quantityKg: slot.lockKg,
           control: LockControl.Pledged,
-          bump: lockBump,
+          bump: slot.lockBump,
         }),
       ),
     intent: (intent: (typeof state.intents)[number]) =>
@@ -876,21 +964,21 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           bump: loadingIntentBump,
         }),
       ),
-    acceptance: () =>
+    acceptance: (slot: LoanSlot = loanA) =>
       thetis(
         bytesOf(getHandoffAcceptanceEncoder(), {
           protocol,
           intent: loadingIntent,
-          loan,
-          lock,
+          loan: slot.address,
+          lock: slot.lock,
           lender: lenderOrg,
-          lockQuantityKg: LOT_KG,
-          loanRevision: state.acceptance.loanRevision,
-          principal: state.acceptance.principal,
-          bookedInterest: state.acceptance.bookedInterest,
-          acceptedAt: state.acceptance.acceptedAt,
-          version: state.acceptance.version,
-          bump: acceptanceBump,
+          lockQuantityKg: slot.accepted.lockQuantityKg,
+          loanRevision: slot.accepted.loanRevision,
+          principal: slot.accepted.principal,
+          bookedInterest: slot.accepted.bookedInterest,
+          acceptedAt: slot.accepted.acceptedAt,
+          version: slot.accepted.version,
+          bump: slot.acceptanceBump,
         }),
       ),
   };
@@ -1214,7 +1302,12 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     "openFacility",
     "setValuation",
     "pledge",
-    "recordAdvance",
+    ...(options.twoLoans ? (["pledge2"] as const) : []),
+    ...(options.noAdvance
+      ? []
+      : options.twoLoans
+        ? (["recordAdvance", "recordAdvance2"] as const)
+        : (["recordAdvance"] as const)),
     "createReleaseIntent",
     ...(options.secondIntent ? (["createReleaseIntent2"] as const) : []),
     "attestDeparture",
@@ -1235,6 +1328,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
       ? ([
           "createLoadingIntent",
           "acceptLoading",
+          ...(options.twoLoans ? (["acceptLoading2"] as const) : []),
           ...(options.reaccept ? (["reacceptLoading"] as const) : []),
           "recordLoading",
         ] as const)
@@ -1416,12 +1510,15 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           accounts: { [valuation]: enc.valuation() },
         };
         break;
-      case "pledge": {
+      case "pledge":
+      case "pledge2": {
+        // pledge.rs: loan `index` of the facility locks its quantity of the position.
+        const slot = slotOf(step);
         const expectedRevision = state.positionRevision;
-        state.loanCount = 1;
-        state.lockedKg = LOT_KG;
+        state.loanCount = slot.index + 1;
+        state.lockedKg += slot.pledgeKg;
         state.positionRevision += 1n;
-        state.loan.accruedAt = now;
+        slot.accruedAt = now;
         made = {
           tx: tx(
             signature,
@@ -1436,46 +1533,48 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
               lenderOrg: lenderOrg as Address,
               lenderAuthority,
               facility,
-              loan,
-              lock,
-              loanIndex: 0,
-              quantityKg: LOT_KG,
+              loan: slot.address,
+              lock: slot.lock,
+              loanIndex: slot.index,
+              quantityKg: slot.pledgeKg,
               expectedRevision,
               validUntil: now + 270n,
             }),
             bytesOf(getPledgedEventEncoder(), {
-              loan,
-              lock,
+              loan: slot.address,
+              lock: slot.lock,
               position,
               lot,
-              quantityKg: LOT_KG,
+              quantityKg: slot.pledgeKg,
               positionRevision: state.positionRevision,
               revision: 0n,
             }),
             true,
           ),
           accounts: {
-            [loan]: enc.loan(),
-            [lock]: enc.lock(),
+            [slot.address]: enc.loan(slot),
+            [slot.lock]: enc.lock(slot),
             [position]: enc.position(),
             [facility]: enc.facility(),
           },
         };
         break;
       }
-      case "recordAdvance": {
-        const expectedRevision = state.loan.revision;
+      case "recordAdvance":
+      case "recordAdvance2": {
+        const slot = slotOf(step);
+        const expectedRevision = slot.revision;
         const { interest, remainder } = accrueSimple({
-          principal: state.loan.principal,
+          principal: slot.principal,
           rateBps: 1200n,
-          elapsedSeconds: now - state.loan.accruedAt,
-          carriedRemainder: state.loan.accrualRemainder,
+          elapsedSeconds: now - slot.accruedAt,
+          carriedRemainder: slot.accrualRemainder,
         });
-        state.loan.bookedInterest += interest;
-        state.loan.accrualRemainder = remainder;
-        state.loan.accruedAt = now;
-        state.loan.principal += 60_000_000n;
-        state.loan.revision += 1n;
+        slot.bookedInterest += interest;
+        slot.accrualRemainder = remainder;
+        slot.accruedAt = now;
+        slot.principal += slot.advance;
+        slot.revision += 1n;
         made = {
           tx: tx(
             signature,
@@ -1486,26 +1585,26 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
               lenderAuthority,
               lenderOrg: lenderOrg as Address,
               facility,
-              loan,
-              lock,
+              loan: slot.address,
+              lock: slot.lock,
               lot: lot as Address,
               valuation,
               borrowerOrg: khunou as Address,
               borrowerAuthority: ownerAuthority,
-              amount: 60_000_000n,
+              amount: slot.advance,
               currency: usd,
               expectedRevision,
               validUntil: now + 270n,
             }),
             bytesOf(getAdvanceRecordedEventEncoder(), {
-              loan,
-              amount: 60_000_000n,
-              principal: state.loan.principal,
-              bookedInterest: state.loan.bookedInterest,
-              revision: state.loan.revision,
+              loan: slot.address,
+              amount: slot.advance,
+              principal: slot.principal,
+              bookedInterest: slot.bookedInterest,
+              revision: slot.revision,
             }),
           ),
-          accounts: { [loan]: enc.loan() },
+          accounts: { [slot.address]: enc.loan(slot) },
         };
         break;
       }
@@ -1715,14 +1814,17 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         break;
       }
       case "acceptLoading":
+      case "acceptLoading2":
       case "reacceptLoading": {
         // loading.rs accept_loading, step 6: Lender One's consent snapshots the loan and the lock.
-        const first = state.acceptance.version === 0;
-        state.acceptance.version += 1;
-        state.acceptance.loanRevision = state.loan.revision;
-        state.acceptance.principal = state.loan.principal;
-        state.acceptance.bookedInterest = state.loan.bookedInterest;
-        state.acceptance.acceptedAt = now;
+        const slot = slotOf(step);
+        const first = slot.accepted.version === 0;
+        slot.accepted.version += 1;
+        slot.accepted.lockQuantityKg = slot.lockKg;
+        slot.accepted.loanRevision = slot.revision;
+        slot.accepted.principal = slot.principal;
+        slot.accepted.bookedInterest = slot.bookedInterest;
+        slot.accepted.acceptedAt = now;
         made = {
           tx: tx(
             signature,
@@ -1734,49 +1836,54 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
               authority: lenderAuthority,
               lenderOrg: lenderOrg as Address,
               facility,
-              loan,
-              lock,
+              loan: slot.address,
+              lock: slot.lock,
               lot: lot as Address,
               position,
               intent: loadingIntent,
-              acceptance,
-              expectedRevision: state.loan.revision,
+              acceptance: slot.acceptance,
+              expectedRevision: slot.revision,
             }),
             bytesOf(getLoadingAcceptedEventEncoder(), {
-              acceptance,
+              acceptance: slot.acceptance,
               intent: loadingIntent,
-              loan,
+              loan: slot.address,
               lender: lenderOrg,
-              lockQuantityKg: state.lockKg,
-              loanRevision: state.acceptance.loanRevision,
-              principal: state.acceptance.principal,
-              bookedInterest: state.acceptance.bookedInterest,
-              version: state.acceptance.version,
+              lockQuantityKg: slot.accepted.lockQuantityKg,
+              loanRevision: slot.accepted.loanRevision,
+              principal: slot.accepted.principal,
+              bookedInterest: slot.accepted.bookedInterest,
+              version: slot.accepted.version,
             }),
             first,
           ),
-          accounts: { [acceptance]: enc.acceptance() },
+          accounts: { [slot.acceptance]: enc.acceptance(slot) },
         };
         break;
       }
       case "recordLoading": {
         // loading.rs record_loading, steps 6, 7 and 9: the receipts burned, PORT-T1 freed, the
-        // intake retired (no children), the loan accrued and handed off with its debt.
+        // intake retired (no children), each accepted loan accrued and handed off with its debt
+        // (or left Active when it owes nothing), its lock emptied.
         const expectedRevision = state.positionRevision;
-        const { interest, remainder } = accrueSimple({
-          principal: state.loan.principal,
-          rateBps: 1200n,
-          elapsedSeconds: now - state.loan.accruedAt,
-          carriedRemainder: state.loan.accrualRemainder,
+        const triples = [...loans].sort(keyOrder);
+        const handOffs = triples.map((slot) => {
+          const { interest, remainder } = accrueSimple({
+            principal: slot.principal,
+            rateBps: 1200n,
+            elapsedSeconds: now - slot.accruedAt,
+            carriedRemainder: slot.accrualRemainder,
+          });
+          slot.bookedInterest += interest;
+          slot.accrualRemainder = remainder;
+          slot.accruedAt = now;
+          const externalHandoff = slot.principal > 0n || slot.bookedInterest > 0n;
+          if (externalHandoff) slot.status = LoanStatus.ExternalHandoff;
+          slot.revision += 1n;
+          const releasedKg = slot.lockKg;
+          slot.lockKg = 0n;
+          return { slot, releasedKg, externalHandoff };
         });
-        state.loan.bookedInterest += interest;
-        state.loan.accrualRemainder = remainder;
-        state.loan.accruedAt = now;
-        const externalHandoff = state.loan.principal > 0n || state.loan.bookedInterest > 0n;
-        if (externalHandoff) state.loan.status = LoanStatus.ExternalHandoff;
-        state.loan.revision += 1n;
-        const releasedKg = state.lockKg;
-        state.lockKg = 0n;
         state.positionKg = 0n;
         state.lockedKg = 0n;
         state.positionRevision += 1n;
@@ -1812,14 +1919,16 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
             signature,
             feePayer: sponsor.address,
             name: "RecordLoading",
-            // The triple (acceptance, loan, lock) after the IDL accounts (program-custody.md §6.1).
+            // The triples (acceptance, loan, lock) after the IDL accounts (program-custody.md §6.1).
             instruction: {
               ...instruction,
               accounts: [
                 ...instruction.accounts,
-                { address: acceptance, role: AccountRole.READONLY },
-                { address: loan, role: AccountRole.WRITABLE },
-                { address: lock, role: AccountRole.WRITABLE },
+                ...triples.flatMap((slot) => [
+                  { address: slot.acceptance, role: AccountRole.READONLY },
+                  { address: slot.address, role: AccountRole.WRITABLE },
+                  { address: slot.lock, role: AccountRole.WRITABLE },
+                ]),
               ],
             },
             events: [
@@ -1831,20 +1940,22 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
                 terminal: port,
                 quantityKg: LOT_KG,
                 documentSha256: fill(32, 0xaa),
-                loansAccepted: 1,
+                loansAccepted: triples.length,
                 lotLoaded: true,
                 lotRevision: state.lotRevision,
                 positionRevision: state.positionRevision,
               }),
-              bytesOf(getLoanHandedOffEventEncoder(), {
-                loan,
-                intent: loadingIntent,
-                releasedKg,
-                principal: state.loan.principal,
-                bookedInterest: state.loan.bookedInterest,
-                externalHandoff,
-                revision: state.loan.revision,
-              }),
+              ...handOffs.map(({ slot, releasedKg, externalHandoff }) =>
+                bytesOf(getLoanHandedOffEventEncoder(), {
+                  loan: slot.address,
+                  intent: loadingIntent,
+                  releasedKg,
+                  principal: slot.principal,
+                  bookedInterest: slot.bookedInterest,
+                  externalHandoff,
+                  revision: slot.revision,
+                }),
+              ),
             ],
           }),
           accounts: {
@@ -1853,8 +1964,12 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
             [loadingIntent]: enc.loadingIntent(),
             [portClass]: enc.portClass(),
             [intake]: enc.intake(),
-            [loan]: enc.loan(),
-            [lock]: enc.lock(),
+            ...Object.fromEntries(
+              triples.flatMap((slot) => [
+                [slot.address, enc.loan(slot)],
+                [slot.lock, enc.lock(slot)],
+              ]),
+            ),
           },
         };
         break;
@@ -1968,6 +2083,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     intake,
     lock,
     ...(options.loading ? { loadingIntent, acceptance } : {}),
+    ...(options.twoLoans ? { loan2, lock2, acceptance2 } : {}),
     firstSignature: f.seedSignatures.deploy,
   };
 }
@@ -1990,14 +2106,18 @@ export async function routeHistory(
  * and 3): Khunou's loading intent at PORT-T1 (224), Lender One's acceptance (225; `reaccept` adds
  * version 2 at 227), and the loading by Khunou and Port Terminal T1 (226). `ship` replaces the
  * acceptance and the loading with Port Terminal T1's Departure document v2 (228) and S3 to
- * KOPANO-YARD-1 (229), which leaves the intent stale.
+ * KOPANO-YARD-1 (229), which leaves the intent stale. `twoLoans` pledges Lender One's loans 0 and 1
+ * (220 the second pledge, 221 its advance, 222 its acceptance) and hands both off; `noAdvance` lends
+ * nothing, so the loading leaves the loan Active.
  */
 export async function loadingHistory(
-  options: { reaccept?: boolean; ship?: boolean } = {},
+  options: { reaccept?: boolean; ship?: boolean; twoLoans?: boolean; noAdvance?: boolean } = {},
 ): Promise<CustodyScenario> {
   return custodyHistory({
     route: true,
     loading: options.ship ? "ship" : "record",
     ...(options.reaccept ? { reaccept: true } : {}),
+    ...(options.twoLoans ? { twoLoans: true } : {}),
+    ...(options.noAdvance ? { noAdvance: true } : {}),
   });
 }
