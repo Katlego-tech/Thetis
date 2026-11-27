@@ -12,6 +12,7 @@ import {
   getAddressEncoder,
   getProgramDerivedAddress,
   getTransactionEncoder,
+  lamports,
   pipe,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
@@ -41,7 +42,14 @@ import {
 } from "../../../scripts/demo-reset.ts";
 import { loadOrCreateKey, readKeyFile } from "../../../scripts/seed-demo.ts";
 import { envelope, formatTonnes } from "../../../services/api/src/commands/texts.ts";
-import { castFile, fakeStack, keysDir, organisations, repoRoot, seedSql } from "./demo-reset.fakes.ts";
+import {
+  castFile,
+  fakeStack,
+  keysDir,
+  organisations,
+  repoRoot,
+  seedSql,
+} from "./demo-reset.fakes.ts";
 
 const programSo = join(repoRoot, "target/deploy/thetis.so");
 const NOW = 1_800_000_000n;
@@ -135,12 +143,16 @@ async function world() {
   await chain.slot();
   const dir = await keysDir();
   const deployer = await loadOrCreateKey(dir, "deployer");
-  svm.airdrop(deployer.address, 10_000_000_000n);
+  svm.airdrop(deployer.address, lamports(10_000_000_000n));
   const cast = await castFile(dir);
   return { svm, chain, dir, cast };
 }
 
-function deps(chain: Chain, dir: string, issueText: () => Promise<IssueText | null> = async () => null) {
+function deps(
+  chain: Chain,
+  dir: string,
+  issueText: () => Promise<IssueText | null> = async () => null,
+) {
   return {
     chain,
     stack: fakeStack(),
@@ -203,7 +215,10 @@ describe("demo reset in LiteSVM (demo.md §5.8)", () => {
     expect(result.protocol).toBe(protocol);
     expect((await fetchMaybeProtocol(chain.rpc, protocol)).exists).toBe(true);
     for (const organisation of organisations) {
-      const found = await fetchMaybeOrganisation(chain.rpc, await orgAddress(protocol, organisation.slug));
+      const found = await fetchMaybeOrganisation(
+        chain.rpc,
+        await orgAddress(protocol, organisation.slug),
+      );
       expect(found.exists && found.data.displayName).toBe(organisation.name);
       expect(found.exists && found.data.related).toEqual([]);
     }
@@ -227,7 +242,10 @@ describe("demo reset in LiteSVM (demo.md §5.8)", () => {
       expect(found.data.expiresAt).toBe(NOW + 2_592_000n);
       expect(found.data.organisation).toBe(await orgAddress(protocol, delegation.slug));
     }
-    const [refused] = await findAuthorityPda({ protocol, wallet: cast.wallets["mosela-refused"] as Address });
+    const [refused] = await findAuthorityPda({
+      protocol,
+      wallet: cast.wallets["mosela-refused"] as Address,
+    });
     expect((await fetchMaybeAuthority(chain.rpc, refused)).exists).toBe(false);
     expect((await fetchMaybeLot(chain.rpc, await lotPda(protocol))).exists).toBe(false);
   });
@@ -251,6 +269,7 @@ describe("demo reset in LiteSVM (demo.md §5.8)", () => {
     const deployer = await readKeyFile(join(dir, "deployer.json"));
     const wallet = cast.wallets["mosela-refused"] as Address;
     const [authority] = await findAuthorityPda({ protocol, wallet });
+    const mosela = await orgAddress(protocol, "mosela");
     svm.expireBlockhash();
     const message = pipe(
       createTransactionMessage({ version: 0 }),
@@ -265,7 +284,7 @@ describe("demo reset in LiteSVM (demo.md §5.8)", () => {
           [
             getDelegateAuthorityInstruction({
               protocol,
-              organisation: await orgAddress(protocol, "mosela"),
+              organisation: mosela,
               authority,
               admin,
               payer: deployer,
@@ -312,14 +331,15 @@ describe("demo reset in LiteSVM (demo.md §5.8)", () => {
     await reset({ scenario: "phone", run: 1, yes: true }, deps(chain, dir));
     const protocol = await protocolOf("fiat-demo-run-01");
     // Stand in for the live intake on phone 1: an account at the run's Lot CR-0001 address.
-    svm.setAccount(await lotPda(protocol), {
-      address: await lotPda(protocol),
+    const lot = await lotPda(protocol);
+    svm.setAccount({
+      address: lot,
       data: new Uint8Array(300),
       executable: false,
-      lamports: 10_000_000n,
+      lamports: lamports(10_000_000n),
       programAddress: THETIS_PROGRAM_ADDRESS,
       space: 300n,
-    } as never);
+    });
     await expect(reset({ scenario: "phone", run: 1, yes: true }, deps(chain, dir))).rejects.toThrow(
       /Used/,
     );

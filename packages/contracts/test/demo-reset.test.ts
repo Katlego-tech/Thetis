@@ -32,9 +32,9 @@ import {
   planSteps,
   ROLE_SCOPES,
   renderEnv,
+  rentEstimate,
   reset,
   resetCast,
-  rentEstimate,
   SCOPE,
 } from "../../../scripts/demo-reset.ts";
 import {
@@ -185,7 +185,7 @@ describe("demo reset (demo.md §5)", () => {
       "lender-two": 128,
       "buyer-smelter": 590,
     });
-    expect(DELEGATIONS.some((d) => d.key === "mosela-refused")).toBe(false);
+    expect(DELEGATIONS.some((d) => (d.key as string) === "mosela-refused")).toBe(false);
     for (const delegation of DELEGATIONS) {
       const organisation = organisations.find((o) => o.slug === delegation.slug);
       expect(organisation).toBeDefined();
@@ -217,11 +217,13 @@ describe("demo reset (demo.md §5)", () => {
 
   it("refuses each of refusals 1 to 8 before any send or wipe", async () => {
     // 1. Not devnet.
-    expect(() => parseArgs(["--scenario", "phone", "--run", "1", "--url", "mainnet-beta"], {})).toThrow(
-      /not devnet/,
-    );
     expect(() =>
-      parseArgs(["--scenario", "phone", "--run", "1"], { SOLANA_URL: "https://api.mainnet-beta.solana.com" }),
+      parseArgs(["--scenario", "phone", "--run", "1", "--url", "mainnet-beta"], {}),
+    ).toThrow(/not devnet/);
+    expect(() =>
+      parseArgs(["--scenario", "phone", "--run", "1"], {
+        SOLANA_URL: "https://api.mainnet-beta.solana.com",
+      }),
     ).toThrow(/not devnet/);
     expect(() => parseArgs(["--scenario", "both", "--run", "1"], {})).toThrow(DemoError);
     expect(parseArgs(["--scenario", "phone", "--run", "next"], {})).toEqual({
@@ -293,36 +295,63 @@ describe("demo reset (demo.md §5)", () => {
       });
     }, /six users/);
     // 4. An organisation not marked synthetic.
-    await refuse(async (dir) => {
-      await castFile(dir);
-    }, /not marked synthetic/, {
-      sql: seedSql.replace("'Mosela Haulage', 'transporter', true", "'Mosela Haulage', 'transporter', false"),
-    });
+    await refuse(
+      async (dir) => {
+        await castFile(dir);
+      },
+      /not marked synthetic/,
+      {
+        sql: seedSql.replace(
+          "'Mosela Haulage', 'transporter', true",
+          "'Mosela Haulage', 'transporter', false",
+        ),
+      },
+    );
     // 5. A Supabase that is not local.
-    await refuse(async (dir) => {
-      await castFile(dir);
-    }, /not the local stack/, { stack: fakeStack({ apiUrl: "https://abcd.supabase.co" }) });
+    await refuse(
+      async (dir) => {
+        await castFile(dir);
+      },
+      /not the local stack/,
+      { stack: fakeStack({ apiUrl: "https://abcd.supabase.co" }) },
+    );
     // 6. The API or the web app running.
-    await refuse(async (dir) => {
-      await castFile(dir);
-    }, /3200/, { stack: fakeStack({ listening: [3200] }) });
+    await refuse(
+      async (dir) => {
+        await castFile(dir);
+      },
+      /3200/,
+      { stack: fakeStack({ listening: [3200] }) },
+    );
     // 7. A Used run, and an instance holding other values.
     {
       const chain = memoryChain();
-      const [protocol] = await findProtocolPda({ instanceId: new TextEncoder().encode("fiat-demo-run-01") });
+      const [protocol] = await findProtocolPda({
+        instanceId: new TextEncoder().encode("fiat-demo-run-01"),
+      });
       const encoder = new TextEncoder();
       const [lot] = await getProgramDerivedAddress({
         programAddress: THETIS_PROGRAM_ADDRESS,
-        seeds: [encoder.encode("lot"), getAddressEncoder().encode(protocol), encoder.encode("CR-0001")],
+        seeds: [
+          encoder.encode("lot"),
+          getAddressEncoder().encode(protocol),
+          encoder.encode("CR-0001"),
+        ],
       });
       chain.accounts.set(lot, { data: new Uint8Array(300), owner: THETIS_PROGRAM_ADDRESS });
-      await refuse(async (dir) => {
-        await castFile(dir);
-      }, /Used/, { chain, yes: false });
+      await refuse(
+        async (dir) => {
+          await castFile(dir);
+        },
+        /Used/,
+        { chain, yes: false },
+      );
     }
     {
       const chain = memoryChain();
-      const [protocol] = await findProtocolPda({ instanceId: new TextEncoder().encode("fiat-demo-run-01") });
+      const [protocol] = await findProtocolPda({
+        instanceId: new TextEncoder().encode("fiat-demo-run-01"),
+      });
       const stranger = (await generateKeyPairSigner()).address;
       chain.accounts.set(protocol, {
         data: Uint8Array.from(
@@ -337,14 +366,22 @@ describe("demo reset (demo.md §5)", () => {
         ),
         owner: THETIS_PROGRAM_ADDRESS,
       });
-      await refuse(async (dir) => {
-        await castFile(dir);
-      }, /different values/, { chain, yes: false });
+      await refuse(
+        async (dir) => {
+          await castFile(dir);
+        },
+        /different values/,
+        { chain, yes: false },
+      );
     }
     // 8. A deployer balance below the plan's cost plus 0.1 SOL.
-    await refuse(async (dir) => {
-      await castFile(dir);
-    }, /balance/, { chain: memoryChain({ balance: 50_000_000n }) });
+    await refuse(
+      async (dir) => {
+        await castFile(dir);
+      },
+      /balance/,
+      { chain: memoryChain({ balance: 50_000_000n }) },
+    );
   });
 
   it("the dry run sends nothing and wipes nothing", async () => {
@@ -419,7 +456,9 @@ describe("demo reset (demo.md §5)", () => {
     const dir = await keysDir();
     await castFile(dir);
     const run = deps(dir);
-    await expect(reset({ scenario: "lender", run: 1, yes: true }, run.deps)).rejects.toThrow(NEEDS_T067R);
+    await expect(reset({ scenario: "lender", run: 1, yes: true }, run.deps)).rejects.toThrow(
+      NEEDS_T067R,
+    );
     expect(run.chain.submitted).toEqual([]);
     expect(run.stack.resets()).toBe(0);
   });

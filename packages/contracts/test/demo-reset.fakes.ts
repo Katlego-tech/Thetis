@@ -19,7 +19,9 @@ afterAll(() => {
   for (const dir of temps) rmSync(dir, { recursive: true, force: true });
 });
 
-export function fakeStack(options: { apiUrl?: string; listening?: number[]; marker?: string | null } = {}) {
+export function fakeStack(
+  options: { apiUrl?: string; listening?: number[]; marker?: string | null } = {},
+) {
   const calls: string[] = [];
   let marker = options.marker ?? null;
   const users = new Map<string, string>();
