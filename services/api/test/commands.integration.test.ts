@@ -1341,10 +1341,13 @@ describe("relay commands on the real program", () => {
   }, 120_000);
 
   it("refuses a signer without an active link, an Authority without the scope, a stale text and a wrong signature", async () => {
-    // Every lending role keeps the Authority pre-check (fold 1); repay_simulated's payer names no scope.
+    // Every role keeps the Authority pre-check (fold 1) except repay_simulated's payer (no scope)
+    // and handover's next_holder (refused on chain, field-app.md §11).
     for (const [kind, spec] of Object.entries(KIND_SPECS)) {
       for (const role of spec.signers) {
-        expect(role.preCheckAuthority, `${kind}.${role.role}`).toBe(kind !== "repay_simulated");
+        expect(role.preCheckAuthority, `${kind}.${role.role}`).toBe(
+          kind !== "repay_simulated" && !(kind === "handover" && role.role === "next_holder"),
+        );
       }
     }
     const w = await world();
