@@ -82,6 +82,8 @@ pub enum Actor {
     UnlinkedDriver,
     /// A wallet of a second custodian organisation.
     SecondCustodian,
+    /// A wallet of the test-only inspector organisation (`Inspector Test Org`, never seeded).
+    Inspector,
 }
 
 use Actor::*;
@@ -120,6 +122,7 @@ pub struct Fixture {
     other_driver: Keypair,
     unlinked_driver: Keypair,
     second_custodian: Keypair,
+    inspector: Keypair,
     pub protocol: Pubkey,
 }
 
@@ -161,6 +164,7 @@ impl Fixture {
             other_driver: Keypair::new(),
             unlinked_driver: Keypair::new(),
             second_custodian: Keypair::new(),
+            inspector: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
     }
@@ -195,6 +199,7 @@ impl Fixture {
             OtherDriver => &self.other_driver,
             UnlinkedDriver => &self.unlinked_driver,
             SecondCustodian => &self.second_custodian,
+            Inspector => &self.inspector,
         }
     }
 
