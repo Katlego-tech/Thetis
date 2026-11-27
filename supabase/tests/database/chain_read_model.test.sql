@@ -89,7 +89,9 @@ create function pg_temp.ev(n int, idx int, slot bigint, instruction text, event 
   select jsonb_build_object('network', 'devnet', 'program_id', pg_temp.a('program'),
     'signature', pg_temp.sig(n), 'event_index', idx, 'slot', slot, 'block_time', pg_temp.at(slot),
     'protocol', pg_temp.a('protocol'), 'instruction', instruction, 'event', event, 'scope', scope,
-    'lot', lot, 'lot_revision', revision, 'org_id', org, 'data', data)
+    'lot', lot, 'lot_revision', revision, 'org_id', org, 'data', data,
+    'facility', null, 'loan', null, 'loan_revision', null, 'pool', null, 'pool_revision', null,
+    'valuation', null, 'valuation_version', null, 'created', null)
 $$;
 
 -- {table, row} with the common columns; `fields` holds the account columns.
