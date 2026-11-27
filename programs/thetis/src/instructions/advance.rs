@@ -131,6 +131,12 @@ pub fn record_advance(
         loan.status == LoanStatus::Active,
         ThetisError::LoanNotActive
     );
+    // No new debt while the lot ships or is restricted.
+    require!(lot.state == LotState::Stored, ThetisError::LotNotStored);
+    require!(
+        lot.restriction == Restriction::Normal,
+        ThetisError::Restricted
+    );
     require!(currency == facility.currency, ThetisError::CurrencyMismatch);
     require!(amount > 0, ThetisError::InvalidField);
     let valuation = &accounts.valuation;

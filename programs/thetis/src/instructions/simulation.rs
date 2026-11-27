@@ -562,6 +562,12 @@ pub fn borrow(
         loan.status == LoanStatus::Active,
         ThetisError::LoanNotActive
     );
+    // No new debt while the lot ships or is restricted.
+    require!(lot.state == LotState::Stored, ThetisError::LotNotStored);
+    require!(
+        lot.restriction == Restriction::Normal,
+        ThetisError::Restricted
+    );
     require!(amount > 0, ThetisError::InvalidField);
     let destination = &accounts.destination;
     require!(

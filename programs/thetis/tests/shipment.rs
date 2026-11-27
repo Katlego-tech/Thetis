@@ -325,8 +325,13 @@ impl World {
         let issuer = f.add_org(ISSUER_ID, Role::DocumentIssuer);
         let lender = accredit(&mut f, LENDER_ID, Role::Lender, LENDER_NAME);
 
-        let source_site =
-            f.accredit_site(Accreditor, custodian, class_policy, SOURCE_SITE, SOURCE_CAPACITY);
+        let source_site = f.accredit_site(
+            Accreditor,
+            custodian,
+            class_policy,
+            SOURCE_SITE,
+            SOURCE_CAPACITY,
+        );
         f.ok(source_site, Accreditor);
         let destination_site = f.accredit_site(
             Accreditor,
@@ -798,7 +803,12 @@ impl World {
 
     // ------------------------------------------------------------- register ----
 
-    fn register_instruction(&self, shipment: Pubkey, leaf: &Leaf, proof: &[[u8; 32]; 4]) -> Instruction {
+    fn register_instruction(
+        &self,
+        shipment: Pubkey,
+        leaf: &Leaf,
+        proof: &[[u8; 32]; 4],
+    ) -> Instruction {
         ix(
             accounts::RegisterBatch {
                 payer: self.f.payer(),
@@ -1584,7 +1594,10 @@ impl World {
             }
             assert_eq!(total, lot.supply_kg);
             assert_eq!(self.f.mint_supply(Self::mint(*lot_key)), lot.supply_kg);
-            let shipping = open.iter().filter(|shipment| shipment.lot == *lot_key).count();
+            let shipping = open
+                .iter()
+                .filter(|shipment| shipment.lot == *lot_key)
+                .count();
             assert!(shipping <= 1);
             assert_eq!(
                 matches!(lot.state, LotState::Prepared | LotState::InTransit),
@@ -1615,7 +1628,11 @@ impl World {
                 .filter(|shipment| shipment.destination == *class_key)
                 .map(|shipment| shipment.committed_kg - shipment.arrived_kg)
                 .sum();
-            assert_eq!(class.occupied_kg, ordinary + leaving + arrived, "{class_key}");
+            assert_eq!(
+                class.occupied_kg,
+                ordinary + leaving + arrived,
+                "{class_key}"
+            );
             assert_eq!(class.reserved_inbound_kg, reserved, "{class_key}");
             assert!(class.occupied_kg + class.reserved_inbound_kg <= class.approved_capacity_kg);
         }
@@ -1750,8 +1767,14 @@ fn prepare_shipment_rejects_same_site() {
 #[test]
 fn prepare_shipment_rejects_destination_of_other_class() {
     let mut w = World::demo();
-    let register =
-        w.f.register_with_origin(Accreditor, OTHER_CLASS_CODE, 1, &GRADES, LOT_VALIDITY, false);
+    let register = w.f.register_with_origin(
+        Accreditor,
+        OTHER_CLASS_CODE,
+        1,
+        &GRADES,
+        LOT_VALIDITY,
+        false,
+    );
     w.f.ok(register, Accreditor);
     let other_class = w.f.class(OTHER_CLASS_CODE, 1);
     let site = w.f.accredit_site(
@@ -2022,7 +2045,10 @@ fn register_batch_two_batches_sum_exactly() {
     let args = w.prepare_args(&manifest);
     let shipment = w.prepare_ok(&args);
     w.register_ok(shipment, &manifest, 0);
-    assert_eq!(w.f.read::<Shipment>(shipment).registered_kg, THREE_THOUSAND_T);
+    assert_eq!(
+        w.f.read::<Shipment>(shipment).registered_kg,
+        THREE_THOUSAND_T
+    );
     w.register_ok(shipment, &manifest, 1);
     let stored: Shipment = w.f.read(shipment);
     assert_eq!((stored.registered_count, stored.registered_kg), (2, LOT_KG));
@@ -2084,7 +2110,8 @@ fn register_batch_rejects_overlapping_load_identity() {
     w.f.sponsored_already_in_use(&[register], 0);
     assert_eq!(w.f.read::<Shipment>(second).registered_count, 0);
     // The registered batch still belongs to the first shipment.
-    let batch: ManifestBatch = w.f.read(batch_key(w.f.protocol, &manifest.leaves[0].load_digest));
+    let batch: ManifestBatch =
+        w.f.read(batch_key(w.f.protocol, &manifest.leaves[0].load_digest));
     assert_eq!(batch.shipment, first);
 }
 
@@ -2127,7 +2154,8 @@ fn cancel_shipment_releases_reservation_and_restores_stored() {
     assert_eq!(lot.custodian_class, w.source);
     assert_eq!(lot.revision, lot_before.revision + 1);
     // The registered batch stays as a tombstone.
-    let batch: ManifestBatch = w.f.read(batch_key(w.f.protocol, &manifest.leaves[0].load_digest));
+    let batch: ManifestBatch =
+        w.f.read(batch_key(w.f.protocol, &manifest.leaves[0].load_digest));
     assert_eq!(batch.stage, BatchStage::AtSource);
 }
 
@@ -2292,7 +2320,10 @@ fn delegate_authority_phase3_scope_table() {
     }
     for (org, scopes) in [
         (exporter, scope::SHIP),
-        (custodian, scope::CARRY | scope::OBSERVE | scope::ATTEST_TRANSPORT),
+        (
+            custodian,
+            scope::CARRY | scope::OBSERVE | scope::ATTEST_TRANSPORT,
+        ),
         (transporter, scope::CARRY | scope::OBSERVE),
         (
             terminal,
@@ -2331,7 +2362,10 @@ fn pause_accepts_phase3_bits_and_rejects_bit_12() {
             assert_eq!(f.read::<Protocol>(f.protocol).pause_flags, 0xfff);
         }
     }
-    let tx = f.ok(f.change_pause(Admin, pause::SHIP | pause::LOADING, false), Admin);
+    let tx = f.ok(
+        f.change_pause(Admin, pause::SHIP | pause::LOADING, false),
+        Admin,
+    );
     assert_event(&tx, events::PauseChanged { flags: 0x5ff });
     assert_eq!(f.read::<Protocol>(f.protocol).pause_flags, 0x5ff);
 }
@@ -2341,7 +2375,10 @@ fn accredit_custodian_class_accepts_terminal() {
     let mut f = Fixture::initialized();
     let terminal = f.add_org(1, Role::Terminal);
     let transporter = f.add_org(2, Role::Transporter);
-    f.ok(f.register(Accreditor, CLASS_CODE, 1, &["A"], 3600), Accreditor);
+    f.ok(
+        f.register(Accreditor, CLASS_CODE, 1, &["A"], 3600),
+        Accreditor,
+    );
     let class = f.class(CLASS_CODE, 1);
     f.refused(
         f.accredit_site(Accreditor, transporter, class, DESTINATION_SITE, LOT_KG),
@@ -2365,7 +2402,11 @@ fn accredit_custodian_class_accepts_terminal() {
     assert_eq!(stored.class_policy, class);
     assert_eq!(stored.site_code, DESTINATION_SITE);
     assert_eq!(
-        (stored.approved_capacity_kg, stored.occupied_kg, stored.reserved_inbound_kg),
+        (
+            stored.approved_capacity_kg,
+            stored.occupied_kg,
+            stored.reserved_inbound_kg
+        ),
         (LOT_KG, 0, 0)
     );
 }

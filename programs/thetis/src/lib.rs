@@ -5,6 +5,7 @@ pub mod events;
 pub mod instructions;
 pub mod intent;
 pub mod lending_math;
+pub mod manifest;
 mod receipts;
 pub mod state;
 pub mod validate;
@@ -19,6 +20,7 @@ use instructions::recovery::{self, *};
 use instructions::redeem::{self, *};
 use instructions::release::{self, *};
 use instructions::setup::{self, *};
+use instructions::shipment::{self, *};
 use instructions::simulation::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
@@ -320,5 +322,51 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         simulation::borrow(ctx, amount, expected_revision, valid_until)
+    }
+
+    pub fn prepare_shipment(
+        ctx: Context<PrepareShipment>,
+        shipment_id: [u8; 16],
+        batch_count: u8,
+        manifest_root: [u8; 32],
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        shipment::prepare_shipment(
+            ctx,
+            shipment_id,
+            batch_count,
+            manifest_root,
+            expected_revision,
+            valid_until,
+        )
+    }
+
+    pub fn register_batch(
+        ctx: Context<RegisterBatch>,
+        index: u8,
+        quantity_kg: u64,
+        carrier: Pubkey,
+        load_digest: [u8; 32],
+        manifest_digest: [u8; 32],
+        proof: [[u8; 32]; 4],
+    ) -> Result<()> {
+        shipment::register_batch(
+            ctx,
+            index,
+            quantity_kg,
+            carrier,
+            load_digest,
+            manifest_digest,
+            proof,
+        )
+    }
+
+    pub fn cancel_shipment(
+        ctx: Context<CancelShipment>,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        shipment::cancel_shipment(ctx, expected_revision, valid_until)
     }
 }

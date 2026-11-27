@@ -9,6 +9,7 @@
 export * from './advanceRecorded.ts';
 export * from './authorityDelegated.ts';
 export * from './authorityRevoked.ts';
+export * from './batchRegistered.ts';
 export * from './borrowed.ts';
 export * from './classRegistered.ts';
 export * from './custodianClassAccredited.ts';
@@ -31,6 +32,8 @@ export * from './protocolInitialized.ts';
 export * from './relationshipDeclared.ts';
 export * from './releaseIntentCreated.ts';
 export * from './repaid.ts';
+export * from './shipmentCancelled.ts';
+export * from './shipmentPrepared.ts';
 export * from './unitsRedeemed.ts';
 export * from './unitsTransferred.ts';
 export * from './valuationSet.ts';

@@ -448,6 +448,82 @@ pub fn borrow_message(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn prepare_shipment_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    shipment_id: &[u8; 16],
+    quantity_kg: u64,
+    owner: &str,
+    destination: &str,
+    site_code: &str,
+    batch_count: u8,
+    manifest_root: &[u8; 32],
+    departure: (&[u8; 32], u32),
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let shipment = hex(shipment_id);
+    let quantity = format_tonnes(quantity_kg);
+    let manifest = digest_hex(manifest_root);
+    let (departure_sha, departure_version) = departure;
+    let departure_sha = digest_hex(departure_sha);
+    signed_message(
+        program_id,
+        instance_id,
+        "Prepare shipment",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Shipment: {shipment}\n\
+             Quantity: {quantity}\n\
+             Owner: {owner}\n\
+             To: {destination}\n\
+             Site: {site_code}\n\
+             Batches: {batch_count}\n\
+             Manifest: {manifest}\n\
+             Departure document: {departure_sha} v{departure_version}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn cancel_shipment_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    shipment_id: &[u8; 16],
+    owner: &str,
+    destination: &str,
+    site_code: &str,
+    expected_revision: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let shipment = hex(shipment_id);
+    signed_message(
+        program_id,
+        instance_id,
+        "Cancel shipment",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Shipment: {shipment}\n\
+             Owner: {owner}\n\
+             To: {destination}\n\
+             Site: {site_code}\n\
+             Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
 fn signed_message(
     program_id: &Pubkey,
     instance_id: &[u8; 16],

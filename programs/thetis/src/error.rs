@@ -120,4 +120,32 @@ pub enum ThetisError {
     InsufficientShares,
     #[msg("The token mint or account does not match the pool")]
     MintMismatch,
+    #[msg("The shipment is not open")]
+    ShipmentNotOpen,
+    #[msg("A batch of the shipment has already departed")]
+    ShipmentDeparted,
+    #[msg("Every batch of the manifest must be registered first")]
+    ShipmentIncomplete,
+    #[msg("The position does not hold the whole lot")]
+    NotSoleHolder,
+    #[msg("The destination site is not of the lot's class")]
+    DestinationNotEligible,
+    #[msg("The registered batches do not sum to the committed quantity")]
+    BatchSumMismatch,
+    #[msg("The batch does not match the signed manifest")]
+    ManifestMismatch,
+    #[msg("The batch cannot move at this stage")]
+    StageOutOfOrder,
+    #[msg("The departure document is invalid")]
+    DepartureDocumentInvalid,
+    #[msg("The loading intent is not open")]
+    LoadingNotOpen,
+    #[msg("The loading intent has expired")]
+    LoadingExpired,
+    #[msg("A lender with a lock on the position has not accepted the loading")]
+    AcceptanceMissing,
+    #[msg("The loading acceptance is stale")]
+    AcceptanceStale,
+    #[msg("The lot is retired")]
+    LotRetired,
 }

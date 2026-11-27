@@ -74,9 +74,20 @@ export function sample(type: IdlType): { input: unknown; output: unknown } {
   }
   if ("array" in type) {
     const [element, length] = type.array as [IdlType, number];
-    if (element !== "u8") throw new Error("sample(): only u8 arrays are supported");
-    const value = bytes(length);
-    return { input: value, output: value };
+    if (element === "u8") {
+      const value = bytes(length);
+      return { input: value, output: value };
+    }
+    // A fixed array of fixed u8 arrays, such as a Merkle proof.
+    if (
+      typeof element === "object" &&
+      "array" in element &&
+      (element.array as [IdlType, number])[0] === "u8"
+    ) {
+      const items = Array.from({ length }, () => sample(element));
+      return { input: items.map((i) => i.input), output: items.map((i) => i.output) };
+    }
+    throw new Error("sample(): only u8 arrays and arrays of u8 arrays are supported");
   }
   if ("vec" in type) {
     const items = [sample(type.vec as IdlType), sample(type.vec as IdlType)];

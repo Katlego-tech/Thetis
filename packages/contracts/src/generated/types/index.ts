@@ -6,6 +6,7 @@
  * @see https://github.com/codama-idl/codama
  */
 
+export * from './batchStage.ts';
 export * from './documentKind.ts';
 export * from './intentStatus.ts';
 export * from './loanStatus.ts';
@@ -17,3 +18,4 @@ export * from './quantityUnit.ts';
 export * from './restriction.ts';
 export * from './role.ts';
 export * from './settlementMode.ts';
+export * from './shipmentStatus.ts';
