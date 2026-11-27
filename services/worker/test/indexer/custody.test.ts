@@ -6,12 +6,16 @@
 import { readFileSync } from "node:fs";
 import { type Address, getAddressEncoder, getBase58Decoder } from "@solana/kit";
 import {
+  findAuthorityPda,
   getBatchRegisteredEventDecoder,
   getBatchRegisteredEventEncoder,
+  getCreateLoadingIntentInstruction,
   getCustodyHandedOverEventDecoder,
   getCustodyHandedOverEventEncoder,
   getManifestBatchDecoder,
   getManifestBatchEncoder,
+  getObservationRecordedEventDecoder,
+  getObservationRecordedEventEncoder,
   getRecordObservationInstruction,
   getShipmentCancelledEventDecoder,
   getShipmentCancelledEventEncoder,
@@ -235,24 +239,17 @@ describe("Phase 3 custody, the shipment part", () => {
     );
   });
 
-  it("1. handles every instruction and event of the IDL it is built on, but observation and loading", () => {
-    // The IDL at main has record_observation and the three loading instructions unhandled: 37
-    // instructions and 38 events, of which this slice handles all but those and their events
-    // (live-custody.md, the handover pre-check folds, item 2).
+  it("1. handles every instruction and event of the IDL it is built on, but loading", () => {
+    // The IDL at main has 37 instructions and 38 events; this slice handles all but the three
+    // loading instructions and their four events (live-custody.md, T063d.3 pre-check fold 3).
     const idl = JSON.parse(readFileSync(IDL, "utf8")) as {
       instructions: { name: string }[];
       events: { name: string }[];
     };
     expect(idl.instructions).toHaveLength(37);
     expect(idl.events).toHaveLength(38);
-    const unhandledInstructions = [
-      "RecordObservation",
-      "CreateLoadingIntent",
-      "AcceptLoading",
-      "RecordLoading",
-    ];
+    const unhandledInstructions = ["CreateLoadingIntent", "AcceptLoading", "RecordLoading"];
     const unhandledEvents = [
-      "ObservationRecorded",
       "LoadingIntentCreated",
       "LoadingAccepted",
       "LoadingRecorded",
@@ -263,13 +260,13 @@ describe("Phase 3 custody, the shipment part", () => {
     expect([...HANDLED_INSTRUCTIONS].sort()).toEqual(
       instructions.filter((name) => !unhandledInstructions.includes(name)).sort(),
     );
-    expect(HANDLED_INSTRUCTIONS).toHaveLength(33);
+    expect(HANDLED_INSTRUCTIONS).toHaveLength(34);
     const eventNames = idl.events.map((entry) => entry.name);
     for (const name of unhandledEvents) expect(eventNames).toContain(name);
     expect([...HANDLED_EVENTS].sort()).toEqual(
       eventNames.filter((name) => !unhandledEvents.includes(name)).sort(),
     );
-    expect(HANDLED_EVENTS).toHaveLength(33);
+    expect(HANDLED_EVENTS).toHaveLength(34);
   });
 
   it("2. indexes the shipment history with one row per shipment revision, lot revision, registration and created account", async () => {
@@ -767,9 +764,11 @@ describe("Phase 3 custody, the shipment part", () => {
     ]);
     expect(keysOf(h.store, "shipment", "shipment_revision", s2)).toEqual(["0", "1", "2"]);
     expect(keysOf(h.store, "batch", "batch_sequence", b2)).toEqual(["0", "1"]);
+    // The route carries the border observation (T063d.3 pre-check fold 2): one more transaction
+    // and event than T063d.2's.
     expect(allCounts(h.store)).toMatchObject({
-      chain_transactions: 26,
-      chain_events: 25,
+      chain_transactions: 27,
+      chain_events: 26,
       chain_shipments: 2,
       chain_batches: 2,
       chain_handovers: 2,
@@ -801,6 +800,8 @@ describe("Phase 3 custody, the shipment part", () => {
       holder_org_id: port,
       sequence: "2",
       event_sequence: "2",
+      observation_count: 1,
+      event_observations: 1,
       departed_at: String(unixOf(depart.blockTime)),
       arrived_at: String(unixOf(arrive.blockTime)),
     });
@@ -1143,39 +1144,212 @@ describe("Phase 3 custody, the shipment part", () => {
     });
   });
 
-  it("17. halts with UNKNOWN_INSTRUCTION on its own instance's record_observation until T063d.3", async () => {
-    const scenario = await custodyHistory();
-    const sponsor = await syntheticSigner(97);
-    const other = async (n: number) => (await syntheticSigner(n)).address;
-    const observation = thetisTransaction({
+  it("18. indexes a border observation without changing the holder", async () => {
+    // The route through Mosela's border observation (237), before the arrival.
+    const scenario = await routeHistory();
+    const { s2 } = scenario.shipments;
+    const { b2 } = scenario.batches;
+    const observed = step(scenario, "observeB2");
+    const at = slotOf(scenario.history, observed.signature);
+    const through = scenario.history.slice(0, scenario.history.indexOf(at) + 1);
+    const h = await harness(through);
+    await h.pollUntilLive();
+
+    const mosela = scenario.org("mosela");
+    const moselaId = await orgId("mosela");
+    const unchanged = {
+      stage: "InTransit",
+      holder: mosela,
+      holder_org_id: moselaId,
+      sequence: "1",
+      event_sequence: "1",
+    };
+    expect(row(h.store, "chain_batches", b2)).toMatchObject({
+      ...unchanged,
+      observation_count: 1,
+      event_observations: 1,
+    });
+    expect(row(h.store, "chain_shipments", s2)).toMatchObject({
+      status: "InTransit",
+      revision: "1",
+      event_revision: "1",
+    });
+    expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({
+      state: "InTransit",
+      revision: "4",
+      event_revision: "4",
+    });
+    expect(keysOf(h.store, "lot", "lot_revision", scenario.lot)).toEqual(["0", "1", "2", "3", "4"]);
+    expect(keysOf(h.store, "shipment", "shipment_revision", s2)).toEqual(["0", "1"]);
+    expect(keysOf(h.store, "batch", "batch_sequence", b2)).toEqual(["0"]);
+
+    const observation = {
+      signature: observed.signature,
+      instruction: "RecordObservation",
+      event: "ObservationRecorded",
+      scope: "shipment",
+      lot: null,
+      lot_revision: null,
+      org_id: null,
+      shipment: s2,
+      shipment_revision: null,
+      batch: b2,
+      batch_sequence: null,
+      created: null,
+    };
+    const recorded = () => events(h.store).filter((entry) => entry.event === "ObservationRecorded");
+    expect(recorded()).toEqual([
+      expect.objectContaining({
+        ...observation,
+        observation_index: 0,
+        data: {
+          batch: b2,
+          shipment: s2,
+          lot: scenario.lot,
+          observer: mosela,
+          holder: mosela,
+          kind: "Border",
+          locationCode: "BORDER-1",
+          evidenceDigest: "77".repeat(32),
+          observedAt: String(unixOf(observed.blockTime)),
+          index: 0,
+        },
+      }),
+    ]);
+
+    // A second observation, a checkpoint whose observed_at (1) is earlier than the first's: the
+    // order comes from the index alone, and the holder still does not move.
+    const before = lastState(through, b2, getManifestBatchDecoder());
+    const sponsor = await syntheticSigner(30);
+    const [observerAuthority] = await findAuthorityPda({
+      protocol: scenario.protocol as Address,
+      wallet: (await syntheticSigner(46)).address,
+    });
+    const fields = {
+      kind: ObservationKind.Checkpoint,
+      locationCode: "CHECKPOINT-1",
+      evidenceDigest: new Uint8Array(32).fill(0x78),
+      observedAt: 1n,
+    };
+    const second = thetisTransaction({
       signature: syntheticSignature(254),
       feePayer: sponsor.address,
       name: "RecordObservation",
-      events: [],
       instruction: getRecordObservationInstruction({
         sponsor,
         protocol: scenario.protocol as Address,
-        observerOrg: scenario.org("port-t1") as Address,
-        observerAuthority: await other(96),
-        holderOrg: scenario.org("kopano") as Address,
-        shipment: scenario.shipments.s2 as Address,
-        batch: scenario.batches.b2 as Address,
+        observerOrg: mosela as Address,
+        observerAuthority,
+        holderOrg: mosela as Address,
+        shipment: s2 as Address,
+        batch: b2 as Address,
         lot: scenario.lot as Address,
-        kind: ObservationKind.Checkpoint,
-        locationCode: "CHECKPOINT-1",
-        evidenceDigest: new Uint8Array(32).fill(0x77),
-        observedAt: 1_795_000_000n,
-        expectedObservation: 0,
+        ...fields,
+        expectedObservation: 1,
+        validUntil: 1_800_000_000n,
+      }),
+      events: [
+        bytesOf(getObservationRecordedEventEncoder(), {
+          batch: b2,
+          shipment: s2,
+          lot: scenario.lot,
+          observer: mosela,
+          holder: mosela,
+          ...fields,
+          index: 1,
+        }),
+      ],
+    });
+    through.push({
+      slot: lastSlot(through) + 1000,
+      blockTime: "2026-11-28T00:01:00.000Z",
+      transactions: [second],
+      accounts: {
+        [b2]: thetis(bytesOf(getManifestBatchEncoder(), { ...before, observationCount: 2 })),
+      },
+    });
+    h.chain.setHistory(through);
+    h.chain.setConfirmedSlot(lastSlot(through));
+    h.chain.setFinalizedSlot(lastSlot(through));
+    await h.pollUntilLive();
+    expect(row(h.store, "chain_batches", b2)).toMatchObject({
+      ...unchanged,
+      observation_count: 2,
+      event_observations: 2,
+    });
+    expect(recorded().map((entry) => entry.observation_index)).toEqual([0, 1]);
+    expect(recorded()[1]).toMatchObject({
+      ...observation,
+      signature: second.signature,
+      observation_index: 1,
+      data: expect.objectContaining({ kind: "Checkpoint", observedAt: "1", index: 1 }),
+    });
+  });
+
+  it("19. halts with REVISION_SEQUENCE on a skipped observation index", async () => {
+    const skipped = await routeHistory();
+    rewriteEvent(
+      stepTx(skipped, "observeB2"),
+      0,
+      getObservationRecordedEventDecoder(),
+      getObservationRecordedEventEncoder(),
+      (value) => ({ ...value, index: 1 }),
+    );
+    const first = await harness(skipped.history);
+    await expectHalt(first, await first.poll(), "REVISION_SEQUENCE", {
+      step: "sequence",
+      signature: null,
+      mentions: [`batch ${skipped.batches.b2}`, "observation"],
+    });
+    expect((await first.checkpoint())?.indexedThroughSlot).toBe(
+      step(skipped, "observeB2").slot - 1000,
+    );
+
+    // The same index again in a later slot, once the stored batch has counted it.
+    const repeated = await routeHistory();
+    repeatLater(repeated, "observeB2", 254);
+    const second = await harness(repeated.history);
+    await expectHalt(second, await second.poll(), "REVISION_SEQUENCE", {
+      step: "sequence",
+      signature: null,
+      mentions: [`batch ${repeated.batches.b2}`, "observation"],
+    });
+    expect((await second.checkpoint())?.indexedThroughSlot).toBe(lastSlot(repeated.history) - 1000);
+  });
+
+  it("20. halts with UNKNOWN_INSTRUCTION on its own instance's create_loading_intent until T063d.4", async () => {
+    const scenario = await routeHistory();
+    const sponsor = await syntheticSigner(97);
+    const other = async (n: number) => (await syntheticSigner(n)).address;
+    const intent = thetisTransaction({
+      signature: syntheticSignature(254),
+      feePayer: sponsor.address,
+      name: "CreateLoadingIntent",
+      events: [],
+      instruction: getCreateLoadingIntentInstruction({
+        sponsor,
+        protocol: scenario.protocol as Address,
+        ownerOrg: scenario.org("khunou") as Address,
+        ownerAuthority: await other(96),
+        lot: scenario.lot as Address,
+        position: scenario.position as Address,
+        custodianClass: scenario.classes.port as Address,
+        terminalOrg: scenario.org("port-t1") as Address,
+        intent: await other(95),
+        nonce: 1n,
+        documentSha256: new Uint8Array(32).fill(0xaa),
+        expiresAt: 1_800_000_000n,
+        expectedRevision: 0n,
         validUntil: 1_800_000_000n,
       }),
     });
     const slot = lastSlot(scenario.history) + 1000;
-    scenario.history.push({ slot, blockTime: null, transactions: [observation], accounts: {} });
+    scenario.history.push({ slot, blockTime: null, transactions: [intent], accounts: {} });
     const h = await harness(scenario.history);
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
-      signature: observation.signature,
-      mentions: ["RecordObservation", "not handled"],
+      signature: intent.signature,
+      mentions: ["CreateLoadingIntent", "not handled"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });

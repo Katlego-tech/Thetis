@@ -29,6 +29,7 @@ import {
   getLoanClosedEventDecoder,
   getLotIssuedEventDecoder,
   getLotSplitEventDecoder,
+  getObservationRecordedEventDecoder,
   getOrganisationAccreditedEventDecoder,
   getPauseChangedEventDecoder,
   getPaymentConfirmedEventDecoder,
@@ -50,6 +51,7 @@ import {
   identifyThetisEvent,
   identifyThetisInstruction,
   LotState,
+  ObservationKind,
   PaymentPurpose,
   parseThetisInstruction,
   Role,
@@ -100,6 +102,7 @@ export const HANDLED_INSTRUCTIONS = [
   "RegisterBatch",
   "CancelShipment",
   "Handover",
+  "RecordObservation",
 ] as const;
 
 export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
@@ -138,6 +141,7 @@ export const HANDLED_EVENTS = [
   "BatchRegistered",
   "ShipmentCancelled",
   "CustodyHandedOver",
+  "ObservationRecorded",
 ] as const;
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
@@ -227,6 +231,7 @@ const EMITS: Record<
   RegisterBatch: { event: "BatchRegistered", required: true },
   CancelShipment: { event: "ShipmentCancelled", required: true },
   Handover: { event: "CustodyHandedOver", required: true },
+  RecordObservation: { event: "ObservationRecorded", required: true },
 };
 
 /**
@@ -378,6 +383,13 @@ const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
     ["from", "fromOrg"],
     ["to", "toOrg"],
   ],
+  ObservationRecorded: [
+    ["batch", "batch"],
+    ["shipment", "shipment"],
+    ["lot", "lot"],
+    ["observer", "observerOrg"],
+    ["holder", "holderOrg"],
+  ],
 };
 
 const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
@@ -414,6 +426,7 @@ const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
   BatchRegistered: getBatchRegisteredEventDecoder,
   ShipmentCancelled: getShipmentCancelledEventDecoder,
   CustodyHandedOver: getCustodyHandedOverEventDecoder,
+  ObservationRecorded: getObservationRecordedEventDecoder,
 };
 
 /** Event fields that hold an enum, by event, with the generated name table of each. */
@@ -426,6 +439,7 @@ const ENUM_FIELDS: Partial<Record<HandledEvent, Record<string, Record<number, st
     shipmentStatus: ShipmentStatus as unknown as Record<number, string>,
     lotState: LotState as unknown as Record<number, string>,
   },
+  ObservationRecorded: { kind: ObservationKind as unknown as Record<number, string> },
 };
 
 /**

@@ -1145,6 +1145,20 @@ async function planEvent(
         creates: [record],
       };
     }
+    case "ObservationRecorded":
+      // An observation moves only the batch's observation_count; it is keyed by the batch and its
+      // index, never by observed_at (live-custody.md §4.1.3, §4.1.4).
+      return {
+        ...base,
+        scope: "shipment",
+        keys: {
+          ...NO_KEYS,
+          shipment: text("shipment"),
+          batch: text("batch"),
+          observationIndex: value.index as number,
+        },
+        fetch: [{ address: text("batch"), kind: "ManifestBatch" }],
+      };
   }
 }
 
@@ -1621,6 +1635,50 @@ export async function projectSlot(
     batchEventSequence.set(batch, base + BigInt(sequences.length));
   }
 
+  // Observations (live-custody.md §4.1.4): each observation takes the batch's next index.
+  const batchEventObservations = new Map<string, number>();
+  const observedBatches = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.event.name === "ObservationRecorded")
+        .map((plan) => plan.keys.batch as string),
+    ),
+  ].sort(sortText);
+  for (const batch of observedBatches) {
+    const naming = plans.filter(
+      (plan) => plan.event.name === "ObservationRecorded" && plan.keys.batch === batch,
+    );
+    const named = `batch ${batch} (signatures ${signaturesOf(naming)})`;
+    const registered = plans.some(
+      (plan) => plan.event.name === "BatchRegistered" && plan.keys.batch === batch,
+    );
+    const row = storedRow("ManifestBatch", batch);
+    let base: number;
+    if (registered) base = 0;
+    else if (row) base = row.event_observations as number;
+    else {
+      throw stepHalt(
+        "sequence",
+        "EVENT_GAP",
+        `${named} is observed but has no stored row and no BatchRegistered of this slot`,
+      );
+    }
+    const indexes = naming
+      .map((plan) => plan.keys.observationIndex as number)
+      .sort((a, b) => a - b);
+    for (const [position, index] of indexes.entries()) {
+      const expected = base + position;
+      if (index !== expected) {
+        throw stepHalt(
+          "sequence",
+          "REVISION_SEQUENCE",
+          `${named} takes observation indexes [${indexes.join(", ")}] from ${base}, expected ${expected} at position ${position}`,
+        );
+      }
+    }
+    batchEventObservations.set(batch, base + indexes.length);
+  }
+
   // Creation check, account by account.
   const creators = new Map<string, Plan[]>();
   const recipients = new Set<string>();
@@ -1936,7 +1994,7 @@ export async function projectSlot(
         (previous ? (previous.event_registered as number) : 0);
     }
     if (account.kind === "ManifestBatch") {
-      // A handover of this slot moves event_sequence; an observation is not handled yet. A batch
+      // A handover of this slot moves event_sequence, an observation event_observations. A batch
       // registered in this slot starts at 0, a stored one keeps its columns.
       const previous = storedRow("ManifestBatch", address);
       const sequence = batchEventSequence.get(address);
@@ -1946,7 +2004,13 @@ export async function projectSlot(
           : previous
             ? (previous.event_sequence as string)
             : "0";
-      row.event_observations = previous ? (previous.event_observations as number) : 0;
+      const observations = batchEventObservations.get(address);
+      row.event_observations =
+        observations !== undefined
+          ? observations
+          : previous
+            ? (previous.event_observations as number)
+            : 0;
     }
     if (account.kind === "ReleaseIntent") {
       // The mark is carried forward; §4.1.7 below may set it.
