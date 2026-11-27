@@ -1,4 +1,5 @@
 import { notFound, unstable_rethrow } from "next/navigation";
+import { FacilitiesPanel } from "@/components/queue/facilities-panel";
 import { getQueueData, WorkQueueScreen } from "@/components/queue/work-queue-screen";
 import { LiveFailurePage } from "@/components/shell/live-read-failed";
 import { LiveShell } from "@/components/shell/live-shell";
@@ -40,6 +41,19 @@ export default async function WorkQueuePage({
       data={data}
       filter={typeof filter === "string" ? filter : undefined}
       now={Date.now()}
+      panel={
+        live && live.current.role === "lender" ? (
+          <FacilitiesPanel
+            facilities={live.reader.facilities(context)}
+            context={context}
+            organisationId={live.reader.orgIdOf(context)}
+            borrowers={live.reader.organisationsByRole("Exporter").flatMap((exporter) => {
+              const id = live?.reader.orgIdOf(exporter.id) ?? null;
+              return id === null ? [] : [{ value: id, label: exporter.name }];
+            })}
+          />
+        ) : null
+      }
     />
   );
   if (!live) return screen;

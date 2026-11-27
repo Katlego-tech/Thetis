@@ -56,6 +56,7 @@ const SCANNED_KINDS: readonly Kind[] = [
   "SimulationPool",
   "Shipment",
   "ManifestBatch",
+  "HandoverRecord",
 ];
 
 /** A PoolShare's size: discriminator, pool, organisation, shares, lent_minor, bump. */

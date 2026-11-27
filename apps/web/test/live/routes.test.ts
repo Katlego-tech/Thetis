@@ -103,16 +103,18 @@ describe("routes on a running server", () => {
     }
   }, 120_000);
 
-  test("the release route is a 404 in live mode, signed in or not", async () => {
+  test("the release route in live mode sends a signed-out visitor to sign in", async () => {
     for (const variables of [
       { THETIS_DATA_SOURCE: "live", ...SUPABASE, ...CHAIN },
       { THETIS_DATA_SOURCE: "live", ...SUPABASE },
-      { THETIS_DATA_SOURCE: "live" },
     ]) {
       await withServer(variables, async (get) => {
         const response = await get("/khunou/releases/R-0001");
-        expect([variables, response.status, response.location]).toEqual([variables, 404, null]);
-        expect(response.body).toContain("This page could not be found");
+        expect([variables, response.status, response.location]).toEqual([
+          variables,
+          307,
+          "/login?next=%2Fkhunou%2Freleases%2FR-0001",
+        ]);
       });
     }
   }, 120_000);

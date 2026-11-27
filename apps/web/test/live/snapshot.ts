@@ -12,10 +12,17 @@ import bs58 from "bs58";
 import type {
   ChainDocumentRow,
   ChainEventRow,
+  ChainFacilityRow,
+  ChainLoanRow,
+  ChainLockRow,
   ChainLotRow,
   ChainOrganisationRow,
+  ChainPaymentRow,
   ChainPositionRow,
+  ChainReleaseIntentRow,
+  ChainValuationRow,
   CheckpointRow,
+  CommandRow,
   LiveSnapshot,
   OrganisationRow,
 } from "@/data/live/rows";
@@ -322,6 +329,13 @@ export function issuedSnapshot(members: Slug[] = ["khunou"]): LiveSnapshot {
       },
     ],
     documents: [],
+    facilities: [],
+    valuations: [],
+    loans: [],
+    locks: [],
+    payments: [],
+    intents: [],
+    commands: [],
     intakeEvents: [issueEvent()],
     checkpoint: checkpoint(),
   };
@@ -342,7 +356,7 @@ export function transferredSnapshot(members: Slug[] = ["khunou"]): LiveSnapshot 
 // A fake Supabase client: each table holds rows, `.select` returns only the named columns, every
 // call is recorded, and `respond` can replace one call's response.
 
-type Filter = [column: string, value: unknown];
+type Filter = [column: string, value: unknown] | [column: string, value: unknown[], kind: "in"];
 export interface QueryCall {
   table: string;
   columns: string[];
@@ -383,6 +397,18 @@ export function tablesOf(snapshot: LiveSnapshot): Record<string, Record<string, 
     chain_positions: rows(snapshot.positions),
     chain_intakes: rows(snapshot.intakes),
     chain_documents: rows(snapshot.documents),
+    chain_facilities: rows(snapshot.facilities),
+    chain_valuations: rows(snapshot.valuations),
+    chain_loans: rows(snapshot.loans),
+    chain_locks: rows(snapshot.locks),
+    chain_payments: rows(snapshot.payments),
+    chain_release_intents: rows(snapshot.intents),
+    commands: snapshot.commands.map((row) => ({
+      ...row,
+      network: "devnet",
+      program_id: PROGRAM_ID,
+      protocol: PROTOCOL,
+    })),
     chain_events: snapshot.intakeEvents.map((row) => ({
       ...row,
       instruction: "IssueLot",
@@ -425,6 +451,10 @@ export function fakeSupabase(snapshot: LiveSnapshot = issuedSnapshot()): FakeSup
         call.filters.push([column, value]);
         return builder;
       },
+      in(column: string, values: unknown[]) {
+        call.filters.push([column, [...values], "in"]);
+        return builder;
+      },
       order(column: string, options?: unknown) {
         call.orders.push({ column, options });
         return builder;
@@ -441,7 +471,9 @@ export function fakeSupabase(snapshot: LiveSnapshot = issuedSnapshot()): FakeSup
           .then((override) => {
             if (override) return override;
             const all = (fake.tables[table] ?? []).filter((row) =>
-              call.filters.every(([column, value]) => row[column] === value),
+              call.filters.every(([column, value, kind]) =>
+                kind === "in" ? (value as unknown[]).includes(row[column]) : row[column] === value,
+              ),
             );
             const data = all.map((row) =>
               Object.fromEntries(
@@ -464,3 +496,218 @@ export function fakeSupabase(snapshot: LiveSnapshot = issuedSnapshot()): FakeSup
 }
 
 export const NOW = new Date("2026-11-26T00:00:10.000Z");
+const NOW_SECONDS = Date.parse("2026-11-26T00:00:10.000Z") / 1000;
+
+// Phase 2 rows (live-lending.md §3.1). Lender One Bank's facility to Khunou (facility id 16 x 0x11,
+// the pledge vector's), USD with 2 minor digits at the 1,200 bps demo rate and a 6,000 bps limit, a
+// valuation of USD 0.20/kg (USD 200.00/t) and Khunou's 5,000 t pledge as loan 0 with USD 600,000.00
+// advanced an hour before NOW. Lender Two Bank's facility (16 x 0x22) has no valuation. Accounts are
+// n = 50 to 69; payment and evidence digests follow the worker fixtures (32 x 0x31.., 32 x 0x41..).
+
+export const FACILITY_ONE = address(50);
+export const VALUATION_ONE = address(51);
+export const LOAN_ONE = address(52);
+export const LOCK_ONE = address(53);
+export const INTENT = address(54);
+export const RELEASE_PAYMENT = address(55);
+export const REPAYMENT = address(56);
+export const FACILITY_TWO = address(60);
+export const LOAN_TWO = address(62);
+export const LOCK_TWO = address(63);
+export const ACCRUED_AT = String(NOW_SECONDS - 3_600);
+export const INTENT_EXPIRES_AT = String(NOW_SECONDS + 86_400);
+
+const lending = (slot: number) =>
+  ({ network: "devnet", protocol: PROTOCOL, slot, commitment: "confirmed" }) as const;
+
+export function facility(
+  at: string,
+  lender: Slug,
+  overrides: Partial<ChainFacilityRow> = {},
+): ChainFacilityRow {
+  return {
+    ...lending(12_100),
+    address: at,
+    lender: orgAccount(lender),
+    lender_org_id: orgId(lender),
+    borrower: orgAccount("khunou"),
+    borrower_org_id: orgId("khunou"),
+    facility_id_hex: (lender === "lender-one" ? "11" : "22").repeat(16),
+    currency: "USD",
+    currency_decimals: 2,
+    terms_version: 1,
+    rate_bps: 1200,
+    max_ltv_bps: 6000,
+    terms_digest_hex: "21".repeat(32),
+    loan_count: 0,
+    ...overrides,
+  };
+}
+
+export function valuation(overrides: Partial<ChainValuationRow> = {}): ChainValuationRow {
+  return {
+    ...lending(12_200),
+    address: VALUATION_ONE,
+    facility: FACILITY_ONE,
+    class_policy: CLASS_POLICY,
+    grade: "G1",
+    custodian_class: CUSTODIAN_CLASS,
+    value_per_kg: "20",
+    haircut_bps: 0,
+    valid_until: String(NOW_SECONDS + 30 * 86_400),
+    source_digest_hex: "22".repeat(32),
+    version: 1,
+    set_at: String(NOW_SECONDS - 7_200),
+    event_version: 1,
+    ...overrides,
+  };
+}
+
+export function loan(
+  at: string,
+  facilityAt: string,
+  lender: Slug,
+  overrides: Partial<ChainLoanRow> = {},
+): ChainLoanRow {
+  return {
+    ...lending(12_300),
+    address: at,
+    facility: facilityAt,
+    lender_org_id: orgId(lender),
+    borrower: orgAccount("khunou"),
+    borrower_org_id: orgId("khunou"),
+    lot: LOT,
+    position: KHUNOU_POSITION,
+    loan_index: 0,
+    status: "Active",
+    rate_bps: 1200,
+    terms_version: 1,
+    principal: "60000000",
+    booked_interest: "0",
+    accrual_remainder: "0",
+    accrued_at: ACCRUED_AT,
+    open_exceptions: 0,
+    revision: "1",
+    event_revision: "1",
+    ...overrides,
+  };
+}
+
+export function lock(
+  at: string,
+  loanAt: string,
+  quantityKg: string,
+  overrides: Partial<ChainLockRow> = {},
+): ChainLockRow {
+  return {
+    ...lending(12_300),
+    address: at,
+    loan: loanAt,
+    position: KHUNOU_POSITION,
+    quantity_kg: quantityKg,
+    control: "Pledged",
+    ...overrides,
+  };
+}
+
+export function intent(overrides: Partial<ChainReleaseIntentRow> = {}): ChainReleaseIntentRow {
+  return {
+    ...lending(12_400),
+    address: INTENT,
+    loan: LOAN_ONE,
+    lot: LOT,
+    position: KHUNOU_POSITION,
+    seller: orgAccount("khunou"),
+    seller_org_id: orgId("khunou"),
+    buyer: orgAccount("buyer-smelter"),
+    buyer_org_id: orgId("buyer-smelter"),
+    lender: orgAccount("lender-one"),
+    lender_org_id: orgId("lender-one"),
+    currency_decimals: 2,
+    nonce: "1",
+    quantity_kg: "2000000",
+    price: "40000000",
+    top_up: "0",
+    currency: "USD",
+    expires_at: INTENT_EXPIRES_AT,
+    position_revision: "1",
+    status: "Open",
+    ...overrides,
+  };
+}
+
+export function payment(at: string, overrides: Partial<ChainPaymentRow> = {}): ChainPaymentRow {
+  return {
+    ...lending(12_500),
+    address: at,
+    lender: orgAccount("lender-one"),
+    lender_org_id: orgId("lender-one"),
+    loan: LOAN_ONE,
+    payment_id_hex: "31".repeat(32),
+    purpose: "Release",
+    subject: INTENT,
+    amount: "40000000",
+    currency: "USD",
+    evidence_digest_hex: "41".repeat(32),
+    observed_at: String(NOW_SECONDS - 600),
+    status: "Unconsumed",
+    applied: "0",
+    surplus: "0",
+    ...overrides,
+  };
+}
+
+/** A command row (public.commands columns of live-lending.md §4.5.1); ids are synthetic uuids. */
+export function command(overrides: Partial<CommandRow> = {}): CommandRow {
+  return {
+    id: "2cc199ec-0000-4000-8000-000000000001",
+    kind: "pledge",
+    status: "awaiting_signatures",
+    initiator_org: orgId("khunou"),
+    parties: [orgId("khunou"), orgId("lender-one")].toSorted(),
+    lot: LOT,
+    facility: FACILITY_ONE,
+    loan: null,
+    intent: null,
+    payment: null,
+    args: { facility: FACILITY_ONE, lot: LOT, quantityKg: "5000000" },
+    fields: [
+      { label: "Lot", value: "CR-0001" },
+      { label: "Quantity", value: "5,000.000 t" },
+    ],
+    valid_until: String(NOW_SECONDS + 240),
+    signers: [
+      { role: "borrower", organisationId: orgId("khunou"), method: "text", scope: "PLEDGE" },
+      { role: "lender", organisationId: orgId("lender-one"), method: "text", scope: "LEND" },
+    ],
+    signatures: [
+      {
+        role: "borrower",
+        wallet: address(70),
+        signature: signature(30),
+        signedAt: "2026-11-26T00:00:05.000Z",
+      },
+    ],
+    transaction_signature: null,
+    error_code: null,
+    created_at: "2026-11-26T00:00:02.000Z",
+    updated_at: "2026-11-26T00:00:05.000Z",
+    ...overrides,
+  };
+}
+
+/**
+ * Khunou's 5,000 t pledge to Lender One Bank, USD 600,000.00 advanced: the position's 5,000,000 kg
+ * are locked. The rows are the ones Lender One Bank or Khunou reads (RLS, live-lending.md §6.2).
+ */
+export function pledgedSnapshot(members: Slug[] = ["lender-one"]): LiveSnapshot {
+  const snapshot = issuedSnapshot(members);
+  snapshot.positions = [
+    position(KHUNOU_POSITION, "khunou", "5000000", { locked_kg: "5000000", revision: "1" }),
+  ];
+  snapshot.facilities = [facility(FACILITY_ONE, "lender-one", { loan_count: 1 })];
+  snapshot.valuations = [valuation()];
+  snapshot.loans = [loan(LOAN_ONE, FACILITY_ONE, "lender-one")];
+  snapshot.locks = [lock(LOCK_ONE, LOAN_ONE, "5000000")];
+  return snapshot;
+}
