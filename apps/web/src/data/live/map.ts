@@ -1,5 +1,5 @@
 import { availableQuantity, parseU64 } from "@thetis/domain";
-import type { Context, Organisation, Site } from "../types";
+import type { Context, CustodyState, Organisation, RestrictionState, Site } from "../types";
 import { freshnessOf } from "./freshness";
 import {
   type ChainDocumentRow,
@@ -159,6 +159,23 @@ function belongsTo(lot: ChainLotRow, positions: ChainPositionRow[], orgId: strin
   );
 }
 
+/** The program's lot state as the dossier's custody label (web.md §3 `CustodyState`). */
+const CUSTODY_LABEL: Record<ChainLotRow["state"], CustodyState> = {
+  Stored: "Stored",
+  Redeemed: "Collected",
+  Prepared: "Awaiting departure",
+  InTransit: "In transit",
+  Loaded: "Loaded",
+};
+
+/** The program's restriction as the dossier's label (web.md §3 `RestrictionState`). */
+const RESTRICTION_LABEL: Record<ChainLotRow["restriction"], RestrictionState> = {
+  Normal: "Normal",
+  ReviewRequired: "Review required",
+  Disputed: "Disputed",
+  Frozen: "Frozen",
+};
+
 function evidenceOf(data: Valid, lot: ChainLotRow): ChainDocumentRow[] {
   const digest = data.intakeByAddress.get(lot.intake)?.row.intake_digest_hex;
   return data.documents.filter((document) => document.subject_hex === digest);
@@ -280,7 +297,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       )
       .map((document) => ({
         id: document.address,
-        kind: `Origin attestation, version ${document.version}`,
+        kind: `${document.kind} attestation, version ${document.version}`,
         issuer: organisation(document.issuer),
         status:
           document.revoked_at !== null
@@ -299,9 +316,9 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       site,
       owner: organisation(shown.owner),
       custodian,
-      custody: lot.state === "Stored" ? "Stored" : "Collected",
+      custody: CUSTODY_LABEL[lot.state],
       finance: "Available",
-      restriction: "Normal",
+      restriction: RESTRICTION_LABEL[lot.restriction],
       position: {
         positionQuantityKg: positionQuantity,
         activeLockedQuantityKg: activeLockedQuantity,
