@@ -215,6 +215,16 @@ alter table public.chain_events
   add constraint chain_events_loan_pair check (loan_revision is null or loan is not null),
   add constraint chain_events_pool_pair check (pool_revision is null or pool is not null),
   add constraint chain_events_valuation_pair check ((valuation is null) = (valuation_version is null));
+-- Phase 1's anonymous `(scope = 'organisation') = (org_id is not null)` check widens: an
+-- organisation-scoped event has org_id, a pool-scoped event has it exactly when it names a
+-- depositor (Deposited, Withdrawn), and any other event has none. A depositor event without its
+-- organisation is refused, so it can never fall back to the every-member pool arm (live-lending.md,
+-- T063c fold 12).
+alter table public.chain_events drop constraint chain_events_check2;
+alter table public.chain_events add constraint chain_events_org_scope check (
+  case when scope = 'organisation' then org_id is not null
+       when scope = 'pool' then (org_id is not null) = (event in ('Deposited', 'Withdrawn'))
+       else org_id is null end);
 create unique index chain_events_loan_revision
   on public.chain_events (network, program_id, loan, loan_revision) where loan_revision is not null;
 create unique index chain_events_pool_revision
@@ -634,10 +644,10 @@ language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.chain_loans l where l.address = loan_address
     and private.can_read_facility(l.facility));
 $$;
--- Replaces 20261126000100's: the custodian, every holder past or present, every lender of a
--- facility whose borrower holds or held a position on the lot (a loan's borrower is always its
--- position's owner, so this covers every lender with a loan on the lot), and the buyer of any
--- release intent on the lot.
+-- Replaces 20261126000100's: the custodian, every holder past or present, any lender with any
+-- facility (with or without a loan) to a current or former holder of a position on the lot (a
+-- loan's borrower is always its position's owner, so this includes every lender with a loan on
+-- the lot), and the buyer of any release intent on the lot.
 create or replace function private.can_read_lot(lot_address text) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
@@ -680,7 +690,9 @@ create policy chain_pool_shares_select on public.chain_pool_shares
   for select to authenticated using (private.is_member(org_id));
 
 -- PledgedSold is lot-scoped, so every lot reader reads its loan figures in chain_events.data
--- (public on devnet); the lending tables stay facility-scoped.
+-- (public on devnet); the lending tables stay facility-scoped. A pool event naming a depositor
+-- (Deposited, Withdrawn: org_id set) is read by that organisation's members only, as its
+-- chain_pool_shares row; PoolOpened (org_id null) by every member, as chain_pools.
 drop policy chain_events_select on public.chain_events;
 create policy chain_events_select on public.chain_events
   for select to authenticated using (
@@ -688,4 +700,5 @@ create policy chain_events_select on public.chain_events
     or (scope = 'organisation' and private.is_member(org_id))
     or (scope = 'registry' and private.has_membership())
     or (scope = 'facility' and private.can_read_facility(facility))
-    or (scope = 'pool' and private.has_membership()));
+    or (scope = 'pool' and org_id is null and private.has_membership())
+    or (scope = 'pool' and org_id is not null and private.is_member(org_id)));

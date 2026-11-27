@@ -1401,6 +1401,15 @@ export async function projectSlot(
       }
     }
   };
+  // The Organisation whose members alone read the event row (org_id): an organisation-scoped
+  // event's, and the depositor of a pool event that names one (T063c fold 12); else none.
+  const eventOrgAddress = (plan: Plan): string | null => {
+    if (plan.scope === "organisation") return eventOrganisation(plan);
+    if (plan.event.name === "Deposited" || plan.event.name === "Withdrawn") {
+      return (plan.event.value as Record<string, unknown>).organisation as string;
+    }
+    return null;
+  };
   const creatingOwner = (lot: string): { plan: Plan; owner: string } | undefined => {
     const creator = lots.get(lot)?.creators[0];
     if (!creator) return undefined;
@@ -1426,7 +1435,8 @@ export async function projectSlot(
   const build = () => {
     for (const [address, { account }] of read) columnsOf(address, account);
     for (const plan of plans) {
-      if (plan.scope === "organisation") resolver.organisationId(eventOrganisation(plan));
+      const owner = eventOrgAddress(plan);
+      if (owner !== null) resolver.organisationId(owner);
     }
     for (const [lot, { account }] of read) {
       if (account.kind !== "Lot") continue;
@@ -1562,6 +1572,7 @@ export async function projectSlot(
   const eventRows: Row[] = [];
   for (const plan of plans) {
     const { transaction, event } = plan;
+    const owner = eventOrgAddress(plan);
     eventRows.push({
       network: stream.network,
       program_id: stream.programId,
@@ -1575,8 +1586,7 @@ export async function projectSlot(
       scope: plan.scope,
       lot: plan.lot,
       lot_revision: plan.revision === null ? null : toU64String(plan.revision),
-      org_id:
-        plan.scope === "organisation" ? resolver.organisationId(eventOrganisation(plan)) : null,
+      org_id: owner === null ? null : resolver.organisationId(owner),
       data: event.data,
       facility: plan.keys.facility,
       loan: plan.keys.loan,

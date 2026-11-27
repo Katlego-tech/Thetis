@@ -1007,6 +1007,14 @@ export function memoryStore(
           if (event.scope === "pool" && event.pool === null) {
             throw wrong("a pool-scoped event must name its pool");
           }
+          // chain_events_org_scope (live-lending.md, T063c fold 12).
+          const depositor = event.event === "Deposited" || event.event === "Withdrawn";
+          const wantsOrg = event.scope === "organisation" || (event.scope === "pool" && depositor);
+          if (wantsOrg !== (event.org_id !== null)) {
+            throw wrong(
+              "org_id is set exactly on organisation-scoped events and on Deposited and Withdrawn",
+            );
+          }
           if (event.loan_revision !== null && event.loan === null) {
             throw wrong("a loan revision needs its loan");
           }
