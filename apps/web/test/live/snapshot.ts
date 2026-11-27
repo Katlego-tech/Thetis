@@ -636,10 +636,7 @@ export function intent(overrides: Partial<ChainReleaseIntentRow> = {}): ChainRel
   };
 }
 
-export function payment(
-  at: string,
-  overrides: Partial<ChainPaymentRow> = {},
-): ChainPaymentRow {
+export function payment(at: string, overrides: Partial<ChainPaymentRow> = {}): ChainPaymentRow {
   return {
     ...lending(12_500),
     address: at,

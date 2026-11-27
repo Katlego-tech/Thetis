@@ -1,7 +1,8 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { PageHeader } from "@/components/thetis/page-header";
 import { RegistryMark } from "@/components/thetis/registry-mark";
-import type { ScreenReader } from "@/data/live/types";
+import type { LiveReader, ScreenReader } from "@/data/live/types";
 import type { ThetisReader } from "@/data/reader";
 import { formatBpsPercent, formatDateTime, formatMoney, formatTonnes } from "@/lib/format";
 import { lotIdClass, QueueAction, QueueTable } from "./queue-table";
@@ -48,6 +49,7 @@ function referenceItems(reader: ThetisReader, organisationId: string) {
       ...item,
       deadline,
       opensRelease,
+      actionLabel: opensRelease ? "Review evidence" : "Open dossier",
       quantity: item.quantityKg === null ? "none" : formatTonnes(item.quantityKg),
       amount: item.amountMinor === null ? "none" : money(item.amountMinor),
       quantityBasis: item.quantityKg === null ? undefined : quantityBasis,
@@ -70,13 +72,67 @@ function referenceItems(reader: ThetisReader, organisationId: string) {
   return items;
 }
 
+/** live-lending.md §4.5.3: each item's figures in its own currency, with what they measure. */
+function liveItems(reader: LiveReader, organisationId: string): QueueItem[] {
+  return reader.workQueue(organisationId).map((item) => {
+    const command = item.href.startsWith(`/${organisationId}/commands/`);
+    const opensRelease = item.href.startsWith(`/${organisationId}/releases/`);
+    const money = reader.workItemMoney(organisationId, item.id);
+    const deadline = item.deadline === null ? null : Date.parse(item.deadline);
+    const quantityBasis = command ? "in this command" : opensRelease ? "of the release" : undefined;
+    const amountBasis = command
+      ? "in this command"
+      : opensRelease
+        ? "price plus top-up"
+        : "confirmed, not applied";
+    return {
+      ...item,
+      deadline,
+      opensRelease,
+      actionLabel: command ? "Sign" : opensRelease ? "Review evidence" : "Open dossier",
+      quantity: item.quantityKg === null ? "none" : formatTonnes(item.quantityKg),
+      amount:
+        item.amountMinor === null || money === null
+          ? "none"
+          : formatMoney(item.amountMinor, money.currency, money.minorDigits),
+      quantityBasis: item.quantityKg === null ? undefined : quantityBasis,
+      amountBasis: item.amountMinor === null || money === null ? undefined : amountBasis,
+      taskDetails: [
+        item.blocker,
+        item.deadline !== null && Number.isFinite(deadline)
+          ? `Due ${formatDateTime(item.deadline)}.`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
+  });
+}
+
+type QueueItem = ReturnType<typeof referenceItems>[number];
+
 export function getQueueData(
   reader: ScreenReader,
   organisationId: string,
-): { scenario: ScreenReader["scenario"]; items: ReturnType<typeof referenceItems> } {
-  // Phase 1 chain state creates no work, so a live queue has nothing to format.
-  if (reader.mode === "live") return { scenario: reader.scenario, items: [] };
-  return { scenario: reader.scenario, items: referenceItems(reader, organisationId) };
+): { scenario: ScreenReader["scenario"]; items: QueueItem[]; currencyLine: string } {
+  if (reader.mode === "live") {
+    const currency = reader.facilityCurrency(organisationId);
+    return {
+      scenario: reader.scenario,
+      items: liveItems(reader, organisationId),
+      currencyLine:
+        currency === "none"
+          ? "No facility on chain"
+          : currency === "mixed"
+            ? "Several facility currencies"
+            : `Facility currency ${currency.currency}`,
+    };
+  }
+  return {
+    scenario: reader.scenario,
+    items: referenceItems(reader, organisationId),
+    currencyLine: `Facility currency ${reader.scenario.facilityCurrency}`,
+  };
 }
 
 const chipClass = "rounded-sm border border-(--rule) bg-(--sheet) px-2.5 py-[5px] text-[13px]";
@@ -86,11 +142,14 @@ export function WorkQueueScreen({
   data,
   filter,
   now,
+  panel = null,
 }: {
   organisationId: string;
   data: ReturnType<typeof getQueueData> | null;
   filter?: string | undefined;
   now: number;
+  /** live lender contexts: the FacilitiesPanel below the queue */
+  panel?: ReactNode;
 }) {
   const queueHref = `/${organisationId}/queue`;
   const items = data?.items.filter((item) => {
@@ -109,11 +168,7 @@ export function WorkQueueScreen({
               <div className="font-mono font-medium">
                 {data.scenario.settlementMode} · {data.scenario.network}
               </div>
-              <div>
-                {data.scenario.facilityCurrency === null
-                  ? "No facility on chain"
-                  : `Facility currency ${data.scenario.facilityCurrency}`}
-              </div>
+              <div>{data.currencyLine}</div>
             </div>
           )
         }
@@ -177,12 +232,13 @@ export function WorkQueueScreen({
             registry: <RegistryMark status={item.registry.status} />,
             action: (
               <QueueAction href={item.href} primary={index === 0}>
-                {item.opensRelease ? "Review evidence" : "Open dossier"}
+                {item.actionLabel}
               </QueueAction>
             ),
           }))}
         />
       )}
+      {panel}
     </>
   );
 }

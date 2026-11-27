@@ -53,3 +53,36 @@ export function formatClockTime(iso: string): string {
 export function formatSlot(slot: bigint): string {
   return wholeNumber.format(slot);
 }
+
+const U64_MAX = 2n ** 64n - 1n;
+
+/** Exact decimal text to minor units: no sign, no separators, at most `minorDigits` decimals. */
+export function parseMoneyInput(text: string, minorDigits: number): bigint | null {
+  return parseDecimal(text, minorDigits);
+}
+
+/** Tonnes with at most three decimals to kilograms: "2000" is 2,000,000 kg, "0.5" is 500 kg. */
+export function parseTonnesInput(text: string): bigint | null {
+  return parseDecimal(text, 3);
+}
+
+function parseDecimal(text: string, digits: number): bigint | null {
+  const pattern =
+    digits === 0 ? /^([0-9]+)$/ : new RegExp(`^([0-9]+)(?:\\.([0-9]{1,${digits}}))?$`);
+  const match = pattern.exec(text);
+  if (!match) return null;
+  const [, whole = "", fraction = ""] = match;
+  const value = BigInt(whole) * 10n ** BigInt(digits) + BigInt(fraction.padEnd(digits, "0") || "0");
+  return value > U64_MAX ? null : value;
+}
+
+export function explorerTxUrl(signature: string): string {
+  return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+}
+
+/** Minor units as the plain decimal a money input accepts: 40000000 at 2 digits is "400000.00". */
+export function minorToInput(minor: bigint, minorDigits: number): string {
+  if (minorDigits === 0) return minor.toString();
+  const text = minor.toString().padStart(minorDigits + 1, "0");
+  return `${text.slice(0, -minorDigits)}.${text.slice(-minorDigits)}`;
+}

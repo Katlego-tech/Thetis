@@ -93,6 +93,13 @@ describe("live mapping", () => {
       ],
       evidence: [],
       releases: [],
+      // live-lending.md §6.8: liveReader sets `lending`; a Phase 1 lot has no lending records.
+      lending: expect.objectContaining({
+        primaryLoan: null,
+        loans: [],
+        intents: [],
+        hiddenLockedKg: 0n,
+      }),
     });
 
     const redeemed = issuedSnapshot();
@@ -208,7 +215,6 @@ describe("live mapping", () => {
   });
 
   test("liveReader refuses a position with reserved_kg above zero", () => {
-
     const reserved = issuedSnapshot();
     reserved.positions = [position(KHUNOU_POSITION, "khunou", "5000000", { reserved_kg: "1000" })];
     refused(reserved, "BAD_ROW", "positions[0].reserved_kg");

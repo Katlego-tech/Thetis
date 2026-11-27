@@ -29,8 +29,8 @@ import {
   LOCK_ONE,
   LOCK_TWO,
   LOT,
-  lock,
   loan,
+  lock,
   NOW,
   orgId,
   PROGRAM_ID,
@@ -47,7 +47,10 @@ import {
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   refresh: vi.fn(),
-  session: { access_token: "synthetic-token", user: { id: "21000000-0000-4000-8000-000000000001" } },
+  session: {
+    access_token: "synthetic-token",
+    user: { id: "21000000-0000-4000-8000-000000000001" },
+  },
   links: [] as { wallet: string; organisation_id: string }[],
   storage: [] as unknown[],
   inserts: [] as { table: string; row: Record<string, unknown> }[],
@@ -71,7 +74,8 @@ vi.mock("@/lib/supabase-browser", () => ({
           eq: () => builder,
           is: () => builder,
           // biome-ignore lint/suspicious/noThenProperty: the Supabase query builder is awaited
-          then: (resolve: (value: typeof result) => unknown) => Promise.resolve(result).then(resolve),
+          then: (resolve: (value: typeof result) => unknown) =>
+            Promise.resolve(result).then(resolve),
         };
         return builder;
       }
@@ -209,7 +213,9 @@ describe("live lending reads", () => {
     }
     const repaid = pledgedSnapshot();
     repaid.positions = [position(KHUNOU_POSITION, "khunou", "5000000", { revision: "2" })];
-    repaid.loans = [loan(LOAN_ONE, FACILITY_ONE, "lender-one", { status: "Closed", principal: "0" })];
+    repaid.loans = [
+      loan(LOAN_ONE, FACILITY_ONE, "lender-one", { status: "Closed", principal: "0" }),
+    ];
     repaid.locks = [lock(LOCK_ONE, LOAN_ONE, "0")];
     expect(lotOf(repaid, "lender-one")).toMatchObject({ finance: "Repaid", loan: null, locks: [] });
 
@@ -245,9 +251,7 @@ describe("live lending reads", () => {
 
     // Equal locks: the smaller loan address.
     snapshot.locks = [lock(LOCK_ONE, LOAN_ONE, "2500000"), lock(LOCK_TWO, LOAN_TWO, "2500000")];
-    expect(lotOf(snapshot, "khunou").lending?.primaryLoan).toBe(
-      LOAN_ONE < LOAN_TWO ? LOAN_ONE : LOAN_TWO,
-    );
+    expect(lotOf(snapshot, "khunou").lending?.primaryLoan).toBe([LOAN_ONE, LOAN_TWO].toSorted()[0]);
 
     // A lender without a loan of its own on the position has no primary loan.
     const own = pledgedSnapshot(["lender-two"]);
@@ -746,11 +750,18 @@ describe("command page", () => {
 
     // A view whose hash is not its text's: nothing is signed or posted.
     renderCommand(
-      view({ text: { ...(view().text as NonNullable<CommandView["text"]>), messageSha256: "0".repeat(64) } }),
+      view({
+        text: {
+          ...(view().text as NonNullable<CommandView["text"]>),
+          messageSha256: "0".repeat(64),
+        },
+      }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Connect Solflare" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sign with Solflare" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("The text changed. Reload the page.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The text changed. Reload the page.",
+    );
     expect(calls.filter(({ method }) => method === "POST")).toEqual([]);
   });
 
@@ -780,7 +791,12 @@ describe("command page", () => {
         { label: "Facility", value: "22".repeat(16) },
       ],
       signers: [
-        { role: "lender", organisationId: orgId("lender-one"), method: "transaction", signed: null },
+        {
+          role: "lender",
+          organisationId: orgId("lender-one"),
+          method: "transaction",
+          signed: null,
+        },
       ],
     });
     let expiredOnce = true;
@@ -788,7 +804,10 @@ describe("command page", () => {
       if (call.method === "GET") return json(200, { data: openFacility });
       if (call.url.endsWith("/transaction-request"))
         return json(200, {
-          data: { transactionBase64: Buffer.from(issued).toString("base64"), lastValidBlockHeight: "9" },
+          data: {
+            transactionBase64: Buffer.from(issued).toString("base64"),
+            lastValidBlockHeight: "9",
+          },
         });
       if (call.url.endsWith("/transaction") && expiredOnce) {
         expiredOnce = false;
@@ -833,7 +852,12 @@ describe("command page", () => {
         kind: "record_advance",
         signers: [
           { role: "borrower", organisationId: orgId("khunou"), method: "text", signed: null },
-          { role: "lender", organisationId: orgId("lender-one"), method: "transaction", signed: null },
+          {
+            role: "lender",
+            organisationId: orgId("lender-one"),
+            method: "transaction",
+            signed: null,
+          },
         ],
       }),
     );
@@ -863,8 +887,12 @@ describe("live release route", () => {
   test("the release route serves a visible intent in live mode and refuses a case parameter", async () => {
     liveEnvironment();
     const snapshot = pledgedSnapshot();
-    snapshot.intents = [intent()];
-    snapshot.checkpoint = { ...(snapshot.checkpoint as NonNullable<LiveSnapshot["checkpoint"]>), last_success_at: new Date().toISOString() };
+    // The page reads at the wall clock, so the intent expires a day after the real now.
+    snapshot.intents = [intent({ expires_at: String(Math.floor(Date.now() / 1000) + 86_400) })];
+    snapshot.checkpoint = {
+      ...(snapshot.checkpoint as NonNullable<LiveSnapshot["checkpoint"]>),
+      last_success_at: new Date().toISOString(),
+    };
     server.client = fakeSupabase(snapshot).client;
     render(await releasePage(INTENT));
     expect(
@@ -918,11 +946,22 @@ describe("lending forms", () => {
         context="lender-one"
         args={{ loan: LOAN_ONE, purpose: "Release", intent: INTENT }}
         fields={[
-          { name: "amountMinor", label: "Amount", kind: "money", currency: "USD", digits: 2, initial: "400000.00" },
+          {
+            name: "amountMinor",
+            label: "Amount",
+            kind: "money",
+            currency: "USD",
+            digits: 2,
+            initial: "400000.00",
+          },
           { name: "bankReference", label: "Bank reference", kind: "text", half: true },
           { name: "observedAt", label: "Observed at", kind: "datetime", half: true },
         ]}
-        upload={{ label: "Bank confirmation", ownerOrganisationId: orgId("lender-one"), lotId: "CR-0001" }}
+        upload={{
+          label: "Bank confirmation",
+          ownerOrganisationId: orgId("lender-one"),
+          lotId: "CR-0001",
+        }}
         primary
       />
     );
@@ -947,7 +986,9 @@ describe("lending forms", () => {
 
     render(form);
     fill();
-    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(`/lender-one/commands/${COMMAND_ID}`));
+    await waitFor(() =>
+      expect(mocks.push).toHaveBeenCalledWith(`/lender-one/commands/${COMMAND_ID}`),
+    );
     expect(mocks.log).toEqual([
       "insert evidence_objects",
       "insert evidence_versions",

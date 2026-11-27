@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { RegistryMark } from "@/components/thetis/registry-mark";
 import { ResultTable } from "@/components/thetis/result-table";
 import type { LiveLotView } from "@/data/live/types";
@@ -13,10 +14,13 @@ const resultColumns = [
   { key: "registry", label: "Registry" },
 ] as const;
 
-/** A reference lot always has a formatter; a live Phase 1 lot has no loan and no money to format. */
+/**
+ * A reference lot always has a formatter. A live lot has one in its dossier currency, and none only
+ * when it has neither loan nor valuation (live-lending.md §7 slice D).
+ */
 export type FinancialRecord =
-  | { lot: LotView; money: (minor: bigint) => string }
-  | { lot: LiveLotView & { loan: null }; money: null };
+  | { source: "reference"; lot: LotView; money: (minor: bigint) => string }
+  | { source: "live"; lot: LiveLotView; money: ((minor: bigint) => string) | null };
 
 const notAttested = "Not attested yet";
 
@@ -72,12 +76,116 @@ function UnfinancedResults({
   return <ResultTable columns={[...resultColumns]} rows={rows} totalRowIndex={rows.length - 1} />;
 }
 
+/** live-lending.md §4.5.2 and fold 6: a live lot's rows, null parts as web.md §9.6. */
+function LiveResults({
+  lot,
+  money,
+  includeQuantity,
+}: {
+  lot: LiveLotView;
+  money: (minor: bigint) => string;
+  includeQuantity: boolean;
+}) {
+  const { loan, valuation } = lot;
+  const notOnChain = <RegistryMark status="not_submitted" />;
+  const quantity = formatTonnes(lot.quantityKg);
+  const rows: Record<string, ReactNode>[] = [
+    ...(includeQuantity
+      ? [
+          {
+            result: "Lot quantity",
+            value: quantity,
+            basis: "Supply on chain, kg atomic unit",
+            attestor: notAttested,
+            registry: <RegistryMark status={lot.registry.status} />,
+          },
+        ]
+      : []),
+    loan
+      ? {
+          result: "Recorded debt",
+          value: money(loan.debtMinor),
+          basis: "Principal plus booked and accrued interest",
+          attestor: notAttested,
+          registry: <RegistryMark status={loan.registry.status} />,
+        }
+      : {
+          result: "Recorded debt",
+          value: "None recorded",
+          basis: "No loan on chain for this lot",
+          attestor: notAttested,
+          registry: notOnChain,
+        },
+  ];
+  if (!valuation) {
+    rows.push(
+      {
+        result: "Valuation",
+        value: "None recorded",
+        basis: "No valuation on chain for this lot's class, grade and site",
+        attestor: notAttested,
+        registry: notOnChain,
+      },
+      {
+        result: "Eligible value",
+        value: "Not computed",
+        basis: "Needs a valuation",
+        attestor: notAttested,
+        registry: notOnChain,
+      },
+      {
+        result: "Loan to value",
+        value: "Not computed",
+        basis: "Needs a loan and a valuation",
+        attestor: notAttested,
+        registry: notOnChain,
+      },
+    );
+  } else {
+    const price = `${money(valuation.valuePerKgMinor * 1000n)}/t`;
+    const haircut = valuation.haircutBps === 0n ? "0" : formatBpsPercent(valuation.haircutBps);
+    // The eligible value is the primary loan's lock at the valuation (live-lending.md §4.5.2).
+    const primary = lot.lending?.loans.find(({ address }) => address === lot.lending?.primaryLoan);
+    const locked = formatTonnes(primary?.lock.quantityKg ?? 0n);
+    rows.push(
+      {
+        result: "Valuation",
+        value: price,
+        basis: `Haircut ${haircut}, until ${formatDateTime(valuation.validUntil)}`,
+        attestor: notAttested,
+        registry: <RegistryMark status={valuation.registry.status} />,
+      },
+      {
+        result: "Eligible value",
+        value: money(valuation.eligibleValueMinor),
+        basis: `${locked} at ${price}${valuation.haircutBps === 0n ? "" : `, after ${haircut} haircut`}`,
+        attestor: "Derived",
+        registry: "none",
+      },
+      {
+        result: "Loan to value",
+        value: valuation.ltvBps === null ? "Not computed" : formatBpsPercent(valuation.ltvBps),
+        basis:
+          valuation.ltvBps === null
+            ? "Eligible value is zero"
+            : `Limit ${formatBpsPercent(valuation.maxLtvBps)}`,
+        attestor: "Derived",
+        registry: "none",
+      },
+    );
+  }
+  return <ResultTable columns={[...resultColumns]} rows={rows} totalRowIndex={rows.length - 1} />;
+}
+
 export function FinancialResults({
   includeQuantity = false,
   ...record
 }: FinancialRecord & { includeQuantity?: boolean }) {
-  if (record.money === null)
-    return <UnfinancedResults lot={record.lot} includeQuantity={includeQuantity} />;
+  if (record.source === "live") {
+    if (record.money === null || (record.lot.loan === null && record.lot.valuation === null))
+      return <UnfinancedResults lot={record.lot} includeQuantity={includeQuantity} />;
+    return <LiveResults lot={record.lot} money={record.money} includeQuantity={includeQuantity} />;
+  }
   const { lot, money } = record;
   const { loan, valuation } = lot;
   const quantity = formatTonnes(lot.quantityKg);
