@@ -15,7 +15,15 @@ export type ProjectionTable =
   | "chain_documents"
   | "chain_intakes"
   | "chain_lots"
-  | "chain_positions";
+  | "chain_positions"
+  | "chain_facilities"
+  | "chain_valuations"
+  | "chain_loans"
+  | "chain_locks"
+  | "chain_payments"
+  | "chain_release_intents"
+  | "chain_pools"
+  | "chain_pool_shares";
 export type JsonValue =
   | string
   | number
@@ -97,6 +105,14 @@ export const PROJECTION_TABLES: readonly ProjectionTable[] = [
   "chain_intakes",
   "chain_lots",
   "chain_positions",
+  "chain_facilities",
+  "chain_valuations",
+  "chain_loans",
+  "chain_locks",
+  "chain_payments",
+  "chain_release_intents",
+  "chain_pools",
+  "chain_pool_shares",
 ];
 
 /** Columns every projection table starts with and every row carries. */
@@ -171,6 +187,98 @@ export const ACCOUNT_COLUMNS: Record<ProjectionTable, readonly string[]> = {
     "reserved_kg",
     "revision",
   ],
+  chain_facilities: [
+    "lender",
+    "lender_org_id",
+    "borrower",
+    "borrower_org_id",
+    "facility_id_hex",
+    "currency",
+    "currency_decimals",
+    "terms_version",
+    "rate_bps",
+    "max_ltv_bps",
+    "terms_digest_hex",
+    "loan_count",
+  ],
+  chain_valuations: [
+    "facility",
+    "class_policy",
+    "grade",
+    "custodian_class",
+    "value_per_kg",
+    "haircut_bps",
+    "valid_until",
+    "source_digest_hex",
+    "version",
+    "set_at",
+  ],
+  chain_loans: [
+    "facility",
+    "lender_org_id",
+    "borrower",
+    "borrower_org_id",
+    "lot",
+    "position",
+    "loan_index",
+    "status",
+    "rate_bps",
+    "terms_version",
+    "principal",
+    "booked_interest",
+    "accrual_remainder",
+    "accrued_at",
+    "open_exceptions",
+    "revision",
+  ],
+  chain_locks: ["loan", "position", "quantity_kg", "control"],
+  chain_payments: [
+    "lender",
+    "lender_org_id",
+    "loan",
+    "payment_id_hex",
+    "purpose",
+    "subject",
+    "amount",
+    "currency",
+    "evidence_digest_hex",
+    "observed_at",
+    "status",
+    "applied",
+    "surplus",
+  ],
+  chain_release_intents: [
+    "loan",
+    "lot",
+    "position",
+    "seller",
+    "seller_org_id",
+    "buyer",
+    "buyer_org_id",
+    "lender",
+    "lender_org_id",
+    "currency_decimals",
+    "nonce",
+    "quantity_kg",
+    "price",
+    "top_up",
+    "currency",
+    "expires_at",
+    "position_revision",
+    "status",
+  ],
+  chain_pools: [
+    "mint",
+    "vault",
+    "currency",
+    "currency_decimals",
+    "cash_minor",
+    "total_shares",
+    "lent_minor",
+    "income_minor",
+    "revision",
+  ],
+  chain_pool_shares: ["pool", "organisation", "org_id", "shares", "lent_minor"],
 };
 
 /** Columns that come from events or from Supabase, not from the account read. */
@@ -184,6 +292,14 @@ export const EXTRA_COLUMNS: Record<ProjectionTable, readonly string[]> = {
   chain_intakes: [],
   chain_lots: ["event_revision", "issued_owner", "issued_owner_org_id", "issued_at"],
   chain_positions: [],
+  chain_facilities: [],
+  chain_valuations: ["event_version"],
+  chain_loans: ["event_revision"],
+  chain_locks: [],
+  chain_payments: [],
+  chain_release_intents: [],
+  chain_pools: ["event_revision"],
+  chain_pool_shares: [],
 };
 
 const TRANSACTION_COLUMNS = [
@@ -212,6 +328,22 @@ const EVENT_COLUMNS = [
   "lot_revision",
   "org_id",
   "data",
+  "facility",
+  "loan",
+  "loan_revision",
+  "pool",
+  "pool_revision",
+  "valuation",
+  "valuation_version",
+  "created",
+];
+
+/** The program keys an event row may carry beside (lot, lot_revision), each unique per stream. */
+const EVENT_KEYS: { name: string; columns: string[] }[] = [
+  { name: "loan", columns: ["loan", "loan_revision"] },
+  { name: "pool", columns: ["pool", "pool_revision"] },
+  { name: "valuation", columns: ["valuation", "valuation_version"] },
+  { name: "created account", columns: ["created"] },
 ];
 
 function sameKeys(row: Row, columns: readonly string[]): boolean {
@@ -670,6 +802,13 @@ export function memoryStore(
     }
   }
 
+  function keyOwner(columns: string[], event: Row): Row | undefined {
+    for (const stored of state.events.values()) {
+      if (columns.every((column) => stored[column] === event[column])) return stored;
+    }
+    return undefined;
+  }
+
   function revisionOwner(lot: unknown, revision: unknown): Row | undefined {
     for (const event of state.events.values()) {
       if (event.lot === lot && event.lot_revision === revision) return event;
@@ -862,6 +1001,29 @@ export function memoryStore(
           if (!inRange(event.slot)) throw wrong("an event slot is outside the batch range");
           if (event.protocol !== stream.protocol)
             throw new StoreCodeError("STREAM_INVALID", "an event belongs to another protocol");
+          if ((event.scope === "facility") !== (event.facility !== null)) {
+            throw wrong("a facility-scoped event must name its facility, and only it");
+          }
+          if (event.scope === "pool" && event.pool === null) {
+            throw wrong("a pool-scoped event must name its pool");
+          }
+          // chain_events_org_scope (live-lending.md, T063c fold 12).
+          const depositor = event.event === "Deposited" || event.event === "Withdrawn";
+          const wantsOrg = event.scope === "organisation" || (event.scope === "pool" && depositor);
+          if (wantsOrg !== (event.org_id !== null)) {
+            throw wrong(
+              "org_id is set exactly on organisation-scoped events and on Deposited and Withdrawn",
+            );
+          }
+          if (event.loan_revision !== null && event.loan === null) {
+            throw wrong("a loan revision needs its loan");
+          }
+          if (event.pool_revision !== null && event.pool === null) {
+            throw wrong("a pool revision needs its pool");
+          }
+          if ((event.valuation === null) !== (event.valuation_version === null)) {
+            throw wrong("a valuation and its version come together");
+          }
           counts.set(owner.signature as string, (counts.get(owner.signature as string) ?? 0) + 1);
         }
         for (const transaction of batch.transactions) {
@@ -885,6 +1047,16 @@ export function memoryStore(
               throw new StoreCodeError(
                 "REVISION_SEQUENCE",
                 `lot ${String(event.lot)} revision ${String(event.lot_revision)} is stored under ${String(owner.signature)}, batch has ${String(event.signature)}`,
+              );
+            }
+          }
+          for (const { name, columns } of EVENT_KEYS) {
+            if (columns.some((column) => event[column] === null)) continue;
+            const owner = keyOwner(columns, event);
+            if (owner) {
+              throw new StoreCodeError(
+                "REVISION_SEQUENCE",
+                `${name} ${columns.map((column) => String(event[column])).join(" ")} is stored under ${String(owner.signature)}, batch has ${String(event.signature)}`,
               );
             }
           }

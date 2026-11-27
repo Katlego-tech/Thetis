@@ -1,6 +1,15 @@
+import type { Address } from "@solana/kit";
+import { findSharePda, getPoolShareEncoder } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import { expectHalt, harness, RECONCILE_MS, rows } from "../fixtures/harness.ts";
-import { fixture, lotHistory, seedHistory, seedOrganisations } from "../fixtures/synthetic.ts";
+import {
+  bytesOf,
+  fixture,
+  lotHistory,
+  seedHistory,
+  seedOrganisations,
+  thetis,
+} from "../fixtures/synthetic.ts";
 
 describe("reconcile", () => {
   it("reconcile promotes rows to finalized and refreshes slugs", async () => {
@@ -94,12 +103,26 @@ describe("reconcile", () => {
     const history = await seedHistory();
     const h = await harness(history);
     await h.pollUntilLive();
-    const [facility, account] = await f.build.facilityAccount();
+    // A PoolShare whose pool field is the stream's protocol, so the protocol scan returns it.
+    const [share, bump] = await findSharePda({
+      pool: f.protocol as Address,
+      depositorOrg: f.org("lender-one") as Address,
+    });
     history.push({
       slot: 10_500,
       blockTime: null,
       transactions: [],
-      accounts: { [facility]: account },
+      accounts: {
+        [share]: thetis(
+          bytesOf(getPoolShareEncoder(), {
+            pool: f.protocol,
+            organisation: f.org("lender-one"),
+            shares: 1n,
+            lentMinor: 0n,
+            bump,
+          }),
+        ),
+      },
     });
     h.chain.setHistory(history);
     h.chain.setConfirmedSlot(11_000);
@@ -108,7 +131,7 @@ describe("reconcile", () => {
     await expectHalt(h, await h.poll(), "ACCOUNT_DECODE_FAILED", {
       step: "reconcile",
       signature: null,
-      mentions: [facility, "Facility"],
+      mentions: [share, "PoolShare"],
     });
   });
 

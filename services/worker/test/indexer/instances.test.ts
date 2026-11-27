@@ -78,7 +78,7 @@ describe("protocol instances", () => {
     }
   });
 
-  it("skips another instance's open_pool without decoding it and records it as other-instance", async () => {
+  it("skips another instance's open_pool after the D35 checks and records it as other-instance", async () => {
     const f = await fixture();
     expect(f.protocol).toBe(README_FIAT_PROTOCOL);
     expect(await protocolOf(SIMULATION_INSTANCE)).toBe(README_SIMULATION_PROTOCOL);
@@ -107,7 +107,8 @@ describe("protocol instances", () => {
       if (row.signature !== pool.signature) expect(row.other_instance).toBe(false);
     }
 
-    // Neither its arguments nor its event line are decoded: both made unreadable, still skipped.
+    // OpenPool is handled, so another instance's is parsed too (indexer.md §12.2): data cut to
+    // eight bytes no longer parses, and the stream halts before the event line is read.
     const unreadable = await openPool(syntheticSignature(191), SIMULATION_INSTANCE);
     const instruction = unreadable.instructions[0];
     if (!instruction) throw new Error("no instruction");
@@ -118,13 +119,11 @@ describe("protocol instances", () => {
         : line,
     );
     const second = await harness(await afterSeed([unreadable]));
-    await second.pollUntilLive();
-    expect(transactionRow(second, unreadable.signature)).toMatchObject({
-      succeeded: true,
-      protocol: null,
-      event_count: 0,
-      other_instance: true,
+    await expectHalt(second, await second.poll(), "UNKNOWN_INSTRUCTION", {
+      step: "decode",
+      signature: unreadable.signature,
     });
+    expect(transactionRow(second, unreadable.signature)).toBeUndefined();
   });
 
   it("skips another instance's initialize_protocol and records it as other-instance", async () => {
@@ -176,6 +175,9 @@ describe("protocol instances", () => {
 
   it("halts with UNKNOWN_INSTRUCTION on its own instance's open_pool", async () => {
     const own = await openPool(syntheticSignature(195), DEFAULT_INSTANCE);
+    const cut = own.instructions[0];
+    if (!cut) throw new Error("no instruction");
+    cut.data = cut.data.slice(0, -1);
     const h = await harness(await afterSeed([own]));
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
