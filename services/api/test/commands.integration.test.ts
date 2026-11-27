@@ -46,6 +46,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   DocumentKind,
   decodeCustodianClass,
+  decodeHandoffAcceptance,
   decodeLoadingIntent,
   decodeLoan,
   decodeLot,
@@ -66,7 +67,6 @@ import {
   findPositionPda,
   findProtocolPda,
   findVaultAuthorityPda,
-  getAcceptLoadingInstruction,
   getAccreditCustodianClassInstruction,
   getAccreditOrganisationInstruction,
   getAttestDocumentInstruction,
@@ -3127,37 +3127,15 @@ async function createIntent(w: World) {
   return { intent: address(view.intent ?? ""), view, evidence };
 }
 
-/** Lender One accepts the hand-off for `loan`, from its own wallet (program-custody.md §4.4: the
- * lender's transaction; the relay does not carry accept_loading, pre-check gap 1). */
+/** Lender One accepts the hand-off for `loan` through the relay, sponsor-paid (field-app.md owner
+ * decision 1, T067r.4 folds 52–57). */
 async function acceptLoading(w: World, loan: Address, intent: Address) {
-  const data = loanAccount(w, loan);
-  const [lock] = await findLockPda({ loan });
-  const [acceptance] = await findAcceptancePda({ intent, loan });
-  const [authority] = await findAuthorityPda({
-    protocol: w.protocol,
-    wallet: wallets.lenderOne.address,
-  });
-  await send(
-    w.svm,
-    [
-      getAcceptLoadingInstruction({
-        lender: wallets.lenderOne,
-        payer,
-        protocol: w.protocol,
-        authority,
-        lenderOrg: w.orgs.lenderOne,
-        facility: data.facility,
-        loan,
-        lock,
-        lot: data.lot,
-        position: data.position,
-        intent,
-        acceptance,
-        expectedRevision: data.revision,
-      }),
-    ],
-    [wallets.lenderOne],
+  const view = confirmed(
+    await run(w, "lenderOne", "accept_loading", { intent, loan }, { lender: lenderOne() }),
+    "LoadingAccepted",
   );
+  const [acceptance] = await findAcceptancePda({ intent, loan });
+  expect(view.outcome?.data).toMatchObject({ acceptance, intent, loan });
   return acceptance;
 }
 
@@ -3499,4 +3477,136 @@ describe("the loading on the real program", () => {
     expect(errorOf(outsider).code).toBe("NOT_AUTHORISED");
     expect(w.chain.sent.length).toBe(sent);
   }, 180_000);
+});
+
+// ---------------------------------------------------------------- accept_loading (T067r.4 folds 52–58)
+
+describe("accept_loading on the real program", () => {
+  it("the lender's acceptance lands sponsor-paid with LoadingAccepted, and record_loading then hands that loan off", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["5000000"]);
+    const [loan] = loans as [Address];
+    const { intent } = await createIntent(w);
+    const before = loanAccount(w, loan);
+    const created = await create(w, "lenderOne", "accept_loading", { intent, loan });
+    expect(created.signers.map((s) => [s.role, s.organisationId, s.method])).toStrictEqual([
+      ["lender", orgIds.lenderOne, "transaction"],
+    ]);
+    expect(created.text).toBeNull();
+    expect(created.intent).toBe(intent);
+    expect(created.loan).toBe(loan);
+    expect(created.lot).toBe(w.lot);
+    expect(created.fields).toContainEqual({ label: "Revision", value: String(before.revision) });
+    expect(created.fields).toContainEqual({ label: "Locked", value: formatTonnes(5_000_000n) });
+    expect(created.fields).toContainEqual({ label: "Terminal", value: ORGS.portT1.name });
+
+    const lenderLamports = w.svm.getBalance(wallets.lenderOne.address);
+    const sponsorLamports = w.svm.getBalance(sponsorAddress) ?? 0n;
+    const view = confirmed(
+      data<CommandView>(await signTransactionAs(w, "lenderOne", created, wallets.lenderOne)),
+      "LoadingAccepted",
+    );
+    const [acceptance] = await findAcceptancePda({ intent, loan });
+    expect(view.outcome?.data).toMatchObject({
+      acceptance,
+      intent,
+      loan,
+      lender: w.orgs.lenderOne,
+      lockQuantityKg: "5000000",
+      loanRevision: String(before.revision),
+      version: 1,
+    });
+    // Sponsor-paid: the lender's wallet pays neither the fee nor the acceptance's rent.
+    expect(w.svm.getBalance(wallets.lenderOne.address)).toBe(lenderLamports);
+    expect((w.svm.getBalance(sponsorAddress) ?? 0n) < sponsorLamports).toBe(true);
+    const stored = decodeHandoffAcceptance(w.svm.getAccount(acceptance) as never).data;
+    expect(stored).toMatchObject({ intent, loan, lockQuantityKg: 5_000_000n, version: 1 });
+
+    const loading = await run(
+      w,
+      "portT1",
+      "record_loading",
+      { intent },
+      {
+        owner: khunouOwner(),
+        terminal: portTerminal(),
+      },
+    );
+    confirmed(loading, "LoadingRecorded");
+    const handOffs = loading.outcome?.data?.loanHandOffs as { loan: string }[];
+    expect(handOffs.map((h) => h.loan)).toStrictEqual([loan]);
+    expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(0n);
+  }, 240_000);
+
+  it("refuses a loan in Recovery, an executed intent, an expired intent and a non-lender at create, sending nothing", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["3000000", "2000000"]);
+    const [first, second] = loans as [Address, Address];
+    await advance(w, first);
+    const { intent } = await createIntent(w);
+    const post = (org: OrgKey, loan: Address, at: Address = intent) =>
+      call(w, "POST", "/v1/commands", people[org], {
+        kind: "accept_loading",
+        organisationId: orgIds[org],
+        args: { intent: at, loan },
+      });
+    const sent = w.chain.sent.length;
+
+    const outsider = await post("khunou", second);
+    expect(outsider.statusCode, outsider.body).toBe(403);
+    expect(errorOf(outsider).code).toBe("NOT_AUTHORISED");
+
+    const clock = w.svm.getClock();
+    clock.unixTimestamp += DAY;
+    w.svm.setClock(clock);
+    confirmed(
+      await run(w, "lenderOne", "liquidate", { loan: first }, { lender: lenderOne() }),
+      "Liquidated",
+    );
+    const sentAfterLiquidation = w.chain.sent.length;
+    const recovery = await post("lenderOne", first);
+    expect(recovery.statusCode, recovery.body).toBe(409);
+    expect(errorOf(recovery)).toMatchObject({ code: "LOAN_NOT_ACTIVE", detail: `loan: ${first}` });
+
+    clock.unixTimestamp += 3n * DAY;
+    w.svm.setClock(clock);
+    const expired = await post("lenderOne", second);
+    expect(expired.statusCode, expired.body).toBe(409);
+    expect(errorOf(expired)).toMatchObject({
+      code: "LOADING_EXPIRED",
+      detail: `intent: ${intent}`,
+    });
+    expect(w.chain.sent.length).toBe(sentAfterLiquidation);
+    expect(sentAfterLiquidation).toBeGreaterThan(sent);
+  }, 240_000);
+
+  it("an executed intent is LOADING_NOT_OPEN at create, and nothing is sent", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["5000000"]);
+    const [loan] = loans as [Address];
+    const { intent } = await createIntent(w);
+    await acceptLoading(w, loan, intent);
+    confirmed(
+      await run(
+        w,
+        "portT1",
+        "record_loading",
+        { intent },
+        { owner: khunouOwner(), terminal: portTerminal() },
+      ),
+      "LoadingRecorded",
+    );
+    const before = w.chain.sent.length;
+    const response = await call(w, "POST", "/v1/commands", people.lenderOne, {
+      kind: "accept_loading",
+      organisationId: orgIds.lenderOne,
+      args: { intent, loan },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "LOADING_NOT_OPEN",
+      detail: `intent: ${intent}`,
+    });
+    expect(w.chain.sent.length).toBe(before);
+  }, 240_000);
 });
