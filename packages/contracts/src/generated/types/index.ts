@@ -10,6 +10,7 @@ export * from './batchStage.ts';
 export * from './documentKind.ts';
 export * from './handoverStage.ts';
 export * from './intentStatus.ts';
+export * from './loadingStatus.ts';
 export * from './loanStatus.ts';
 export * from './lockControl.ts';
 export * from './lotState.ts';

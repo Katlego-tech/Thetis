@@ -2788,6 +2788,7 @@ fn shipment_prepared_event_names_a_newer_position_revision() {
     let intent = w.create_intent(1);
     let lot = w.lot_state();
     let document = w.attest_departure();
+    let stored_document: DocumentAttestation = w.f.read(document);
     let destination = w.class_state(w.source);
     let leaf = Leaf {
         index: 0,
@@ -2810,7 +2811,7 @@ fn shipment_prepared_event_names_a_newer_position_revision() {
         &destination.site_code,
         1,
         &manifest.root,
-        (&DEPARTURE_SHA, 1),
+        (&stored_document.sha256, stored_document.version),
         lot.revision,
         valid_until,
     );

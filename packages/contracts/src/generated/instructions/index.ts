@@ -6,6 +6,7 @@
  * @see https://github.com/codama-idl/codama
  */
 
+export * from './acceptLoading.ts';
 export * from './accreditCustodianClass.ts';
 export * from './accreditOrganisation.ts';
 export * from './attestDocument.ts';
@@ -13,6 +14,7 @@ export * from './borrow.ts';
 export * from './cancelShipment.ts';
 export * from './closeLoan.ts';
 export * from './confirmPayment.ts';
+export * from './createLoadingIntent.ts';
 export * from './createReleaseIntent.ts';
 export * from './declareRelationship.ts';
 export * from './delegateAuthority.ts';
@@ -27,6 +29,7 @@ export * from './pause.ts';
 export * from './pledge.ts';
 export * from './prepareShipment.ts';
 export * from './recordAdvance.ts';
+export * from './recordLoading.ts';
 export * from './recordObservation.ts';
 export * from './redeem.ts';
 export * from './registerBatch.ts';
