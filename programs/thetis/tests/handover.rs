@@ -833,7 +833,10 @@ impl World {
 
     /// One Ed25519 instruction with two entries over one shared text, the holder first.
     fn handover_signed(&self, args: &HandoverArgs, text: &[u8]) -> [Instruction; 2] {
-        let signers = [self.f.signer(args.from_signer), self.f.signer(args.to_signer)];
+        let signers = [
+            self.f.signer(args.from_signer),
+            self.f.signer(args.to_signer),
+        ];
         [
             ed25519_shared_instruction(&signers, text),
             self.handover_instruction(args),
@@ -1598,10 +1601,7 @@ fn handover_demo_departure_moves_holder_and_source_occupancy() {
     // The reservation stays until the batch arrives.
     assert_eq!(w.class_state(w.destination).reserved_inbound_kg, LOT_KG);
     assert_eq!(w.class_state(w.destination).occupied_kg, 0);
-    assert_eq!(
-        w.shipment_state(shipment).status,
-        ShipmentStatus::InTransit
-    );
+    assert_eq!(w.shipment_state(shipment).status, ShipmentStatus::InTransit);
     assert_eq!(w.lot_state().state, LotState::InTransit);
     assert_eq!(w.lot_state().custodian_class, w.source);
 }
@@ -1810,10 +1810,7 @@ fn handover_rejects_arrived_batch() {
     w.depart(b1);
     w.depart(b2);
     w.arrive(b1);
-    assert_eq!(
-        w.shipment_state(shipment).status,
-        ShipmentStatus::InTransit
-    );
+    assert_eq!(w.shipment_state(shipment).status, ShipmentStatus::InTransit);
     // The destination custodian hands the arrived B1 to a Transporter.
     let args = w.handover_args(b1, Driver, w.transporter);
     assert_eq!(args.from_org, w.terminal);
@@ -1826,10 +1823,7 @@ fn handover_rejects_cancelled_shipment() {
     let (shipment, batch) = w.ship_demo();
     let cancel = w.cancel_instructions(shipment);
     w.f.sponsored_ok(&cancel);
-    assert_eq!(
-        w.shipment_state(shipment).status,
-        ShipmentStatus::Cancelled
-    );
+    assert_eq!(w.shipment_state(shipment).status, ShipmentStatus::Cancelled);
     let args = w.departure_args(batch);
     w.handover_refused(&args, ShipmentNotOpen);
 }
@@ -2206,12 +2200,14 @@ fn handover_size_fits_v0_widest() {
         demo_writable,
         readonly.clone(),
     );
-    let meta = w
-        .f
-        .send(tx)
-        .unwrap_or_else(|failure| panic!("{:?}\n{}", failure.err, failure.meta.pretty_logs()));
+    let meta =
+        w.f.send(tx)
+            .unwrap_or_else(|failure| panic!("{:?}\n{}", failure.err, failure.meta.pretty_logs()));
     let units = meta.compute_units_consumed;
-    assert!(units < u64::from(COMPUTE_UNIT_LIMIT), "handover used {units} CU");
+    assert!(
+        units < u64::from(COMPUTE_UNIT_LIMIT),
+        "handover used {units} CU"
+    );
     println!("handover v0 demo: {units} CU, {demo_size} bytes");
     assert_eq!(w.batch_state(batch).holder, w.transporter);
     w.assert_invariants();

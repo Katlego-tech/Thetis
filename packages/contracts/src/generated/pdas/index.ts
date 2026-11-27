@@ -16,6 +16,7 @@ export * from './childPosition.ts';
 export * from './childVaultAuthority.ts';
 export * from './facility.ts';
 export * from './fromVaultAuthority.ts';
+export * from './handover.ts';
 export * from './intake.ts';
 export * from './intent.ts';
 export * from './loan.ts';
