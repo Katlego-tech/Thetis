@@ -33,7 +33,7 @@ const LOOKUP_TABLE = "AddressLookupTab1e1111111111111111111111111";
 const SYSTEM = "11111111111111111111111111111111";
 const MAX_COMPUTE_UNITS = 400_000;
 
-/** The 14 Phase 2 instructions, from packages/contracts/idl/thetis.json (checked by the tests):
+/** The 14 Phase 2 instructions and the field kinds' (field-app.md §6.3), from packages/contracts/idl/thetis.json (checked by the tests):
  * the discriminator, the number of IDL accounts, the index of `protocol` and the slots named
  * `sponsor` or `payer`. An explicit list, so later kinds add entries (fold 7). */
 const SPONSORED: readonly {
@@ -140,6 +140,21 @@ const SPONSORED: readonly {
     accounts: 11,
     protocol: 1,
     sponsorSlots: [],
+  },
+  // The field kinds (field-app.md §6.3), one entry each as its instruction exists.
+  {
+    name: "issue_lot",
+    discriminator: [111, 135, 233, 181, 132, 0, 90, 138],
+    accounts: 20,
+    protocol: 1,
+    sponsorSlots: [0],
+  },
+  {
+    name: "handover",
+    discriminator: [171, 165, 76, 229, 206, 160, 51, 122],
+    accounts: 15,
+    protocol: 1,
+    sponsorSlots: [0],
   },
 ];
 

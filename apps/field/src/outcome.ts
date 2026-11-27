@@ -1,6 +1,6 @@
 // What a command's status means on screen. The only route to "issued" is a relay `confirmed`.
 import type { CommandView } from "./api/commands";
-import { failedCommandCopy } from "./copy";
+import { failedCommandCopy, transactionTooLargeCopy } from "./copy";
 import { formatSlot, formatTonnes } from "./format";
 import { markFor, type RegistryMark } from "./marks";
 
@@ -54,6 +54,14 @@ export function outcomeView(command: CommandView, ctx: OutcomeContext): OutcomeV
     case "awaiting_signatures":
       return { ...base, polling: true };
     case "expired":
+      // Renewing the same draft would build the same size, so the way on is Edit.
+      if (command.error?.code === "TRANSACTION_TOO_LARGE") {
+        return {
+          ...base,
+          lines: [transactionTooLargeCopy(command.error.detail)],
+          primary: "edit",
+        };
+      }
       return {
         ...base,
         lines: [`This text expired at ${ctx.signBefore}. Nothing was sent.`],

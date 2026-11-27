@@ -15,6 +15,15 @@ importers:
       '@biomejs/biome':
         specifier: 2.6.4
         version: 2.6.4
+      '@solana-program/address-lookup-table':
+        specifier: 0.16.0
+        version: 0.16.0(@solana/kit@8.6.0(typescript@7.0.2))
+      '@solana-program/compute-budget':
+        specifier: 0.20.0
+        version: 0.20.0(@solana/kit@8.6.0(typescript@7.0.2))
+      '@solana-program/token':
+        specifier: 0.16.1
+        version: 0.16.1(@solana/kit@8.6.0(typescript@7.0.2))
       '@solana/kit':
         specifier: 8.6.0
         version: 8.6.0(typescript@7.0.2)
@@ -281,6 +290,9 @@ importers:
       codama:
         specifier: 1.11.0
         version: 1.11.0
+      litesvm:
+        specifier: 1.6.1
+        version: 1.6.1(typescript@7.0.2)
 
   packages/domain: {}
 
