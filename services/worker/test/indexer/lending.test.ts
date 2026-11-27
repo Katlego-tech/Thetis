@@ -1,11 +1,13 @@
 // Phase 2: lending events and accounts into the read model (live-lending.md §4.1, §9.1).
 // Every history here is synthetic (fixtures/synthetic.ts, "The lending fixtures").
 
-import { createHash } from "node:crypto";
-import { AccountRole, type Address } from "@solana/kit";
+import type { Address } from "@solana/kit";
 import {
+  findAuthorityPda,
+  findIncidentPda,
   getAdvanceRecordedEventDecoder,
   getAdvanceRecordedEventEncoder,
+  getAttestShortfallInstruction,
   getLoanDecoder,
   getLoanEncoder,
   getPaymentConfirmedEventEncoder,
@@ -966,26 +968,42 @@ describe("Phase 2 lending", () => {
   });
 
   // T063d.5 replaces this case with set_restriction's or the next unhandled instruction once
-  // attest_shortfall is handled. Until the program builds it, attest_shortfall is not in the IDL, so its
-  // Anchor discriminator names no instruction (live-custody.md §9.3 and its T063d.4 pre-check fold 6).
+  // attest_shortfall is handled (live-custody.md §9.3 and its T063d.4 pre-check fold 6).
   it("halts with UNKNOWN_INSTRUCTION on its own instance's AttestShortfall, a Phase 3 instruction not yet handled", async () => {
     const scenario = await lendingHistory();
     const sponsor = await syntheticSigner(97);
-    const discriminator = createHash("sha256").update("global:attest_shortfall").digest();
+    // The indexer halts at decode, before it reads any account, so the inspector is a bare synthetic
+    // wallet; the instruction is the generated builder's (live-custody.md, T063d.4 pre-check fold 6).
+    const inspector = await syntheticSigner(98);
+    const [inspectorAuthority] = await findAuthorityPda({
+      protocol: scenario.protocol as Address,
+      wallet: inspector.address,
+    });
+    const incidentId = new Uint8Array(16).fill(0x25);
+    const [incident] = await findIncidentPda({
+      protocol: scenario.protocol as Address,
+      incidentId,
+    });
     const shortfall = thetisTransaction({
       signature: syntheticSignature(218),
       feePayer: sponsor.address,
       name: "AttestShortfall",
       events: [],
-      instruction: {
-        programAddress: PROGRAM as Address,
-        accounts: [
-          { address: sponsor.address, role: AccountRole.WRITABLE_SIGNER },
-          { address: scenario.protocol as Address, role: AccountRole.READONLY },
-          { address: scenario.lot as Address, role: AccountRole.WRITABLE },
-        ],
-        data: new Uint8Array([...discriminator.subarray(0, 8), ...new Uint8Array(8)]),
-      },
+      instruction: getAttestShortfallInstruction({
+        sponsor,
+        protocol: scenario.protocol as Address,
+        inspectorOrg: inspector.address,
+        inspectorAuthority,
+        lot: scenario.lot as Address,
+        incident,
+        incidentId,
+        observedKg: 4_900_000n,
+        toleranceBps: 50,
+        methodCode: "WEIGHBRIDGE",
+        evidenceDigest: new Uint8Array(32).fill(0x5f),
+        observedAt: 1_790_000_000n,
+        validUntil: 1_800_000_000n,
+      }),
     });
     const slot = lastSlot(scenario.history) + 1000;
     scenario.history.push({ slot, blockTime: null, transactions: [shortfall], accounts: {} });
@@ -993,7 +1011,7 @@ describe("Phase 2 lending", () => {
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
       signature: shortfall.signature,
-      mentions: ["discriminator no instruction carries"],
+      mentions: ["AttestShortfall, which is not handled"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });
