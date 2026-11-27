@@ -91,7 +91,7 @@ pub struct CancelShipment<'info> {
     pub instructions: UncheckedAccount<'info>,
 }
 
-fn require_top_level() -> Result<()> {
+pub(crate) fn require_top_level() -> Result<()> {
     require_eq!(
         get_stack_height(),
         TRANSACTION_LEVEL_STACK_HEIGHT,
@@ -101,7 +101,7 @@ fn require_top_level() -> Result<()> {
 }
 
 /// The custody signing window: not expired, and at most 600 s ahead.
-fn check_custody_window(now: i64, valid_until: i64) -> Result<()> {
+pub(crate) fn check_custody_window(now: i64, valid_until: i64) -> Result<()> {
     require!(now <= valid_until, ThetisError::Expired);
     let window = valid_until
         .checked_sub(now)
@@ -110,12 +110,12 @@ fn check_custody_window(now: i64, valid_until: i64) -> Result<()> {
     Ok(())
 }
 
-fn add(a: u64, b: u64) -> Result<u64> {
+pub(crate) fn add(a: u64, b: u64) -> Result<u64> {
     a.checked_add(b)
         .ok_or_else(|| error!(ThetisError::ArithmeticOverflow))
 }
 
-fn sub(a: u64, b: u64) -> Result<u64> {
+pub(crate) fn sub(a: u64, b: u64) -> Result<u64> {
     a.checked_sub(b)
         .ok_or_else(|| error!(ThetisError::ArithmeticOverflow))
 }

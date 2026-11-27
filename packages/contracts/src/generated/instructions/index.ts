@@ -17,6 +17,7 @@ export * from './createReleaseIntent.ts';
 export * from './declareRelationship.ts';
 export * from './delegateAuthority.ts';
 export * from './deposit.ts';
+export * from './handover.ts';
 export * from './initializeProtocol.ts';
 export * from './issueLot.ts';
 export * from './liquidate.ts';

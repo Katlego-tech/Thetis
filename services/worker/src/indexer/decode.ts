@@ -151,6 +151,7 @@ export const PROTOCOL_ACCOUNT_POSITION: Readonly<Record<InstructionName, number>
   CancelShipment: 1,
   CloseLoan: 1,
   CreateReleaseIntent: 1,
+  Handover: 1,
   IssueLot: 1,
   Liquidate: 1,
   Pledge: 1,
