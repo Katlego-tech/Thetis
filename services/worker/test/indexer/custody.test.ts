@@ -1,17 +1,28 @@
-// Phase 3, the shipment and handover parts: shipments, batches, Departure documents, intent
-// cancellation and custody handovers into the read model (live-custody.md §4.1, §9.1 tests 0–11 and
-// 13–17, its T063d.1 and T063d.2 pre-check folds). Every history here is synthetic
+// Phase 3, the shipment, handover, observation and loading parts: shipments, batches, Departure
+// documents, intent cancellation, custody handovers, observations, loading intents, acceptances and
+// the loading with its loan hand-offs into the read model (live-custody.md §4.1, §9.1 tests 0–11,
+// 13–16, 18, 19 and 21–25, its T063d.1–T063d.4 pre-check folds). Every history here is synthetic
 // (fixtures/custody.ts).
 
 import { readFileSync } from "node:fs";
 import { type Address, getAddressEncoder, getBase58Decoder } from "@solana/kit";
 import {
   findAuthorityPda,
+  findIncidentPda,
+  getAttestShortfallInstruction,
   getBatchRegisteredEventDecoder,
   getBatchRegisteredEventEncoder,
-  getCreateLoadingIntentInstruction,
   getCustodyHandedOverEventDecoder,
   getCustodyHandedOverEventEncoder,
+  getHandoffAcceptanceDecoder,
+  getHandoffAcceptanceEncoder,
+  getLoadingAcceptedEventDecoder,
+  getLoadingAcceptedEventEncoder,
+  getLoadingRecordedEventDecoder,
+  getLoadingRecordedEventEncoder,
+  getLoanDecoder,
+  getLoanHandedOffEventDecoder,
+  getLoanHandedOffEventEncoder,
   getManifestBatchDecoder,
   getManifestBatchEncoder,
   getObservationRecordedEventDecoder,
@@ -31,12 +42,13 @@ import {
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import { HANDLED_EVENTS, HANDLED_INSTRUCTIONS } from "../../src/indexer/decode.ts";
-import type { memoryStore, ReadModelStore } from "../../src/indexer/store.ts";
+import { type ApplyBatch, memoryStore, type ReadModelStore } from "../../src/indexer/store.ts";
 import {
   batchLeaf,
   type CustodyScenario,
   type CustodyStep,
   custodyHistory,
+  loadingHistory,
   manifestProof,
   manifestRoot,
   routeHistory,
@@ -60,6 +72,7 @@ import {
 const IDL = new URL("../../../../packages/contracts/idl/thetis.json", import.meta.url);
 const CUSTODY_TABLES = ["chain_shipments", "chain_batches"];
 const HANDOVER_TABLE = "chain_handovers";
+const LOADING_TABLES = ["chain_loading_intents", "chain_handoff_acceptances"];
 const LENDING_TABLES = [
   "chain_facilities",
   "chain_valuations",
@@ -87,7 +100,7 @@ function allCounts(store: ReadModelStore) {
   return {
     ...counts(store),
     ...Object.fromEntries(
-      [...LENDING_TABLES, ...CUSTODY_TABLES, HANDOVER_TABLE].map((table) => [
+      [...LENDING_TABLES, ...CUSTODY_TABLES, HANDOVER_TABLE, ...LOADING_TABLES].map((table) => [
         table,
         rows(store, table).length,
       ]),
@@ -239,43 +252,30 @@ describe("Phase 3 custody, the shipment part", () => {
     );
   });
 
-  it("1. handles every instruction and event of the IDL it is built on, but loading, shortfalls and restrictions", () => {
-    // The IDL at main has 39 instructions and 40 events; this slice handles all but the three
-    // loading instructions and their four events (live-custody.md, T063d.3 pre-check fold 3),
-    // and attest_shortfall and set_restriction with their two events, which are not indexed yet.
+  it("1. handles every instruction and event of the IDL it is built on, but shortfalls and restrictions", () => {
+    // The IDL at main has 39 instructions and 40 events; this slice handles all but
+    // attest_shortfall and set_restriction and their two events, which T063d.5 indexes
+    // (live-custody.md, T063d.4 pre-check fold 5).
     const idl = JSON.parse(readFileSync(IDL, "utf8")) as {
       instructions: { name: string }[];
       events: { name: string }[];
     };
     expect(idl.instructions).toHaveLength(39);
     expect(idl.events).toHaveLength(40);
-    const unhandledInstructions = [
-      "CreateLoadingIntent",
-      "AcceptLoading",
-      "RecordLoading",
-      "AttestShortfall",
-      "SetRestriction",
-    ];
-    const unhandledEvents = [
-      "LoadingIntentCreated",
-      "LoadingAccepted",
-      "LoadingRecorded",
-      "LoanHandedOff",
-      "ShortfallAttested",
-      "RestrictionSet",
-    ];
+    const unhandledInstructions = ["AttestShortfall", "SetRestriction"];
+    const unhandledEvents = ["ShortfallAttested", "RestrictionSet"];
     const instructions = idl.instructions.map((entry) => pascal(entry.name));
     for (const name of unhandledInstructions) expect(instructions).toContain(name);
     expect([...HANDLED_INSTRUCTIONS].sort()).toEqual(
       instructions.filter((name) => !unhandledInstructions.includes(name)).sort(),
     );
-    expect(HANDLED_INSTRUCTIONS).toHaveLength(34);
+    expect(HANDLED_INSTRUCTIONS).toHaveLength(37);
     const eventNames = idl.events.map((entry) => entry.name);
     for (const name of unhandledEvents) expect(eventNames).toContain(name);
     expect([...HANDLED_EVENTS].sort()).toEqual(
       eventNames.filter((name) => !unhandledEvents.includes(name)).sort(),
     );
-    expect(HANDLED_EVENTS).toHaveLength(34);
+    expect(HANDLED_EVENTS).toHaveLength(38);
   });
 
   it("2. indexes the shipment history with one row per shipment revision, lot revision, registration and created account", async () => {
@@ -1326,39 +1326,621 @@ describe("Phase 3 custody, the shipment part", () => {
     expect((await second.checkpoint())?.indexedThroughSlot).toBe(lastSlot(repeated.history) - 1000);
   });
 
-  it("20. halts with UNKNOWN_INSTRUCTION on its own instance's create_loading_intent until T063d.4", async () => {
-    const scenario = await routeHistory();
+  it("21. indexes the loading: units burned, the loan handed off with its debt, the intent executed", async () => {
+    const scenario = await loadingHistory();
+    const h = await harness(scenario.history);
+    await h.pollUntilLive();
+    const intent = scenario.loadingIntent as string;
+    const acceptance = scenario.acceptance as string;
+    const created = step(scenario, "createLoadingIntent");
+    const accepted = step(scenario, "acceptLoading");
+    const loaded = step(scenario, "recordLoading");
+    const khunou = await orgId("khunou");
+    const port = await orgId("port-t1");
+    const lender = await orgId("lender-one");
+
+    // Three loading transactions and four events beyond the route's 27 and 26.
+    expect(allCounts(h.store)).toMatchObject({
+      chain_transactions: 30,
+      chain_events: 30,
+      chain_loading_intents: 1,
+      chain_handoff_acceptances: 1,
+      chain_loans: 1,
+    });
+    expect(keysOf(h.store, "lot", "lot_revision", scenario.lot)).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+    ]);
+    expect(keysOf(h.store, "loan", "loan_revision", scenario.loan)).toEqual(["0", "1", "2"]);
+    expect(keysOf(h.store, "acceptance", "acceptance_version", acceptance)).toEqual(["1"]);
+
+    expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({
+      state: "Loaded",
+      supply_kg: "0",
+      revision: "6",
+      event_revision: "6",
+      custodian_class: scenario.classes.port,
+    });
+    expect(row(h.store, "chain_intakes", scenario.intake)).toMatchObject({ retired: true });
+    expect(row(h.store, "chain_positions", scenario.position)).toMatchObject({
+      quantity_kg: "0",
+      locked_kg: "0",
+      revision: "5",
+    });
+    expect(row(h.store, "chain_custodian_classes", scenario.classes.port)).toMatchObject({
+      occupied_kg: "0",
+      reserved_inbound_kg: "0",
+    });
+    const loan = lastState(scenario.history, scenario.loan, getLoanDecoder());
+    expect(loan.bookedInterest > 0n).toBe(true);
+    expect(row(h.store, "chain_loans", scenario.loan)).toMatchObject({
+      status: "ExternalHandoff",
+      principal: "60000000",
+      booked_interest: String(loan.bookedInterest),
+      accrued_at: String(unixOf(loaded.blockTime)),
+      revision: "2",
+      event_revision: "2",
+    });
+    expect(row(h.store, "chain_locks", scenario.lock)).toMatchObject({ quantity_kg: "0" });
+    expect(row(h.store, "chain_loading_intents", intent)).toMatchObject({
+      lot: scenario.lot,
+      position: scenario.position,
+      owner: scenario.org("khunou"),
+      owner_org_id: khunou,
+      terminal: scenario.org("port-t1"),
+      terminal_org_id: port,
+      custodian_class: scenario.classes.port,
+      nonce: "1",
+      quantity_kg: "5000000",
+      locked_kg: "5000000",
+      document_sha256_hex: "aa".repeat(32),
+      position_revision: "4",
+      expires_at: String(unixOf(created.blockTime) + 86_400),
+      status: "Executed",
+      executed_at: String(unixOf(loaded.blockTime)),
+      cancelled_by: null,
+    });
+    expect(row(h.store, "chain_handoff_acceptances", acceptance)).toMatchObject({
+      intent,
+      loan: scenario.loan,
+      lock: scenario.lock,
+      lender: scenario.org("lender-one"),
+      lender_org_id: lender,
+      lock_quantity_kg: "5000000",
+      loan_revision: "1",
+      principal: "60000000",
+      accepted_at: String(unixOf(accepted.blockTime)),
+      version: 1,
+      event_version: 1,
+    });
+
+    const noCustody = {
+      shipment: null,
+      shipment_revision: null,
+      batch: null,
+      batch_sequence: null,
+      observation_index: null,
+    };
+    const named = (event: string) => events(h.store).filter((entry) => entry.event === event);
+    expect(named("LoadingIntentCreated")).toEqual([
+      expect.objectContaining({
+        ...noCustody,
+        signature: created.signature,
+        instruction: "CreateLoadingIntent",
+        scope: "loading",
+        lot: null,
+        lot_revision: null,
+        org_id: null,
+        facility: null,
+        loan: null,
+        created: intent,
+        acceptance: null,
+        acceptance_version: null,
+        data: expect.objectContaining({ intent, positionRevision: "4", lockedKg: "5000000" }),
+      }),
+    ]);
+    expect(named("LoadingAccepted")).toEqual([
+      expect.objectContaining({
+        ...noCustody,
+        signature: accepted.signature,
+        instruction: "AcceptLoading",
+        scope: "facility",
+        lot: null,
+        facility: scenario.facility,
+        loan: scenario.loan,
+        loan_revision: null,
+        created: null,
+        acceptance,
+        acceptance_version: 1,
+      }),
+    ]);
+    expect(named("LoadingRecorded")).toEqual([
+      expect.objectContaining({
+        ...noCustody,
+        signature: loaded.signature,
+        event_index: 0,
+        instruction: "RecordLoading",
+        scope: "lot",
+        lot: scenario.lot,
+        lot_revision: "6",
+        facility: null,
+        loan: null,
+        created: null,
+        acceptance: null,
+        data: expect.objectContaining({ loansAccepted: 1, lotLoaded: true, quantityKg: "5000000" }),
+      }),
+    ]);
+    expect(named("LoanHandedOff")).toEqual([
+      expect.objectContaining({
+        ...noCustody,
+        signature: loaded.signature,
+        event_index: 1,
+        instruction: "RecordLoading",
+        scope: "facility",
+        lot: null,
+        lot_revision: null,
+        facility: scenario.facility,
+        loan: scenario.loan,
+        loan_revision: "2",
+        created: null,
+        acceptance: null,
+        data: expect.objectContaining({
+          loan: scenario.loan,
+          intent,
+          releasedKg: "5000000",
+          principal: "60000000",
+          bookedInterest: String(loan.bookedInterest),
+          externalHandoff: true,
+          revision: "2",
+        }),
+      }),
+    ]);
+    const tx = rows(h.store, "chain_transactions").find(
+      (entry) => entry.signature === loaded.signature,
+    );
+    expect(tx?.event_count).toBe(2);
+
+    // Replayed from the first signature, every transaction and event is written once.
+    const again = await harness(scenario.history);
+    await again.pollUntilLive();
+    expect(allCounts(again.store)).toEqual(allCounts(h.store));
+  });
+
+  it("21a. indexes a two-loan loading: each LoanHandedOff projects to its own triple's loan and lock", async () => {
+    // Lender One's loans 0 (3,000,000 kg) and 1 (2,000,000 kg), triples in ascending loan key order
+    // (loading.rs step 7): the i-th LoanHandedOff is event i + 1, its loan remaining[3i + 1] and its
+    // lock remaining[3i + 2] (T063d.4 pre-check fold 4).
+    const scenario = await loadingHistory({ twoLoans: true });
+    // The store records each batch: the chain serves an account's latest state, so the rows alone
+    // cannot show which transaction read a lock.
+    const store = memoryStore(await seedOrganisations());
+    const apply = store.apply.bind(store);
+    const applied: ApplyBatch[] = [];
+    store.apply = async (batch) => {
+      applied.push(structuredClone(batch));
+      return apply(batch);
+    };
+    const h = await harness(scenario.history, { store });
+    await h.pollUntilLive();
+    const loaded = step(scenario, "recordLoading");
+    const remaining = (stepTx(scenario, "recordLoading").instructions[0]?.accounts ?? [])
+      .slice(-6)
+      .map((account) => account.address);
+    expect(remaining).toHaveLength(6);
+    const triples = [0, 1].map((i) => ({
+      acceptance: remaining[3 * i],
+      loan: remaining[3 * i + 1],
+      lock: remaining[3 * i + 2],
+    }));
+    const pairs = [
+      {
+        loan: scenario.loan,
+        lock: scenario.lock,
+        acceptance: scenario.acceptance,
+        kg: "3000000",
+        principal: "30000000",
+      },
+      {
+        loan: scenario.loan2,
+        lock: scenario.lock2,
+        acceptance: scenario.acceptance2,
+        kg: "2000000",
+        principal: "20000000",
+      },
+    ];
+    // The order is the loans' key order, which the fixture sorts by; the test reads it from the triples.
+    const ordered = triples.map((triple) => pairs.find((pair) => pair.loan === triple.loan));
+    expect(ordered.map((pair) => pair?.lock)).toEqual(triples.map((triple) => triple.lock));
+    expect(ordered.map((pair) => pair?.acceptance)).toEqual(
+      triples.map((triple) => triple.acceptance),
+    );
+    expect(new Set(triples.map((triple) => triple.loan)).size).toBe(2);
+    // The loading's batch reads both triples' loans and locks: hand-off i fetches remaining[3i + 1]
+    // and remaining[3i + 2].
+    const loading = applied.filter((batch) =>
+      batch.transactions.some((entry) => entry.signature === loaded.signature),
+    );
+    expect(loading).toHaveLength(1);
+    const read = (table: string) =>
+      (loading[0]?.upserts ?? [])
+        .filter((entry) => entry.table === table)
+        .map((entry) => entry.row.address)
+        .sort();
+    expect(read("chain_loans")).toEqual(triples.map((triple) => triple.loan).sort());
+    expect(read("chain_locks")).toEqual(triples.map((triple) => triple.lock).sort());
+
+    expect(allCounts(h.store)).toMatchObject({
+      chain_handoff_acceptances: 2,
+      chain_loans: 2,
+      chain_locks: 2,
+    });
+    for (const pair of pairs) {
+      const loan = pair.loan as string;
+      const decoded = lastState(scenario.history, loan, getLoanDecoder());
+      expect(decoded.bookedInterest > 0n, loan).toBe(true);
+      expect(keysOf(h.store, "loan", "loan_revision", loan), loan).toEqual(["0", "1", "2"]);
+      expect(row(h.store, "chain_loans", loan), loan).toMatchObject({
+        status: "ExternalHandoff",
+        principal: pair.principal,
+        booked_interest: String(decoded.bookedInterest),
+        revision: "2",
+        event_revision: "2",
+      });
+      // The lock is read only through its hand-off: a hand-off fetching another triple's lock
+      // would leave this one at its pledged quantity.
+      expect(row(h.store, "chain_locks", pair.lock as string), loan).toMatchObject({
+        loan,
+        quantity_kg: "0",
+      });
+      expect(
+        row(h.store, "chain_handoff_acceptances", pair.acceptance as string),
+        loan,
+      ).toMatchObject({
+        loan,
+        lock: pair.lock,
+        lock_quantity_kg: pair.kg,
+        principal: pair.principal,
+      });
+    }
+    expect(row(h.store, "chain_positions", scenario.position)).toMatchObject({
+      quantity_kg: "0",
+      locked_kg: "0",
+    });
+    expect(row(h.store, "chain_loading_intents", scenario.loadingIntent as string)).toMatchObject({
+      status: "Executed",
+      locked_kg: "5000000",
+    });
+
+    const handOffs = events(h.store).filter((entry) => entry.event === "LoanHandedOff");
+    expect(handOffs).toEqual(
+      ordered.map((pair, i) =>
+        expect.objectContaining({
+          signature: loaded.signature,
+          event_index: i + 1,
+          scope: "facility",
+          facility: scenario.facility,
+          loan: pair?.loan,
+          loan_revision: "2",
+          data: expect.objectContaining({
+            loan: pair?.loan,
+            releasedKg: pair?.kg,
+            principal: pair?.principal,
+            externalHandoff: true,
+          }),
+        }),
+      ),
+    );
+    expect(events(h.store).find((entry) => entry.event === "LoadingRecorded")?.data).toMatchObject({
+      loansAccepted: 2,
+    });
+  });
+
+  it("21b. a loading of a loan that owes nothing leaves it Active: no loan reaches ExternalHandoff", async () => {
+    // No advance: principal and booked interest stay 0, so record_loading hands the loan off with
+    // externalHandoff false and leaves it Active with a zero lock (loading.rs step 9).
+    const scenario = await loadingHistory({ noAdvance: true });
+    const h = await harness(scenario.history);
+    await h.pollUntilLive();
+    const loaded = step(scenario, "recordLoading");
+    expect(keysOf(h.store, "loan", "loan_revision", scenario.loan)).toEqual(["0", "1"]);
+    expect(row(h.store, "chain_loans", scenario.loan)).toMatchObject({
+      status: "Active",
+      principal: "0",
+      booked_interest: "0",
+      revision: "1",
+      event_revision: "1",
+    });
+    expect(
+      rows(h.store, "chain_loans").filter((entry) => entry.status === "ExternalHandoff"),
+    ).toEqual([]);
+    expect(row(h.store, "chain_locks", scenario.lock)).toMatchObject({ quantity_kg: "0" });
+    expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({ state: "Loaded" });
+    expect(row(h.store, "chain_loading_intents", scenario.loadingIntent as string)).toMatchObject({
+      status: "Executed",
+    });
+    expect(events(h.store).filter((entry) => entry.event === "LoanHandedOff")).toEqual([
+      expect.objectContaining({
+        signature: loaded.signature,
+        event_index: 1,
+        loan: scenario.loan,
+        loan_revision: "1",
+        data: expect.objectContaining({
+          releasedKg: "5000000",
+          principal: "0",
+          bookedInterest: "0",
+          externalHandoff: false,
+        }),
+      }),
+    ]);
+  });
+
+  it("22. halts with EVENT_MISMATCH when record_loading's events don't match its triples or loans_accepted", async () => {
+    const cases: { name: string; edit: (scenario: CustodyScenario) => void; mentions: string[] }[] =
+      [
+        {
+          name: "a triple short of its lock",
+          edit: (scenario) => {
+            stepTx(scenario, "recordLoading").instructions[0]?.accounts.pop();
+          },
+          mentions: ["record_loading names 2 remaining accounts"],
+        },
+        {
+          name: "loans_accepted 2 for one triple",
+          edit: (scenario) =>
+            rewriteEvent(
+              stepTx(scenario, "recordLoading"),
+              0,
+              getLoadingRecordedEventDecoder(),
+              getLoadingRecordedEventEncoder(),
+              (value) => ({ ...value, loansAccepted: 2 }),
+            ),
+          mentions: ["loansAccepted"],
+        },
+        {
+          name: "no LoanHandedOff",
+          edit: (scenario) => {
+            const tx = stepTx(scenario, "recordLoading");
+            const last = (tx.logs ?? []).findLastIndex((line) => line.startsWith("Program data: "));
+            tx.logs?.splice(last, 1);
+          },
+          mentions: ["RecordLoading emitted [LoadingRecorded]"],
+        },
+        {
+          name: "a LoanHandedOff of another loan",
+          edit: (scenario) =>
+            rewriteEvent(
+              stepTx(scenario, "recordLoading"),
+              1,
+              getLoanHandedOffEventDecoder(),
+              getLoanHandedOffEventEncoder(),
+              (value) => ({ ...value, loan: scenario.lock as Address }),
+            ),
+          mentions: ["LoanHandedOff.loan"],
+        },
+        {
+          name: "a LoanHandedOff of another intent",
+          edit: (scenario) =>
+            rewriteEvent(
+              stepTx(scenario, "recordLoading"),
+              1,
+              getLoanHandedOffEventDecoder(),
+              getLoanHandedOffEventEncoder(),
+              (value) => ({ ...value, intent: scenario.acceptance as Address }),
+            ),
+          mentions: ["LoanHandedOff.intent"],
+        },
+      ];
+    for (const { name, edit, mentions } of cases) {
+      const scenario = await loadingHistory();
+      edit(scenario);
+      const h = await harness(scenario.history);
+      const loaded = step(scenario, "recordLoading");
+      const checkpoint = await expectHalt(h, await h.poll(), "EVENT_MISMATCH", {
+        step: "decode",
+        signature: loaded.signature,
+        mentions,
+      });
+      expect(checkpoint?.halt?.detail, name).toContain("RecordLoading");
+      expect((await h.checkpoint())?.indexedThroughSlot, name).toBe(loaded.slot - 1000);
+    }
+  });
+
+  it("22a. halts with EVENT_MISMATCH and writes nothing when a two-loan loading's LoanHandedOff events are swapped", async () => {
+    const scenario = await loadingHistory({ twoLoans: true });
+    const tx = stepTx(scenario, "recordLoading");
+    const lines = tx.logs ?? [];
+    const data = lines.flatMap((line, index) => (line.startsWith("Program data: ") ? [index] : []));
+    expect(data).toHaveLength(3);
+    const [, first, second] = data as [number, number, number];
+    [lines[first], lines[second]] = [lines[second] as string, lines[first] as string];
+    const h = await harness(scenario.history);
+    const loaded = step(scenario, "recordLoading");
+    const checkpoint = await expectHalt(h, await h.poll(), "EVENT_MISMATCH", {
+      step: "decode",
+      signature: loaded.signature,
+      mentions: ["LoanHandedOff.loan", "RecordLoading"],
+    });
+    expect(checkpoint?.halt?.detail).toContain("triple 0");
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(loaded.slot - 1000);
+    // Nothing of the loading is written: no transaction, no event, no loan or lot key of its own.
+    expect(
+      rows(h.store, "chain_transactions").filter((entry) => entry.signature === loaded.signature),
+    ).toEqual([]);
+    expect(events(h.store).filter((entry) => entry.signature === loaded.signature)).toEqual([]);
+    for (const loan of [scenario.loan, scenario.loan2 as string]) {
+      expect(keysOf(h.store, "loan", "loan_revision", loan), loan).toEqual(["0", "1"]);
+    }
+    expect(keysOf(h.store, "lot", "lot_revision", scenario.lot)).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+    ]);
+  });
+
+  it("23. a re-acceptance advances the acceptance version and a skipped version halts", async () => {
+    const scenario = await loadingHistory({ reaccept: true });
+    const h = await harness(scenario.history);
+    await h.pollUntilLive();
+    const acceptance = scenario.acceptance as string;
+    const reaccepted = step(scenario, "reacceptLoading");
+    expect(keysOf(h.store, "acceptance", "acceptance_version", acceptance)).toEqual(["1", "2"]);
+    expect(row(h.store, "chain_handoff_acceptances", acceptance)).toMatchObject({
+      version: 2,
+      event_version: 2,
+      accepted_at: String(unixOf(reaccepted.blockTime)),
+      last_signature: null,
+      commitment: "finalized",
+    });
+    expect(row(h.store, "chain_loading_intents", scenario.loadingIntent as string)).toMatchObject({
+      status: "Executed",
+    });
+
+    // Version 3 after a stored 1: skipped.
+    const skipped = await loadingHistory({ reaccept: true });
+    rewriteEvent(
+      stepTx(skipped, "reacceptLoading"),
+      0,
+      getLoadingAcceptedEventDecoder(),
+      getLoadingAcceptedEventEncoder(),
+      (value) => ({ ...value, version: 3 }),
+    );
+    const second = await harness(skipped.history);
+    await expectHalt(second, await second.poll(), "REVISION_SEQUENCE", {
+      step: "sequence",
+      signature: null,
+      mentions: [`acceptance ${skipped.acceptance}`],
+    });
+    expect((await second.checkpoint())?.indexedThroughSlot).toBe(
+      step(skipped, "reacceptLoading").slot - 1000,
+    );
+
+    // A first acceptance at version 2: no stored row to advance.
+    const gap = await loadingHistory();
+    rewriteEvent(
+      stepTx(gap, "acceptLoading"),
+      0,
+      getLoadingAcceptedEventDecoder(),
+      getLoadingAcceptedEventEncoder(),
+      (value) => ({ ...value, version: 2 }),
+    );
+    const third = await harness(gap.history);
+    await expectHalt(third, await third.poll(), "EVENT_GAP", {
+      step: "sequence",
+      signature: null,
+      mentions: [`acceptance ${gap.acceptance}`],
+    });
+
+    // Version 1 again in a later slot, once the acceptance is stored.
+    const repeated = await loadingHistory();
+    repeatLater(repeated, "acceptLoading", 254);
+    const fourth = await harness(repeated.history);
+    await expectHalt(fourth, await fourth.poll(), "REVISION_SEQUENCE", {
+      step: "sequence",
+      signature: null,
+      mentions: [`acceptance ${repeated.acceptance}`],
+    });
+
+    // Reconcile: an acceptance whose version moves with no event the indexer could see.
+    const moved = await loadingHistory();
+    moveWithoutEvent(
+      moved.history,
+      moved.acceptance as string,
+      getHandoffAcceptanceDecoder(),
+      getHandoffAcceptanceEncoder(),
+      (value) => ({ ...value, version: value.version + 1 }),
+    );
+    const fifth = await harness(moved.history);
+    await expectHalt(fifth, await pollToHalt(fifth.poll), "EVENT_GAP", {
+      step: "reconcile",
+      signature: null,
+      mentions: [moved.acceptance as string],
+    });
+    expect(row(fifth.store, "chain_handoff_acceptances", moved.acceptance as string)).toMatchObject(
+      {
+        version: 2,
+        event_version: 1,
+      },
+    );
+  });
+
+  it("24. marks an open loading intent cancelled by the next shipment of its position", async () => {
+    const scenario = await loadingHistory({ ship: true });
+    const h = await harness(scenario.history);
+    await h.pollUntilLive();
+    const s3 = scenario.shipments.s3 as string;
+    expect(row(h.store, "chain_loading_intents", scenario.loadingIntent as string)).toMatchObject({
+      status: "Open",
+      position_revision: "4",
+      executed_at: null,
+      cancelled_by: s3,
+      commitment: "finalized",
+    });
+    expect(row(h.store, "chain_shipments", s3)).toMatchObject({
+      status: "Prepared",
+      source: scenario.classes.port,
+      destination: scenario.classes.kopano,
+    });
+    expect(row(h.store, "chain_lots", scenario.lot)).toMatchObject({
+      state: "Prepared",
+      event_revision: "6",
+    });
+    // The release intent keeps the mark S1 gave it.
+    expect(row(h.store, "chain_release_intents", scenario.intents[0] as string)).toMatchObject({
+      cancelled_by: scenario.shipments.s1,
+    });
+  });
+
+  it("25. halts with UNKNOWN_INSTRUCTION on its own instance's attest_shortfall until T063d.5", async () => {
+    const scenario = await loadingHistory();
     const sponsor = await syntheticSigner(97);
-    const other = async (n: number) => (await syntheticSigner(n)).address;
-    const intent = thetisTransaction({
+    // The indexer halts at decode, before it reads any account, so the inspector is a bare synthetic
+    // wallet; the instruction is the generated builder's (live-custody.md, T063d.4 pre-check fold 6).
+    const inspector = await syntheticSigner(98);
+    const [inspectorAuthority] = await findAuthorityPda({
+      protocol: scenario.protocol as Address,
+      wallet: inspector.address,
+    });
+    const incidentId = new Uint8Array(16).fill(0x25);
+    const [incident] = await findIncidentPda({
+      protocol: scenario.protocol as Address,
+      incidentId,
+    });
+    const shortfall: FakeTransaction = thetisTransaction({
       signature: syntheticSignature(254),
       feePayer: sponsor.address,
-      name: "CreateLoadingIntent",
+      name: "AttestShortfall",
       events: [],
-      instruction: getCreateLoadingIntentInstruction({
+      instruction: getAttestShortfallInstruction({
         sponsor,
         protocol: scenario.protocol as Address,
-        ownerOrg: scenario.org("khunou") as Address,
-        ownerAuthority: await other(96),
+        inspectorOrg: inspector.address,
+        inspectorAuthority,
         lot: scenario.lot as Address,
-        position: scenario.position as Address,
-        custodianClass: scenario.classes.port as Address,
-        terminalOrg: scenario.org("port-t1") as Address,
-        intent: await other(95),
-        nonce: 1n,
-        documentSha256: new Uint8Array(32).fill(0xaa),
-        expiresAt: 1_800_000_000n,
-        expectedRevision: 0n,
+        incident,
+        incidentId,
+        observedKg: 4_900_000n,
+        toleranceBps: 50,
+        methodCode: "WEIGHBRIDGE",
+        evidenceDigest: new Uint8Array(32).fill(0x5f),
+        observedAt: 1_790_000_000n,
         validUntil: 1_800_000_000n,
       }),
     });
     const slot = lastSlot(scenario.history) + 1000;
-    scenario.history.push({ slot, blockTime: null, transactions: [intent], accounts: {} });
+    scenario.history.push({ slot, blockTime: null, transactions: [shortfall], accounts: {} });
     const h = await harness(scenario.history);
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
-      signature: intent.signature,
-      mentions: ["CreateLoadingIntent", "not handled"],
+      signature: shortfall.signature,
+      mentions: ["AttestShortfall, which is not handled"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });

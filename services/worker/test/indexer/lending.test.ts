@@ -3,9 +3,11 @@
 
 import type { Address } from "@solana/kit";
 import {
+  findAuthorityPda,
+  findIncidentPda,
   getAdvanceRecordedEventDecoder,
   getAdvanceRecordedEventEncoder,
-  getCreateLoadingIntentInstruction,
+  getAttestShortfallInstruction,
   getLoanDecoder,
   getLoanEncoder,
   getPaymentConfirmedEventEncoder,
@@ -965,41 +967,51 @@ describe("Phase 2 lending", () => {
     }
   });
 
-  // T063d.4 replaces this case with the next unhandled Phase 3 instruction once create_loading_intent
-  // is handled (live-custody.md §9.3 and its T063d.3 pre-check fold 4).
-  it("halts with UNKNOWN_INSTRUCTION on its own instance's CreateLoadingIntent, a Phase 3 instruction not yet handled", async () => {
+  // T063d.5 replaces this case with set_restriction's or the next unhandled instruction once
+  // attest_shortfall is handled (live-custody.md §9.3 and its T063d.4 pre-check fold 6).
+  it("halts with UNKNOWN_INSTRUCTION on its own instance's AttestShortfall, a Phase 3 instruction not yet handled", async () => {
     const scenario = await lendingHistory();
     const sponsor = await syntheticSigner(97);
-    const other = async (n: number) => (await syntheticSigner(n)).address;
-    const prepare = thetisTransaction({
+    // The indexer halts at decode, before it reads any account, so the inspector is a bare synthetic
+    // wallet; the instruction is the generated builder's (live-custody.md, T063d.4 pre-check fold 6).
+    const inspector = await syntheticSigner(98);
+    const [inspectorAuthority] = await findAuthorityPda({
+      protocol: scenario.protocol as Address,
+      wallet: inspector.address,
+    });
+    const incidentId = new Uint8Array(16).fill(0x25);
+    const [incident] = await findIncidentPda({
+      protocol: scenario.protocol as Address,
+      incidentId,
+    });
+    const shortfall = thetisTransaction({
       signature: syntheticSignature(218),
       feePayer: sponsor.address,
-      name: "CreateLoadingIntent",
+      name: "AttestShortfall",
       events: [],
-      instruction: getCreateLoadingIntentInstruction({
+      instruction: getAttestShortfallInstruction({
         sponsor,
         protocol: scenario.protocol as Address,
-        ownerOrg: scenario.org("khunou") as Address,
-        ownerAuthority: await other(96),
+        inspectorOrg: inspector.address,
+        inspectorAuthority,
         lot: scenario.lot as Address,
-        position: await other(91),
-        custodianClass: await other(90),
-        terminalOrg: await other(94),
-        intent: await other(95),
-        nonce: 1n,
-        documentSha256: new Uint8Array(32).fill(0x52),
-        expiresAt: 1_800_000_000n,
-        expectedRevision: 0n,
+        incident,
+        incidentId,
+        observedKg: 4_900_000n,
+        toleranceBps: 50,
+        methodCode: "WEIGHBRIDGE",
+        evidenceDigest: new Uint8Array(32).fill(0x5f),
+        observedAt: 1_790_000_000n,
         validUntil: 1_800_000_000n,
       }),
     });
     const slot = lastSlot(scenario.history) + 1000;
-    scenario.history.push({ slot, blockTime: null, transactions: [prepare], accounts: {} });
+    scenario.history.push({ slot, blockTime: null, transactions: [shortfall], accounts: {} });
     const h = await harness(scenario.history);
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
-      signature: prepare.signature,
-      mentions: ["CreateLoadingIntent", "not handled"],
+      signature: shortfall.signature,
+      mentions: ["AttestShortfall, which is not handled"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });

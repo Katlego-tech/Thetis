@@ -26,7 +26,9 @@ export type ProjectionTable =
   | "chain_pool_shares"
   | "chain_shipments"
   | "chain_batches"
-  | "chain_handovers";
+  | "chain_handovers"
+  | "chain_loading_intents"
+  | "chain_handoff_acceptances";
 export type JsonValue =
   | string
   | number
@@ -94,7 +96,7 @@ export interface ReadModelStore {
   reset(stream: Stream): Promise<HaltRecord>;
   /**
    * The stream's rows of `table` whose `column` is one of `values`, keyed by address
-   * (live-custody.md §6.3). `chain_loading_intents` is only passed once its table exists.
+   * (live-custody.md §6.3).
    */
   rowsByColumn(
     stream: Stream,
@@ -129,6 +131,8 @@ export const PROJECTION_TABLES: readonly ProjectionTable[] = [
   "chain_shipments",
   "chain_batches",
   "chain_handovers",
+  "chain_loading_intents",
+  "chain_handoff_acceptances",
 ];
 
 /** Columns every projection table starts with and every row carries. */
@@ -355,6 +359,36 @@ export const ACCOUNT_COLUMNS: Record<ProjectionTable, readonly string[]> = {
     "manifest_digest_hex",
     "at",
   ],
+  chain_loading_intents: [
+    "lot",
+    "position",
+    "owner",
+    "owner_org_id",
+    "terminal",
+    "terminal_org_id",
+    "custodian_class",
+    "nonce",
+    "quantity_kg",
+    "locked_kg",
+    "document_sha256_hex",
+    "position_revision",
+    "expires_at",
+    "status",
+    "executed_at",
+  ],
+  chain_handoff_acceptances: [
+    "intent",
+    "loan",
+    "lock",
+    "lender",
+    "lender_org_id",
+    "lock_quantity_kg",
+    "loan_revision",
+    "principal",
+    "booked_interest",
+    "accepted_at",
+    "version",
+  ],
 };
 
 /** Columns that come from events or from Supabase, not from the account read. */
@@ -379,6 +413,8 @@ export const EXTRA_COLUMNS: Record<ProjectionTable, readonly string[]> = {
   chain_shipments: ["event_revision", "event_registered"],
   chain_batches: ["event_sequence", "event_observations"],
   chain_handovers: [],
+  chain_loading_intents: ["cancelled_by"],
+  chain_handoff_acceptances: ["event_version"],
 };
 
 const TRANSACTION_COLUMNS = [

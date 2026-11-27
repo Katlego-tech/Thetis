@@ -26,7 +26,11 @@ import {
   getDocumentRevokedEventDecoder,
   getFacilityOpenedEventDecoder,
   getLiquidatedEventDecoder,
+  getLoadingAcceptedEventDecoder,
+  getLoadingIntentCreatedEventDecoder,
+  getLoadingRecordedEventDecoder,
   getLoanClosedEventDecoder,
+  getLoanHandedOffEventDecoder,
   getLotIssuedEventDecoder,
   getLotSplitEventDecoder,
   getObservationRecordedEventDecoder,
@@ -103,6 +107,9 @@ export const HANDLED_INSTRUCTIONS = [
   "CancelShipment",
   "Handover",
   "RecordObservation",
+  "CreateLoadingIntent",
+  "AcceptLoading",
+  "RecordLoading",
 ] as const;
 
 export type HandledInstruction = (typeof HANDLED_INSTRUCTIONS)[number];
@@ -142,6 +149,10 @@ export const HANDLED_EVENTS = [
   "ShipmentCancelled",
   "CustodyHandedOver",
   "ObservationRecorded",
+  "LoadingIntentCreated",
+  "LoadingAccepted",
+  "LoadingRecorded",
+  "LoanHandedOff",
 ] as const;
 
 export type HandledEvent = (typeof HANDLED_EVENTS)[number];
@@ -198,7 +209,7 @@ export const PROTOCOL_ACCOUNT_POSITION: Readonly<Record<InstructionName, number>
 
 /** The one event each instruction may emit, and whether it must (live-lending.md §4.1.2). */
 const EMITS: Record<
-  Exclude<HandledInstruction, "ConfirmPayment">,
+  Exclude<HandledInstruction, "ConfirmPayment" | "RecordLoading">,
   { event: HandledEvent; required: boolean }
 > = {
   InitializeProtocol: { event: "ProtocolInitialized", required: true },
@@ -234,23 +245,40 @@ const EMITS: Record<
   CancelShipment: { event: "ShipmentCancelled", required: true },
   Handover: { event: "CustodyHandedOver", required: true },
   RecordObservation: { event: "ObservationRecorded", required: true },
+  CreateLoadingIntent: { event: "LoadingIntentCreated", required: true },
+  AcceptLoading: { event: "LoadingAccepted", required: true },
 };
 
+/** The program's MAX_LOADING_LOANS (state.rs): at most four accepted loans per loading. */
+export const MAX_LOADING_LOANS = 4;
+
 /**
- * The event an invocation may emit and whether it must. ConfirmPayment emits PaymentCorrected
- * when it names a `target`, else PaymentConfirmed.
+ * The events an invocation emits, in order, and whether it must emit them (live-custody.md
+ * §4.1.2). ConfirmPayment emits PaymentCorrected when it names a `target`, else PaymentConfirmed;
+ * RecordLoading emits LoadingRecorded then one LoanHandedOff per (acceptance, loan, lock) triple
+ * after its IDL accounts; Pause and Unpause emit PauseChanged or nothing; every other instruction
+ * exactly its one event.
  */
-export function expectedEvent(invocation: {
+export function expectedEvents(invocation: {
   instruction: HandledInstruction;
   accounts: Record<string, string | undefined>;
-}): { event: HandledEvent; required: boolean } {
+  remaining: string[];
+}): { events: HandledEvent[]; required: boolean } {
   if (invocation.instruction === "ConfirmPayment") {
     return {
-      event: invocation.accounts.target === undefined ? "PaymentConfirmed" : "PaymentCorrected",
+      events: [invocation.accounts.target === undefined ? "PaymentConfirmed" : "PaymentCorrected"],
       required: true,
     };
   }
-  return EMITS[invocation.instruction];
+  if (invocation.instruction === "RecordLoading") {
+    const k = Math.floor(invocation.remaining.length / 3);
+    return {
+      events: ["LoadingRecorded", ...Array.from({ length: k }, () => "LoanHandedOff" as const)],
+      required: true,
+    };
+  }
+  const emits = EMITS[invocation.instruction];
+  return { events: [emits.event], required: emits.required };
 }
 
 /** Event field = instruction account. */
@@ -392,6 +420,28 @@ const PAIRING: Record<HandledEvent, [field: string, account: string][]> = {
     ["observer", "observerOrg"],
     ["holder", "holderOrg"],
   ],
+  LoadingIntentCreated: [
+    ["intent", "intent"],
+    ["lot", "lot"],
+    ["position", "position"],
+    ["owner", "ownerOrg"],
+    ["terminal", "terminalOrg"],
+  ],
+  LoadingAccepted: [
+    ["acceptance", "acceptance"],
+    ["intent", "intent"],
+    ["loan", "loan"],
+    ["lender", "lenderOrg"],
+  ],
+  LoadingRecorded: [
+    ["intent", "intent"],
+    ["lot", "lot"],
+    ["position", "position"],
+    ["owner", "ownerOrg"],
+    ["terminal", "terminalOrg"],
+  ],
+  // The loan is the triple's (decodeTransaction below): remaining[3i + 1] for the i-th hand-off.
+  LoanHandedOff: [["intent", "intent"]],
 };
 
 const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
@@ -429,6 +479,10 @@ const EVENT_DECODERS: Record<HandledEvent, () => Decoder<unknown>> = {
   ShipmentCancelled: getShipmentCancelledEventDecoder,
   CustodyHandedOver: getCustodyHandedOverEventDecoder,
   ObservationRecorded: getObservationRecordedEventDecoder,
+  LoadingIntentCreated: getLoadingIntentCreatedEventDecoder,
+  LoadingAccepted: getLoadingAcceptedEventDecoder,
+  LoadingRecorded: getLoadingRecordedEventDecoder,
+  LoanHandedOff: getLoanHandedOffEventDecoder,
 };
 
 /** Event fields that hold an enum, by event, with the generated name table of each. */
@@ -864,16 +918,30 @@ export function decodeTransaction(
   }));
   const invocations: Invocation[] = [];
   for (const entry of decoded) {
-    const emits = expectedEvent(entry);
-    const allowed = entry.events.length === 1 || (entry.events.length === 0 && !emits.required);
-    if (!allowed || entry.events.some((event) => event.name !== emits.event)) {
+    if (entry.instruction === "RecordLoading") {
+      // One (acceptance, loan, lock) triple per accepted loan (live-custody.md §4.1.2).
+      const n = entry.remaining.length;
+      if (n % 3 !== 0 || n > 3 * MAX_LOADING_LOANS) {
+        throw halt(
+          "EVENT_MISMATCH",
+          signature,
+          `RecordLoading: record_loading names ${n} remaining accounts; expected 3 per accepted loan, at most ${3 * MAX_LOADING_LOANS}`,
+        );
+      }
+    }
+    const emits = expectedEvents(entry);
+    const names = entry.events.map((event) => event.name);
+    const exact =
+      names.length === emits.events.length &&
+      names.every((name, index) => name === emits.events[index]);
+    if (!exact && (emits.required || names.length > 0)) {
       throw halt(
         "EVENT_MISMATCH",
         signature,
-        `${entry.instruction} emitted [${entry.events.map((event) => event.name).join(", ")}], expected ${emits.required ? "exactly" : "at most"} one ${emits.event}`,
+        `${entry.instruction} emitted [${names.join(", ")}], expected ${emits.required ? "exactly" : "at most"} [${emits.events.join(", ")}]`,
       );
     }
-    for (const event of entry.events) {
+    for (const [position, event] of entry.events.entries()) {
       for (const [field, account] of PAIRING[event.name]) {
         if (event.value[field] !== entry.accounts[account]) {
           throw halt(
@@ -887,6 +955,28 @@ export function decodeTransaction(
       if (event.name === "CustodyHandedOver") {
         const inconsistency = handoverInconsistency(event.value);
         if (inconsistency !== null) throw halt("EVENT_MISMATCH", signature, inconsistency);
+      }
+      if (event.name === "LoadingRecorded") {
+        const k = entry.remaining.length / 3;
+        if (event.value.loansAccepted !== k) {
+          throw halt(
+            "EVENT_MISMATCH",
+            signature,
+            `LoadingRecorded.loansAccepted is ${String(event.value.loansAccepted)}, but RecordLoading names ${k} accepted loans`,
+          );
+        }
+      }
+      if (event.name === "LoanHandedOff") {
+        // The i-th hand-off follows LoadingRecorded (event 0) and names the i-th triple's loan.
+        const loan = entry.remaining[3 * (position - 1) + 1];
+        if (event.value.loan !== loan) {
+          throw halt(
+            "EVENT_MISMATCH",
+            signature,
+            `LoanHandedOff.loan is not the RecordLoading remaining account ${3 * (position - 1) + 1}, the loan of triple ${position - 1}`,
+            [String(event.value.loan), String(loan)],
+          );
+        }
       }
       if (event.name === "Repaid") {
         const pooled = event.value.pool !== undefined;

@@ -57,6 +57,8 @@ const SCANNED_KINDS: readonly Kind[] = [
   "Shipment",
   "ManifestBatch",
   "HandoverRecord",
+  "LoadingIntent",
+  "HandoffAcceptance",
 ];
 
 /** A PoolShare's size: discriminator, pool, organisation, shares, lent_minor, bump. */
@@ -278,6 +280,7 @@ export async function reconcile(
       case "SimulationPool":
         return account.data.revision === BigInt(row.event_revision as string);
       case "Valuation":
+      case "HandoffAcceptance":
         return account.data.version === row.event_version;
       case "Shipment":
         return (

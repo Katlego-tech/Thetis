@@ -23,8 +23,10 @@ import {
   decodeCustodianClass,
   decodeDocumentAttestation,
   decodeFacility,
+  decodeHandoffAcceptance,
   decodeHandoverRecord,
   decodeIntakeIdentity,
+  decodeLoadingIntent,
   decodeLoan,
   decodeLockAllocation,
   decodeLot,
@@ -40,10 +42,13 @@ import {
   decodeValuation,
   type Facility,
   findPositionPda,
+  type HandoffAcceptance,
   type HandoverRecord,
   HandoverStage,
   type IntakeIdentity,
   IntentStatus,
+  type LoadingIntent,
+  LoadingStatus,
   type Loan,
   LoanStatus,
   type LockAllocation,
@@ -100,7 +105,9 @@ export type Kind =
   | "PoolShare"
   | "Shipment"
   | "ManifestBatch"
-  | "HandoverRecord";
+  | "HandoverRecord"
+  | "LoadingIntent"
+  | "HandoffAcceptance";
 
 export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   Protocol: "chain_protocols",
@@ -123,6 +130,8 @@ export const KIND_TABLE: Record<Kind, ProjectionTable> = {
   Shipment: "chain_shipments",
   ManifestBatch: "chain_batches",
   HandoverRecord: "chain_handovers",
+  LoadingIntent: "chain_loading_intents",
+  HandoffAcceptance: "chain_handoff_acceptances",
 };
 
 export const TABLE_KIND = Object.fromEntries(
@@ -149,7 +158,9 @@ export type AccountData =
   | { kind: "PoolShare"; data: PoolShare }
   | { kind: "Shipment"; data: Shipment }
   | { kind: "ManifestBatch"; data: ManifestBatch }
-  | { kind: "HandoverRecord"; data: HandoverRecord };
+  | { kind: "HandoverRecord"; data: HandoverRecord }
+  | { kind: "LoadingIntent"; data: LoadingIntent }
+  | { kind: "HandoffAcceptance"; data: HandoffAcceptance };
 
 type GuardedDecoder = (account: MaybeEncodedAccount) => { exists: boolean; data?: unknown };
 
@@ -174,6 +185,8 @@ const DECODERS: Record<Kind, GuardedDecoder> = {
   Shipment: decodeShipment as unknown as GuardedDecoder,
   ManifestBatch: decodeManifestBatch as unknown as GuardedDecoder,
   HandoverRecord: decodeHandoverRecord as unknown as GuardedDecoder,
+  LoadingIntent: decodeLoadingIntent as unknown as GuardedDecoder,
+  HandoffAcceptance: decodeHandoffAcceptance as unknown as GuardedDecoder,
 };
 
 export type DecodeFailure = { address: string; enumError: boolean; message: string };
@@ -618,6 +631,42 @@ export function accountColumns(account: AccountData, resolver: Resolver): Row {
         at: toI64String(data.at),
       };
     }
+    case "LoadingIntent": {
+      const { data } = account;
+      return {
+        lot: data.lot,
+        position: data.position,
+        owner: data.owner,
+        owner_org_id: resolver.organisationId(data.owner),
+        terminal: data.terminal,
+        terminal_org_id: resolver.organisationId(data.terminal),
+        custodian_class: data.custodianClass,
+        nonce: toU64String(data.nonce),
+        quantity_kg: toU64String(data.quantityKg),
+        locked_kg: toU64String(data.lockedKg),
+        document_sha256_hex: hex(data.documentSha256),
+        position_revision: toU64String(data.positionRevision),
+        expires_at: toI64String(data.expiresAt),
+        status: variant("LoadingStatus", LoadingStatus, data.status),
+        executed_at: optionalI64(data.executedAt),
+      };
+    }
+    case "HandoffAcceptance": {
+      const { data } = account;
+      return {
+        intent: data.intent,
+        loan: data.loan,
+        lock: data.lock,
+        lender: data.lender,
+        lender_org_id: resolver.organisationId(data.lender),
+        lock_quantity_kg: toU64String(data.lockQuantityKg),
+        loan_revision: toU64String(data.loanRevision),
+        principal: toU64String(data.principal),
+        booked_interest: toU64String(data.bookedInterest),
+        accepted_at: toI64String(data.acceptedAt),
+        version: data.version,
+      };
+    }
   }
 }
 
@@ -687,7 +736,7 @@ type Plan = {
   transaction: SlotTransaction;
   invocation: Invocation;
   event: DecodedEvent;
-  scope: "registry" | "organisation" | "lot" | "facility" | "pool" | "shipment";
+  scope: "registry" | "organisation" | "lot" | "facility" | "pool" | "shipment" | "loading";
   lot: string | null;
   revision: bigint | null;
   keys: LendingKeys;
@@ -1159,6 +1208,66 @@ async function planEvent(
         },
         fetch: [{ address: text("batch"), kind: "ManifestBatch" }],
       };
+    case "LoadingIntentCreated": {
+      const planned = { address: text("intent"), kind: "LoadingIntent" as const };
+      return {
+        ...base,
+        scope: "loading",
+        keys: { ...NO_KEYS, created: planned.address },
+        fetch: [planned, { address: ixAccount("position"), kind: "Position" }],
+        creates: [planned],
+      };
+    }
+    case "LoadingAccepted": {
+      // As a valuation: version 1 creates the acceptance, a later version updates it
+      // (live-custody.md §4.1.4); the loan is named without a revision.
+      const planned = { address: text("acceptance"), kind: "HandoffAcceptance" as const };
+      const version = value.version as number;
+      return {
+        ...base,
+        scope: "facility",
+        keys: facilityKeys({
+          loan: text("loan"),
+          acceptance: planned.address,
+          acceptanceVersion: version,
+        }),
+        fetch: [planned],
+        creates: version === 1 ? [planned] : [],
+      };
+    }
+    case "LoadingRecorded": {
+      // Keyed by the lot revision it raises (live-custody.md §8 decision 7); the loans are read
+      // only through their LoanHandedOff.
+      const lot = text("lot");
+      return {
+        ...base,
+        scope: "lot",
+        lot,
+        revision: value.lotRevision as bigint,
+        fetch: [
+          { address: lot, kind: "Lot" },
+          { address: ixAccount("position"), kind: "Position" },
+          { address: text("intent"), kind: "LoadingIntent" },
+          { address: ixAccount("custodianClass"), kind: "CustodianClass" },
+          { address: ixAccount("intake"), kind: "IntakeIdentity" },
+          ...optional("Lot", accounts.root),
+        ],
+      };
+    }
+    case "LoanHandedOff": {
+      // The i-th hand-off is the invocation's event i + 1; its lock is remaining[3i + 2]. Its
+      // facility is the loan's, set when the rows are built (live-custody.md §4.1.5).
+      const triple = invocation.events.indexOf(event) - 1;
+      return {
+        ...base,
+        scope: "facility",
+        keys: { ...NO_KEYS, loan: text("loan"), loanRevision: value.revision as bigint },
+        fetch: [
+          { address: text("loan"), kind: "Loan" },
+          { address: invocation.remaining[3 * triple + 2] as string, kind: "LockAllocation" },
+        ],
+      };
+    }
   }
 }
 
@@ -1262,6 +1371,7 @@ export async function projectSlot(
       case "PledgedSold":
       case "ShipmentPrepared":
       case "ShipmentCancelled":
+      case "LoadingRecorded":
         entryOf(value.lot as string).revisions.push({
           revision: value.lotRevision as bigint,
           plan,
@@ -1679,6 +1789,42 @@ export async function projectSlot(
     batchEventObservations.set(batch, base + indexes.length);
   }
 
+  // Acceptances (live-custody.md §4.1.4), as valuations: version 1 creates, each later version is
+  // the next.
+  const acceptanceEventVersion = new Map<string, number>();
+  const acceptanceNames = [
+    ...new Set(
+      plans
+        .filter((plan) => plan.keys.acceptance !== null)
+        .map((plan) => plan.keys.acceptance as string),
+    ),
+  ].sort(sortText);
+  for (const acceptance of acceptanceNames) {
+    const naming = plans.filter((plan) => plan.keys.acceptance === acceptance);
+    const versions = naming
+      .map((plan) => BigInt(plan.keys.acceptanceVersion as number))
+      .sort(sortBig);
+    const named = `acceptance ${acceptance} (signatures ${signaturesOf(naming)})`;
+    const row = storedRow("HandoffAcceptance", acceptance);
+    if (!row && (versions[0] as bigint) > 1n) {
+      throw stepHalt(
+        "sequence",
+        "EVENT_GAP",
+        `${named} has no stored row and its lowest version is ${versions[0]}`,
+      );
+    }
+    if (row && versions.includes(1n)) {
+      throw stepHalt(
+        "sequence",
+        "REVISION_SEQUENCE",
+        `${named} is accepted at version 1 again while it is stored`,
+      );
+    }
+    const base = row ? BigInt(row.event_version as number) : 0n;
+    inSequence(named, base, versions);
+    acceptanceEventVersion.set(acceptance, Number(versions.at(-1) as bigint));
+  }
+
   // Creation check, account by account.
   const creators = new Map<string, Plan[]>();
   const recipients = new Set<string>();
@@ -1861,6 +2007,7 @@ export async function projectSlot(
     for (const plan of plans) {
       const owner = eventOrgAddress(plan);
       if (owner !== null) resolver.organisationId(owner);
+      if (plan.event.name === "LoanHandedOff") resolver.loanFacility(plan.keys.loan as string);
     }
     for (const [lot, { account }] of read) {
       if (account.kind !== "Lot") continue;
@@ -2012,9 +2159,16 @@ export async function projectSlot(
             ? (previous.event_observations as number)
             : 0;
     }
-    if (account.kind === "ReleaseIntent") {
+    if (account.kind === "ReleaseIntent" || account.kind === "LoadingIntent") {
       // The mark is carried forward; §4.1.7 below may set it.
-      row.cancelled_by = (storedRow("ReleaseIntent", address)?.cancelled_by ?? null) as JsonValue;
+      row.cancelled_by = (storedRow(account.kind, address)?.cancelled_by ?? null) as JsonValue;
+    }
+    if (account.kind === "HandoffAcceptance") {
+      const version = acceptanceEventVersion.get(address);
+      row.event_version =
+        version === undefined
+          ? (storedRow("HandoffAcceptance", address)?.event_version as number)
+          : version;
     }
     if (account.kind === "Valuation") {
       const version = valuationEventVersion.get(address);
@@ -2026,55 +2180,52 @@ export async function projectSlot(
     upserts.push({ table, row });
   }
 
-  // Intents cancelled by a shipment (live-custody.md §4.1.7).
+  // Intents cancelled by a shipment (live-custody.md §4.1.7): release and loading intents alike.
   const shipped = plans.filter((plan) => plan.event.name === "ShipmentPrepared");
   if (shipped.length > 0) {
     const positions = [
       ...new Set(shipped.map((plan) => plan.invocation.accounts.position as string)),
     ];
-    const storedIntents = await store.rowsByColumn(
-      stream,
-      "chain_release_intents",
-      "position",
-      positions,
-    );
-    const fresh = new Map<string, Row>();
-    for (const entry of upserts) {
-      if (entry.table === "chain_release_intents")
-        fresh.set(entry.row.address as string, entry.row);
-    }
-    const marked = new Map<string, string>();
-    for (const plan of shipped) {
-      const value = plan.event.value as Record<string, unknown>;
-      const shipment = value.shipment as string;
-      const position = plan.invocation.accounts.position as string;
-      const decoded = read.get(shipment)?.account as { data: Shipment };
-      const preparedAt = decoded.data.preparedAt;
-      const before = (value.positionRevision as bigint) - 1n;
-      const candidates = new Map<string, Row>();
-      for (const [address, row] of storedIntents) candidates.set(address, row);
-      for (const [address, row] of fresh) candidates.set(address, row);
-      for (const address of [...candidates.keys()].sort(sortText)) {
-        const row = candidates.get(address) as Row;
-        if (row.position !== position || row.cancelled_by !== null || marked.has(address)) continue;
-        if (
-          row.status === "Open" &&
-          BigInt(row.position_revision as string) === before &&
-          BigInt(row.expires_at as string) > preparedAt
-        ) {
-          marked.set(address, shipment);
+    for (const table of ["chain_release_intents", "chain_loading_intents"] as const) {
+      const storedIntents = await store.rowsByColumn(stream, table, "position", positions);
+      const fresh = new Map<string, Row>();
+      for (const entry of upserts) {
+        if (entry.table === table) fresh.set(entry.row.address as string, entry.row);
+      }
+      const marked = new Map<string, string>();
+      for (const plan of shipped) {
+        const value = plan.event.value as Record<string, unknown>;
+        const shipment = value.shipment as string;
+        const position = plan.invocation.accounts.position as string;
+        const decoded = read.get(shipment)?.account as { data: Shipment };
+        const preparedAt = decoded.data.preparedAt;
+        const before = (value.positionRevision as bigint) - 1n;
+        const candidates = new Map<string, Row>();
+        for (const [address, row] of storedIntents) candidates.set(address, row);
+        for (const [address, row] of fresh) candidates.set(address, row);
+        for (const address of [...candidates.keys()].sort(sortText)) {
+          const row = candidates.get(address) as Row;
+          if (row.position !== position || row.cancelled_by !== null || marked.has(address))
+            continue;
+          if (
+            row.status === "Open" &&
+            BigInt(row.position_revision as string) === before &&
+            BigInt(row.expires_at as string) > preparedAt
+          ) {
+            marked.set(address, shipment);
+          }
         }
       }
-    }
-    for (const address of [...marked.keys()].sort(sortText)) {
-      const shipment = marked.get(address) as string;
-      const row = fresh.get(address);
-      if (row) row.cancelled_by = shipment;
-      else {
-        upserts.push({
-          table: "chain_release_intents",
-          row: { ...(storedIntents.get(address) as Row), cancelled_by: shipment },
-        });
+      for (const address of [...marked.keys()].sort(sortText)) {
+        const shipment = marked.get(address) as string;
+        const row = fresh.get(address);
+        if (row) row.cancelled_by = shipment;
+        else {
+          upserts.push({
+            table,
+            row: { ...(storedIntents.get(address) as Row), cancelled_by: shipment },
+          });
+        }
       }
     }
   }
@@ -2098,7 +2249,11 @@ export async function projectSlot(
       lot_revision: plan.revision === null ? null : toU64String(plan.revision),
       org_id: owner === null ? null : resolver.organisationId(owner),
       data: event.data,
-      facility: plan.keys.facility,
+      // A hand-off's facility is its loan's (live-custody.md §4.1.5).
+      facility:
+        plan.event.name === "LoanHandedOff"
+          ? resolver.loanFacility(plan.keys.loan as string)
+          : plan.keys.facility,
       loan: plan.keys.loan,
       loan_revision: plan.keys.loanRevision === null ? null : toU64String(plan.keys.loanRevision),
       pool: plan.keys.pool,
