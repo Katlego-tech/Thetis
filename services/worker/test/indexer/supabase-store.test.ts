@@ -9,10 +9,11 @@ import { getBase58Decoder } from "@solana/kit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StoreCodeError } from "../../src/indexer/errors.ts";
 import { type memoryStore, type ReadModelStore, supabaseStore } from "../../src/indexer/store.ts";
-import { counts, eventKeys, harness } from "../fixtures/harness.ts";
+import { counts, eventKeys, harness, rows } from "../fixtures/harness.ts";
 import { mergeHistories, simulationSeed } from "../fixtures/instances.ts";
 import {
   fixture,
+  lendingHistory,
   lotHistory,
   PROGRAM,
   seedHistory,
@@ -108,6 +109,32 @@ function syntheticKeys(count: number, size: 32 | 64, start = 0) {
   });
 }
 
+/** The Phase 2 tables, wiped by the lending test itself (TABLES feeds sqlCounts). */
+const LENDING_TABLES = [
+  "chain_pool_shares",
+  "chain_pools",
+  "chain_payments",
+  "chain_release_intents",
+  "chain_locks",
+  "chain_loans",
+  "chain_valuations",
+  "chain_facilities",
+];
+
+function wipeLending() {
+  asPostgres(
+    `begin; ${LENDING_TABLES.map((table) => `delete from public.${table};`).join(" ")} commit;`,
+  );
+}
+
+function lendingCounts() {
+  const output = asPostgres(
+    `select ${LENDING_TABLES.map((table) => `(select count(*) from public.${table})`).join(", ")}`,
+  );
+  const values = output.split("|").map(Number);
+  return Object.fromEntries(LENDING_TABLES.map((table, index) => [table, values[index]]));
+}
+
 let local: { url: string; key: string };
 
 beforeAll(() => {
@@ -199,6 +226,14 @@ describe("supabaseStore", () => {
       lot: f.lot,
       lot_revision: "1",
       org_id: null,
+      facility: null,
+      loan: null,
+      loan_revision: null,
+      pool: null,
+      pool_revision: null,
+      valuation: null,
+      valuation_version: null,
+      created: null,
       data: {
         lot: f.lot,
         from: f.org("khunou"),
@@ -291,5 +326,104 @@ describe("supabaseStore", () => {
     expect(second.indexedThroughSlot).toBe(12_000);
     expect(sqlCounts()).toEqual(afterFirst);
     expect(split()).toBe("10|9|1");
+  }, 120_000);
+
+  it("supabaseStore applies the lending history and reports REVISION_SEQUENCE for a repeated loan revision on the local Supabase", async () => {
+    wipe();
+    wipeLending();
+    try {
+      const reference = await harness((await lendingHistory()).history);
+      await reference.pollUntilLive();
+      const expected = counts(reference.store);
+      const expectedLending = Object.fromEntries(
+        LENDING_TABLES.map((table) => [table, rows(reference.store, table).length]),
+      );
+
+      const scenario = await lendingHistory();
+      const store: ReadModelStore = supabaseStore(local.url, local.key);
+      const h = await harness(scenario.history, {
+        store,
+        organisations: await seedOrganisations(),
+      });
+      const first = await h.pollUntilLive();
+      const last = scenario.steps.correctRepayment?.slot as number;
+      expect(first.indexedThroughSlot).toBe(last);
+      expect(sqlCounts()).toEqual(expected);
+      expect(lendingCounts()).toEqual(expectedLending);
+      expect(
+        asPostgres(
+          `select string_agg(loan_revision, ',' order by loan_revision::numeric) from public.chain_events where loan = '${scenario.loan}' and loan_revision is not null`,
+        ),
+      ).toBe("0,1,2,3,4,5");
+      expect(
+        asPostgres(
+          `select status || '|' || event_revision || '|' || commitment from public.chain_loans where address = '${scenario.loan}'`,
+        ),
+      ).toBe("Closed|5|finalized");
+
+      // Replaying after the checkpoint is deleted writes nothing twice.
+      asPostgres("delete from public.indexer_checkpoints");
+      h.restart();
+      await h.pollUntilLive();
+      expect(sqlCounts()).toEqual(expected);
+      expect(lendingCounts()).toEqual(expectedLending);
+
+      // Another signature repeating (loan, 1) is REVISION_SEQUENCE, with the loan named.
+      const blockTime = "2026-11-27T01:00:00.000Z";
+      const signature = syntheticSignature(171);
+      const batch = {
+        stream: h.stream,
+        expectedThroughSlot: last,
+        throughSlot: last + 1,
+        transactions: [
+          {
+            network: "devnet",
+            program_id: PROGRAM,
+            signature,
+            slot: last + 1,
+            block_time: blockTime,
+            succeeded: true,
+            protocol: scenario.protocol,
+            event_count: 1,
+            other_instance: false,
+          },
+        ],
+        events: [
+          {
+            network: "devnet",
+            program_id: PROGRAM,
+            signature,
+            event_index: 0,
+            slot: last + 1,
+            block_time: blockTime,
+            protocol: scenario.protocol,
+            instruction: "RecordAdvance",
+            event: "AdvanceRecorded",
+            scope: "facility",
+            lot: null,
+            lot_revision: null,
+            org_id: null,
+            facility: scenario.facility,
+            loan: scenario.loan,
+            loan_revision: "1",
+            pool: null,
+            pool_revision: null,
+            valuation: null,
+            valuation_version: null,
+            created: null,
+            data: { loan: scenario.loan, revision: "1" },
+          },
+        ],
+        upserts: [],
+      };
+      await expect(store.apply(batch)).rejects.toMatchObject({
+        code: "REVISION_SEQUENCE",
+        detail: expect.stringContaining(scenario.loan),
+      });
+      expect(sqlCounts()).toEqual(expected);
+      expect((await store.checkpoint(h.stream))?.indexedThroughSlot).toBe(last);
+    } finally {
+      wipeLending();
+    }
   }, 120_000);
 });

@@ -51,6 +51,8 @@ export type RawTransaction = {
   } | null;
 };
 
+export type ProgramAccountsFilter = { offset8: string; dataSize: number | null };
+
 export interface ChainSource {
   getGenesisHash(signal: AbortSignal): Promise<string>;
   getSlot(commitment: "confirmed" | "finalized", signal: AbortSignal): Promise<number>;
@@ -67,8 +69,12 @@ export interface ChainSource {
     minContextSlot: number | null,
     signal: AbortSignal,
   ): Promise<{ slot: number; accounts: FetchedAccount[] }>;
+  /**
+   * The program's accounts at the finalized commitment whose bytes 8 to 40 are `offset8` (the
+   * protocol, or a PoolShare's pool), of `dataSize` bytes when it is not null.
+   */
   getProgramAccounts(
-    protocol: string,
+    filter: ProgramAccountsFilter,
     signal: AbortSignal,
   ): Promise<{ slot: number; accounts: EncodedAccount[] }>;
   getSignatureStatuses(
@@ -352,12 +358,15 @@ export function kitChainSource(url: string): ChainSource {
       };
     },
 
-    async getProgramAccounts(protocol, signal) {
+    async getProgramAccounts(filter, signal) {
       const config = {
         commitment: "finalized",
         withContext: true,
         encoding: "base64",
-        filters: [{ memcmp: { offset: 8n, bytes: protocol, encoding: "base58" } }],
+        filters: [
+          { memcmp: { offset: 8n, bytes: filter.offset8, encoding: "base58" } },
+          ...(filter.dataSize === null ? [] : [{ dataSize: BigInt(filter.dataSize) }]),
+        ],
       };
       const result = record(
         await call("getProgramAccounts", [THETIS_PROGRAM_ADDRESS, config], signal),

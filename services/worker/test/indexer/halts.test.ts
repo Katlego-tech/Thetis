@@ -35,7 +35,7 @@ async function expectNothingFrom(
 }
 
 describe("D35 halts on what the indexer does not recognise", () => {
-  it("halts with UNKNOWN_EVENT on an unknown discriminator, and on FacilityOpened inside RegisterClass", async () => {
+  it("halts with UNKNOWN_EVENT on an unknown discriminator, and with EVENT_MISMATCH on FacilityOpened inside RegisterClass", async () => {
     const f = await fixture();
     const signature = f.seedSignatures.registerClass;
 
@@ -60,7 +60,7 @@ describe("D35 halts on what the indexer does not recognise", () => {
       line.startsWith("Program data: ") ? eventLine(f.build.facilityOpenedEvent()) : line,
     );
     const second = await harness(facility);
-    await expectHalt(second, await second.poll(), "UNKNOWN_EVENT", { step: "decode", signature });
+    await expectHalt(second, await second.poll(), "EVENT_MISMATCH", { step: "decode", signature });
     await expectNothingFrom(second, 3000, signature);
   });
 
@@ -80,6 +80,9 @@ describe("D35 halts on what the indexer does not recognise", () => {
 
     const facility = await seedHistory();
     const open = await f.build.openFacility(syntheticSignature(130));
+    const cut = open.instructions[0];
+    if (!cut) throw new Error("no instruction");
+    cut.data = cut.data.slice(0, -1);
     facility.push({ slot: 10_500, blockTime: lotBlockTime(0), transactions: [open], accounts: {} });
     const second = await harness(facility);
     await expectHalt(second, await second.poll(), "UNKNOWN_INSTRUCTION", {

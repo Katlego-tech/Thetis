@@ -28,22 +28,40 @@ import {
 } from "@solana/kit";
 import {
   findAuthorityPda,
+  findFacilityPda,
   findIntakePda,
+  findIntentPda,
+  findLoanPda,
+  findLockPda,
   findMintAuthorityPda,
   findMintPda,
   findOrganisationPda,
+  findPaymentPda,
+  findPoolPda,
   findPositionPda,
   findProtocolPda,
+  findSharePda,
   findVaultAuthorityPda,
   getAccreditCustodianClassInstruction,
+  getAdvanceRecordedEventEncoder,
+  getBorrowedEventEncoder,
+  getBorrowInstruction,
   getClassPolicyEncoder,
   getClassRegisteredEventEncoder,
+  getCloseLoanInstruction,
+  getConfirmPaymentInstruction,
+  getCreateReleaseIntentInstruction,
   getCustodianClassAccreditedEventEncoder,
   getCustodianClassEncoder,
+  getDepositedEventEncoder,
+  getDepositInstruction,
   getFacilityEncoder,
   getFacilityOpenedEventEncoder,
   getIntakeIdentityEncoder,
   getIssueLotInstruction,
+  getLoanClosedEventEncoder,
+  getLoanEncoder,
+  getLockAllocationEncoder,
   getLotEncoder,
   getLotIssuedEventEncoder,
   getLotSplitEventEncoder,
@@ -52,31 +70,61 @@ import {
   getOrganisationEncoder,
   getOrganisationNameEncoder,
   getPauseInstruction,
+  getPaymentAttestationEncoder,
+  getPaymentConfirmedEventEncoder,
+  getPaymentCorrectedEventEncoder,
+  getPledgedEventEncoder,
+  getPledgedSoldEventEncoder,
+  getPledgeInstruction,
+  getPoolShareEncoder,
   getPositionEncoder,
   getProtocolEncoder,
   getProtocolInitializedEventEncoder,
+  getRecordAdvanceInstruction,
   getRedeemInstruction,
+  getReleaseIntentCreatedEventEncoder,
+  getReleaseIntentEncoder,
+  getRepaidEventEncoder,
+  getRepayInstruction,
+  getSellPledgedInstruction,
+  getSetValuationInstruction,
+  getSimulationPoolEncoder,
   getSplitInstruction,
   getTransferInstruction,
   getUnitsRedeemedEventEncoder,
   getUnitsTransferredEventEncoder,
+  getValuationEncoder,
+  getValuationSetEventEncoder,
+  getWithdrawInstruction,
+  getWithdrawnEventEncoder,
+  IntentStatus,
+  LoanStatus,
+  LockControl,
   LotState,
+  PaymentPurpose,
+  PaymentStatus,
   QuantityUnit,
   Restriction,
   Role,
   SettlementMode,
   THETIS_PROGRAM_ADDRESS,
 } from "@thetis/contracts";
+import { accrueSimple } from "../../../../packages/domain/src/accrual.ts";
 import {
   buildAccreditOrganisation,
   buildInitializeProtocol,
   buildRegisterClass,
+  DEFAULT_INSTANCE,
+  derivePoolAddresses,
+  findAssociatedTokenAddress,
   findClassPolicyPda,
   findOrganisationNamePda,
   instanceIdBytes,
   parseSeedOrganisations,
   SEED,
   type SeedOrganisation,
+  SIMULATION_INSTANCE,
+  TOKEN_PROGRAM_ADDRESS,
 } from "../../../../scripts/seed-demo.ts";
 import type {
   ChainSource,
@@ -475,14 +523,15 @@ export function fakeChain(initial: History): FakeChain {
       const state = stateAt(slot);
       return { slot, accounts: addresses.map((address) => maybe(address, state.get(address))) };
     },
-    async getProgramAccounts(protocol, signal) {
-      enter("getProgramAccounts", [protocol], signal);
-      const wanted = addressBytes.encode(protocol as Address);
+    async getProgramAccounts(filter, signal) {
+      enter("getProgramAccounts", [filter], signal);
+      const wanted = addressBytes.encode(filter.offset8 as Address);
       const accounts = [...stateAt(finalized)]
         .filter(
           ([, account]) =>
             account.programAddress === PROGRAM &&
             account.data.length >= 40 &&
+            (filter.dataSize === null || account.data.length === filter.dataSize) &&
             wanted.every((byte, index) => account.data[8 + index] === byte),
         )
         .map(([address, account]) => {
@@ -1479,4 +1528,1458 @@ export async function seedOrganisations(): Promise<
   { id: string; slug: string; synthetic: boolean }[]
 > {
   return (await fixture()).seedOrganisationsRows.map((row) => ({ ...row }));
+}
+
+// ------------------------------------------------------------------------------------------------
+// The lending fixtures (live-lending.md §9.1 and its T063c folds)
+// ------------------------------------------------------------------------------------------------
+//
+// SYNTHETIC: every amount below is the one live-lending.md §9.1 pins (demo.md §2: USD cents,
+// 20 c/kg, haircut 0, LTV 60%, 1,200 bps). Digests, payment ids, wallets, signatures, slots and
+// block times are byte fills and offsets (the T063c folds, item 6). Each account's data is the
+// program's state after the action, worked out here from the handlers in programs/thetis, with
+// interest from `accrueSimple` and the block times.
+
+/** The steps a lending scenario is built from, in the order they are listed. */
+export type LendingStep =
+  | "accreditCustodianClass"
+  | "issueLot"
+  | "openFacility"
+  | "setValuation"
+  | "pledge"
+  | "recordAdvance"
+  | "createReleaseIntent"
+  | "confirmRelease"
+  | "sellPledged"
+  | "confirmRepayment"
+  | "repay"
+  | "closeLoan"
+  | "setValuation2"
+  | "correctRepayment"
+  | "voidRepayment"
+  | "createReleaseIntent2"
+  | "confirmRelease2"
+  | "sellPledged2"
+  | "deposit"
+  | "borrow"
+  | "repaySimulated"
+  | "withdraw";
+
+/** The 14 actions of `lendingHistory()`, in order. */
+export const LENDING_STEPS: readonly LendingStep[] = [
+  "accreditCustodianClass",
+  "issueLot",
+  "openFacility",
+  "setValuation",
+  "pledge",
+  "recordAdvance",
+  "createReleaseIntent",
+  "confirmRelease",
+  "sellPledged",
+  "confirmRepayment",
+  "repay",
+  "closeLoan",
+  "setValuation2",
+  "correctRepayment",
+];
+
+/** The lending actions of `poolHistory()`, after the token-simulation seed. */
+export const POOL_STEPS: readonly LendingStep[] = [
+  "accreditCustodianClass",
+  "issueLot",
+  "openFacility",
+  "setValuation",
+  "deposit",
+  "pledge",
+  "borrow",
+  "repaySimulated",
+  "withdraw",
+];
+
+/** SYNTHETIC: one signature index per step (k from 200 for fiat, from 220 for the pool). */
+const STEP_SIGNATURE: Record<LendingStep, number> = {
+  accreditCustodianClass: 200,
+  issueLot: 201,
+  openFacility: 202,
+  setValuation: 203,
+  pledge: 204,
+  recordAdvance: 205,
+  createReleaseIntent: 206,
+  confirmRelease: 207,
+  sellPledged: 208,
+  confirmRepayment: 209,
+  repay: 210,
+  closeLoan: 211,
+  setValuation2: 212,
+  correctRepayment: 213,
+  voidRepayment: 214,
+  createReleaseIntent2: 215,
+  confirmRelease2: 216,
+  sellPledged2: 217,
+  deposit: 224,
+  borrow: 226,
+  repaySimulated: 227,
+  withdraw: 228,
+};
+const POOL_SIGNATURE_OFFSET: Partial<Record<LendingStep, number>> = {
+  accreditCustodianClass: 220,
+  issueLot: 221,
+  openFacility: 222,
+  setValuation: 223,
+  pledge: 225,
+};
+
+export type LendingScenario = {
+  history: History;
+  /** Where each step landed. */
+  steps: Partial<Record<LendingStep, { signature: string; slot: number; blockTime: string }>>;
+  protocol: string;
+  org: (slug: string) => string;
+  classPolicy: string;
+  custodianClass: string;
+  lot: string;
+  facility: string;
+  valuation: string;
+  loan: string;
+  lock: string;
+  positions: { khunou: string; buyer: string };
+  intents: string[];
+  payments: { release: string; repayment: string; correction: string; release2: string };
+  pool: string | null;
+  share: string | null;
+  /** The first signature of the history (THETIS_FIRST_SIGNATURE for its stream). */
+  firstSignature: string;
+};
+
+type LoanState = {
+  principal: bigint;
+  bookedInterest: bigint;
+  accrualRemainder: bigint;
+  accruedAt: bigint;
+  status: number;
+  openExceptions: number;
+  revision: bigint;
+};
+
+type PaymentState = {
+  address: string;
+  bump: number;
+  paymentId: Uint8Array;
+  purpose: number;
+  subject: string;
+  amount: bigint;
+  evidenceDigest: Uint8Array;
+  observedAt: bigint;
+  status: number;
+  applied: bigint;
+  surplus: bigint;
+};
+
+const LENDING_LOT_ID = "CR-0001";
+const fill = (length: number, byte: number) => new Uint8Array(length).fill(byte);
+const unix = (iso: string) => BigInt(Date.parse(iso) / 1000);
+
+function applyPayment(principal: bigint, interestNow: bigint, received: bigint) {
+  const debt = principal + interestNow;
+  const applied = debt < received ? debt : received;
+  const fromInterest = applied < interestNow ? applied : interestNow;
+  const fromPrincipal = applied - fromInterest;
+  return {
+    applied,
+    fromInterest,
+    fromPrincipal,
+    surplus: received - applied,
+    principal: principal - fromPrincipal,
+    bookedInterest: interestNow - fromInterest,
+  };
+}
+
+async function lendingScenario(
+  mode: "fiat" | "pool",
+  stepList: readonly LendingStep[],
+): Promise<LendingScenario> {
+  const f = await fixture();
+  const simulation = mode === "pool";
+  const instance = simulation ? SIMULATION_INSTANCE : DEFAULT_INSTANCE;
+  const [protocol] = await findProtocolPda({ instanceId: instanceIdBytes(instance) });
+  const classPolicy = await findClassPolicyPda(protocol, SEED.classCode, SEED.classVersion);
+  const orgs = new Map<string, { address: string; bump: number }>();
+  for (const party of f.organisations) {
+    const [address, bump] = await findOrganisationPda({ protocol, orgId: party.orgId });
+    orgs.set(party.slug, { address, bump });
+  }
+  const org = (slug: string) => {
+    const found = orgs.get(slug);
+    if (!found) throw new Error(`no organisation ${slug}`);
+    return found.address;
+  };
+  const kopano = org("kopano");
+  const khunou = org("khunou");
+  const buyer = org("buyer-smelter");
+  const lenderOrg = org("lender-one");
+  const { deployer, accreditor, sponsor } = f.signers;
+  const lenderWallet = await syntheticSigner(40);
+  const borrowerWallet = await syntheticSigner(41);
+  const buyerWallet = await syntheticSigner(42);
+  const custodianWallet = await syntheticSigner(43);
+  const depositorWallet = await syntheticSigner(44);
+  const authorityOf = async (wallet: KeyPairSigner) =>
+    (await findAuthorityPda({ protocol, wallet: wallet.address }))[0];
+  const lenderAuthority = await authorityOf(lenderWallet);
+  const borrowerAuthority = await authorityOf(borrowerWallet);
+  const buyerAuthority = await authorityOf(buyerWallet);
+  const custodianAuthority = await authorityOf(custodianWallet);
+  const depositorAuthority = await authorityOf(depositorWallet);
+
+  const [custodianClass, custodianClassBump] = await pda([
+    text.encode("custodian_class"),
+    addressBytes.encode(protocol),
+    addressBytes.encode(kopano as Address),
+    addressBytes.encode(classPolicy),
+    text.encode(SITE_CODE),
+  ]);
+  const intakeDigest = fill(32, 0x01);
+  const [intake, intakeBump] = await findIntakePda({
+    protocol,
+    custodian: kopano as Address,
+    intakeDigest,
+  });
+  const [lot, lotBump] = await lotPda(protocol, LENDING_LOT_ID);
+  const [mint] = await findMintPda({ lot: lot as Address });
+  const [mintAuthority] = await findMintAuthorityPda({ mint });
+  const [khunouPosition, khunouPositionBump] = await findPositionPda({
+    lot: lot as Address,
+    owner: khunou as Address,
+  });
+  const [buyerPosition, buyerPositionBump] = await findPositionPda({
+    lot: lot as Address,
+    owner: buyer as Address,
+  });
+  const vaultOf = async (position: string) => {
+    const [vaultAuthority] = await findVaultAuthorityPda({ position: position as Address });
+    const [vault] = await pda(
+      [
+        addressBytes.encode(vaultAuthority),
+        addressBytes.encode(TOKEN_2022 as Address),
+        addressBytes.encode(mint),
+      ],
+      ASSOCIATED_TOKEN,
+    );
+    return { vaultAuthority, vault: vault as Address };
+  };
+  const khunouVault = await vaultOf(khunouPosition);
+  const buyerVault = await vaultOf(buyerPosition);
+
+  const facilityId = fill(16, simulation ? 0x12 : 0x11);
+  const [facility, facilityBump] = await findFacilityPda({
+    protocol,
+    lenderOrg: lenderOrg as Address,
+    facilityId,
+  });
+  const [valuation, valuationBump] = await pda([
+    text.encode("valuation"),
+    addressBytes.encode(facility),
+    addressBytes.encode(classPolicy),
+    text.encode("G1"),
+    addressBytes.encode(custodianClass as Address),
+  ]);
+  const [loan, loanBump] = await findLoanPda({ facility, loanIndex: 0 });
+  const [lock, lockBump] = await findLockPda({ loan });
+  const usd = text.encode("USD");
+
+  const poolMint = (await syntheticSigner(34)).address;
+  const { pool, poolAuthority, vault: poolVault } = await derivePoolAddresses(protocol, poolMint);
+  const [, poolBump] = await findPoolPda({ protocol });
+  const [share, shareBump] = await findSharePda({ pool, depositorOrg: lenderOrg as Address });
+  const depositorToken = await findAssociatedTokenAddress(depositorWallet.address, poolMint);
+  const destination = await findAssociatedTokenAddress(borrowerWallet.address, poolMint);
+
+  async function paymentState(
+    paymentId: Uint8Array,
+    purpose: number,
+    subject: string,
+    amount: bigint,
+    evidenceDigest: Uint8Array,
+    observedAt: bigint,
+  ): Promise<PaymentState> {
+    const [address, bump] = await findPaymentPda({
+      protocol,
+      lenderOrg: lenderOrg as Address,
+      paymentId,
+    });
+    return {
+      address,
+      bump,
+      paymentId,
+      purpose,
+      subject,
+      amount,
+      evidenceDigest,
+      observedAt,
+      status:
+        purpose === PaymentPurpose.Correction ? PaymentStatus.Consumed : PaymentStatus.Unconsumed,
+      applied: 0n,
+      surplus: 0n,
+    };
+  }
+
+  // ---- the chain state the steps change ----
+  const state = {
+    occupiedKg: 0n,
+    lotRevision: 0n,
+    khunou: { quantityKg: 0n, lockedKg: 0n, revision: 0n },
+    buyer: null as { quantityKg: bigint; revision: bigint } | null,
+    loanCount: 0,
+    valuationVersion: 0,
+    valuationSetAt: 0n,
+    valuationSource: fill(32, 0),
+    loan: null as LoanState | null,
+    lockKg: 0n,
+    lockControl: LockControl.Pledged,
+    intents: [] as {
+      address: string;
+      bump: number;
+      nonce: bigint;
+      quantityKg: bigint;
+      price: bigint;
+      expiresAt: bigint;
+      positionRevision: bigint;
+      status: number;
+    }[],
+    payments: new Map<string, PaymentState>(),
+    pool: { cashMinor: 0n, totalShares: 0n, lentMinor: 0n, incomeMinor: 0n, revision: 0n },
+    share: null as { shares: bigint; lentMinor: bigint } | null,
+  };
+
+  const enc = {
+    custodianClass: () =>
+      thetis(
+        bytesOf(getCustodianClassEncoder(), {
+          protocol,
+          custodian: kopano,
+          classPolicy,
+          siteCode: SITE_CODE,
+          approvedCapacityKg: CAPACITY_KG,
+          occupiedKg: state.occupiedKg,
+          reservedInboundKg: 0n,
+          bump: custodianClassBump,
+        }),
+      ),
+    lot: (issuedAt: bigint) =>
+      thetis(
+        bytesOf(getLotEncoder(), {
+          protocol,
+          lotId: LENDING_LOT_ID,
+          classPolicy,
+          classVersion: SEED.classVersion,
+          grade: "G1",
+          custodianClass,
+          intake,
+          parent: none(),
+          root: lot,
+          mint,
+          supplyKg: 5_000_000n,
+          state: LotState.Stored,
+          restriction: Restriction.Normal,
+          expiresAt: issuedAt + SEED.lotValiditySecs,
+          revision: state.lotRevision,
+          liveChildren: 0,
+          bump: lotBump,
+        }),
+      ),
+    khunouPosition: () =>
+      thetis(
+        bytesOf(getPositionEncoder(), {
+          protocol,
+          lot,
+          owner: khunou,
+          quantityKg: state.khunou.quantityKg,
+          lockedKg: state.khunou.lockedKg,
+          reservedKg: 0n,
+          revision: state.khunou.revision,
+          bump: khunouPositionBump,
+        }),
+      ),
+    buyerPosition: () =>
+      thetis(
+        bytesOf(getPositionEncoder(), {
+          protocol,
+          lot,
+          owner: buyer,
+          quantityKg: state.buyer?.quantityKg ?? 0n,
+          lockedKg: 0n,
+          reservedKg: 0n,
+          revision: state.buyer?.revision ?? 0n,
+          bump: buyerPositionBump,
+        }),
+      ),
+    facility: () =>
+      thetis(
+        bytesOf(getFacilityEncoder(), {
+          protocol,
+          lender: lenderOrg,
+          borrower: khunou,
+          facilityId,
+          currency: usd,
+          currencyDecimals: 2,
+          termsVersion: 1,
+          rateBps: 1200,
+          maxLtvBps: 6000,
+          termsDigest: fill(32, 0x21),
+          loanCount: state.loanCount,
+          bump: facilityBump,
+        }),
+      ),
+    valuation: () =>
+      thetis(
+        bytesOf(getValuationEncoder(), {
+          protocol,
+          facility,
+          classPolicy,
+          grade: "G1",
+          custodianClass,
+          valuePerKg: 20n,
+          haircutBps: 0,
+          validUntil: state.valuationSetAt + 30n * 86_400n,
+          sourceDigest: state.valuationSource,
+          version: state.valuationVersion,
+          setAt: state.valuationSetAt,
+          bump: valuationBump,
+        }),
+      ),
+    loan: () => {
+      const current = state.loan as LoanState;
+      return thetis(
+        bytesOf(getLoanEncoder(), {
+          protocol,
+          facility,
+          borrower: khunou,
+          lot,
+          position: khunouPosition,
+          index: 0,
+          status: current.status,
+          rateBps: 1200,
+          termsVersion: 1,
+          principal: current.principal,
+          bookedInterest: current.bookedInterest,
+          accrualRemainder: current.accrualRemainder,
+          accruedAt: current.accruedAt,
+          openExceptions: current.openExceptions,
+          revision: current.revision,
+          bump: loanBump,
+        }),
+      );
+    },
+    lock: () =>
+      thetis(
+        bytesOf(getLockAllocationEncoder(), {
+          protocol,
+          loan,
+          position: khunouPosition,
+          quantityKg: state.lockKg,
+          control: state.lockControl,
+          bump: lockBump,
+        }),
+      ),
+    payment: (payment: PaymentState) =>
+      thetis(
+        bytesOf(getPaymentAttestationEncoder(), {
+          protocol,
+          lender: lenderOrg,
+          loan,
+          paymentId: payment.paymentId,
+          purpose: payment.purpose,
+          subject: payment.subject,
+          amount: payment.amount,
+          currency: usd,
+          evidenceDigest: payment.evidenceDigest,
+          observedAt: payment.observedAt,
+          status: payment.status,
+          applied: payment.applied,
+          surplus: payment.surplus,
+          bump: payment.bump,
+        }),
+      ),
+    intent: (intent: (typeof state.intents)[number]) =>
+      thetis(
+        bytesOf(getReleaseIntentEncoder(), {
+          protocol,
+          loan,
+          lot,
+          position: khunouPosition,
+          seller: khunou,
+          buyer,
+          nonce: intent.nonce,
+          quantityKg: intent.quantityKg,
+          price: intent.price,
+          topUp: 0n,
+          currency: usd,
+          expiresAt: intent.expiresAt,
+          positionRevision: intent.positionRevision,
+          status: intent.status,
+          bump: intent.bump,
+        }),
+      ),
+    pool: () =>
+      thetis(
+        bytesOf(getSimulationPoolEncoder(), {
+          protocol,
+          mint: poolMint,
+          vault: poolVault,
+          currency: usd,
+          currencyDecimals: 2,
+          ...state.pool,
+          bump: poolBump,
+        }),
+      ),
+    share: () =>
+      thetis(
+        bytesOf(getPoolShareEncoder(), {
+          pool,
+          organisation: lenderOrg,
+          shares: state.share?.shares ?? 0n,
+          lentMinor: state.share?.lentMinor ?? 0n,
+          bump: shareBump,
+        }),
+      ),
+  };
+
+  const accrue = (current: LoanState, now: bigint) => {
+    const { interest, remainder } = accrueSimple({
+      principal: current.principal,
+      rateBps: 1200n,
+      elapsedSeconds: now - current.accruedAt,
+      carriedRemainder: current.accrualRemainder,
+    });
+    return {
+      bookedInterest: current.bookedInterest + interest,
+      accrualRemainder: remainder,
+      accruedAt: now,
+    };
+  };
+  const loanState = () => {
+    if (!state.loan) throw new Error("the scenario has no loan yet");
+    return state.loan;
+  };
+  const tx = (
+    signature: string,
+    name: string,
+    instruction: Instruction,
+    event: Uint8Array,
+    systemCpi = false,
+  ) =>
+    thetisTransaction({
+      signature,
+      feePayer: sponsor.address,
+      name,
+      instruction,
+      events: [event],
+      systemCpi,
+    });
+  const confirm = async (
+    signature: string,
+    now: bigint,
+    payment: PaymentState,
+    target: PaymentState | null,
+    event: Uint8Array,
+  ) =>
+    tx(
+      signature,
+      "ConfirmPayment",
+      getConfirmPaymentInstruction({
+        lender: lenderWallet,
+        payer: sponsor,
+        protocol,
+        authority: lenderAuthority,
+        lenderOrg: lenderOrg as Address,
+        facility,
+        loan,
+        subject: payment.subject as Address,
+        ...(target ? { target: target.address as Address } : {}),
+        payment: payment.address as Address,
+        paymentId: payment.paymentId,
+        purpose: payment.purpose as PaymentPurpose,
+        amount: payment.amount,
+        currency: usd,
+        evidenceDigest: payment.evidenceDigest,
+        observedAt: now,
+      }),
+      event,
+      true,
+    );
+  const correction = async (signature: string, now: bigint, id: number, voided: boolean) => {
+    const target = state.payments.get("repayment") as PaymentState;
+    const current = loanState();
+    const made = await paymentState(
+      fill(32, id),
+      PaymentPurpose.Correction,
+      target.address,
+      0n,
+      fill(32, id + 0x10),
+      now,
+    );
+    state.payments.set(voided ? "voided" : "correction", made);
+    if (voided) target.status = PaymentStatus.Voided;
+    else {
+      current.openExceptions += 1;
+      current.revision += 1n;
+    }
+    const accounts: Record<string, AccountState> = {
+      [made.address]: enc.payment(made),
+      [target.address]: enc.payment(target),
+      [loan]: enc.loan(),
+    };
+    return {
+      tx: await confirm(
+        signature,
+        now,
+        made,
+        target,
+        bytesOf(getPaymentCorrectedEventEncoder(), {
+          payment: made.address,
+          target: target.address,
+          loan,
+          voided,
+          openExceptions: current.openExceptions,
+          loanRevision: current.revision,
+        }),
+      ),
+      accounts,
+    };
+  };
+  const intentStep = async (
+    signature: string,
+    now: bigint,
+    nonce: bigint,
+    quantityKg: bigint,
+    price: bigint,
+  ) => {
+    const [address, bump] = await findIntentPda({ loan, nonce });
+    const intent = {
+      address,
+      bump,
+      nonce,
+      quantityKg,
+      price,
+      expiresAt: now + 86_400n,
+      positionRevision: state.khunou.revision,
+      status: IntentStatus.Open,
+    };
+    state.intents.push(intent);
+    return {
+      tx: tx(
+        signature,
+        "CreateReleaseIntent",
+        getCreateReleaseIntentInstruction({
+          sponsor,
+          protocol,
+          sellerOrg: khunou as Address,
+          sellerAuthority: borrowerAuthority,
+          buyerOrg: buyer as Address,
+          lenderOrg: lenderOrg as Address,
+          facility,
+          loan,
+          lock,
+          lot: lot as Address,
+          position: khunouPosition,
+          intent: address,
+          nonce,
+          quantityKg,
+          price,
+          topUp: 0n,
+          expiresAt: intent.expiresAt,
+          expectedRevision: state.khunou.revision,
+          validUntil: now + 270n,
+        }),
+        bytesOf(getReleaseIntentCreatedEventEncoder(), {
+          intent: address,
+          loan,
+          seller: khunou,
+          buyer,
+          quantityKg,
+          price,
+          topUp: 0n,
+          expiresAt: intent.expiresAt,
+        }),
+        true,
+      ),
+      accounts: { [address]: enc.intent(intent) },
+    };
+  };
+  const releaseStep = async (signature: string, now: bigint, key: string, id: number) => {
+    const intent = state.intents.at(-1) as (typeof state.intents)[number];
+    const payment = await paymentState(
+      fill(32, id),
+      PaymentPurpose.Release,
+      intent.address,
+      intent.price,
+      fill(32, id + 0x10),
+      now,
+    );
+    state.payments.set(key, payment);
+    return {
+      tx: await confirm(
+        signature,
+        now,
+        payment,
+        null,
+        bytesOf(getPaymentConfirmedEventEncoder(), {
+          payment: payment.address,
+          loan,
+          purpose: payment.purpose,
+          subject: payment.subject,
+          amount: payment.amount,
+          currency: usd,
+        }),
+      ),
+      accounts: { [payment.address]: enc.payment(payment) },
+    };
+  };
+  const saleStep = async (signature: string, now: bigint, key: string) => {
+    const intent = state.intents.at(-1) as (typeof state.intents)[number];
+    const payment = state.payments.get(key) as PaymentState;
+    const current = loanState();
+    const accrual = accrue(current, now);
+    const application = applyPayment(current.principal, accrual.bookedInterest, payment.amount);
+    const expectedRevision = state.khunou.revision;
+    Object.assign(current, {
+      bookedInterest: application.bookedInterest,
+      accrualRemainder: accrual.accrualRemainder,
+      accruedAt: now,
+      principal: application.principal,
+      revision: current.revision + 1n,
+    });
+    state.lockKg -= intent.quantityKg;
+    state.khunou.quantityKg -= intent.quantityKg;
+    state.khunou.lockedKg -= intent.quantityKg;
+    state.khunou.revision += 1n;
+    state.buyer = state.buyer
+      ? {
+          quantityKg: state.buyer.quantityKg + intent.quantityKg,
+          revision: state.buyer.revision + 1n,
+        }
+      : { quantityKg: intent.quantityKg, revision: 0n };
+    state.lotRevision += 1n;
+    intent.status = IntentStatus.Executed;
+    payment.status = PaymentStatus.Consumed;
+    payment.applied = application.applied;
+    payment.surplus = application.surplus;
+    return {
+      tx: tx(
+        signature,
+        "SellPledged",
+        getSellPledgedInstruction({
+          sponsor,
+          protocol,
+          facility,
+          lenderOrg: lenderOrg as Address,
+          loan,
+          lock,
+          valuation: valuation as Address,
+          intent: intent.address as Address,
+          payment: payment.address as Address,
+          lot: lot as Address,
+          mint,
+          sellerOrg: khunou as Address,
+          buyerOrg: buyer as Address,
+          buyerAuthority,
+          sellerPosition: khunouPosition,
+          sellerVaultAuthority: khunouVault.vaultAuthority,
+          sellerVault: khunouVault.vault,
+          buyerPosition,
+          buyerVaultAuthority: buyerVault.vaultAuthority,
+          buyerVault: buyerVault.vault,
+          expectedRevision,
+          validUntil: now + 270n,
+        }),
+        bytesOf(getPledgedSoldEventEncoder(), {
+          intent: intent.address,
+          loan,
+          payment: payment.address,
+          lot,
+          sellerPosition: khunouPosition,
+          buyerPosition,
+          quantityKg: intent.quantityKg,
+          applied: application.applied,
+          surplus: application.surplus,
+          principal: application.principal,
+          bookedInterest: application.bookedInterest,
+          lotRevision: state.lotRevision,
+          revision: current.revision,
+        }),
+        true,
+      ),
+      accounts: {
+        [loan]: enc.loan(),
+        [lock]: enc.lock(),
+        [khunouPosition]: enc.khunouPosition(),
+        [buyerPosition]: enc.buyerPosition(),
+        [lot]: enc.lot(issuedAt),
+        [intent.address]: enc.intent(intent),
+        [payment.address]: enc.payment(payment),
+      },
+    };
+  };
+  const setValuationStep = (signature: string, now: bigint, source: number) => {
+    state.valuationVersion += 1;
+    state.valuationSetAt = now;
+    state.valuationSource = fill(32, source);
+    return {
+      tx: tx(
+        signature,
+        "SetValuation",
+        getSetValuationInstruction({
+          lender: lenderWallet,
+          payer: sponsor,
+          protocol,
+          authority: lenderAuthority,
+          lenderOrg: lenderOrg as Address,
+          facility,
+          classPolicy,
+          custodianClass: custodianClass as Address,
+          valuation: valuation as Address,
+          grade: "G1",
+          valuePerKg: 20n,
+          haircutBps: 0,
+          validUntil: now + 30n * 86_400n,
+          sourceDigest: state.valuationSource,
+        }),
+        bytesOf(getValuationSetEventEncoder(), {
+          valuation,
+          facility,
+          version: state.valuationVersion,
+          valuePerKg: 20n,
+          haircutBps: 0,
+          validUntil: now + 30n * 86_400n,
+          sourceDigest: state.valuationSource,
+          setAt: now,
+        }),
+        state.valuationVersion === 1,
+      ),
+      accounts: { [valuation]: enc.valuation() },
+    };
+  };
+
+  let issuedAt = 0n;
+  const steps: LendingScenario["steps"] = {};
+  const history: History = [];
+  const start = simulation ? 41_000 : 21_000;
+  const firstTime = Date.parse(simulation ? "2026-11-27T12:00:00Z" : "2026-11-27T00:00:00Z");
+  for (const [index, step] of stepList.entries()) {
+    const slot = start + index * 1000;
+    const blockTime = new Date(firstTime + index * 1000).toISOString();
+    const now = unix(blockTime);
+    const signature = syntheticSignature(
+      simulation ? (POOL_SIGNATURE_OFFSET[step] ?? STEP_SIGNATURE[step]) : STEP_SIGNATURE[step],
+    );
+    steps[step] = { signature, slot, blockTime };
+    let made: { tx: FakeTransaction; accounts: Record<string, AccountState> };
+    switch (step) {
+      case "accreditCustodianClass":
+        made = {
+          tx: thetisTransaction({
+            signature,
+            feePayer: deployer.address,
+            name: "AccreditCustodianClass",
+            systemCpi: true,
+            instruction: getAccreditCustodianClassInstruction({
+              protocol,
+              custodian: kopano as Address,
+              classPolicy,
+              custodianClass: custodianClass as Address,
+              accreditor,
+              payer: deployer,
+              siteCode: SITE_CODE,
+              approvedCapacityKg: CAPACITY_KG,
+            }),
+            events: [
+              bytesOf(getCustodianClassAccreditedEventEncoder(), {
+                custodianClass,
+                approvedCapacityKg: CAPACITY_KG,
+              }),
+            ],
+          }),
+          accounts: { [custodianClass]: enc.custodianClass() },
+        };
+        break;
+      case "issueLot":
+        issuedAt = now;
+        state.occupiedKg = 5_000_000n;
+        state.khunou = { quantityKg: 5_000_000n, lockedKg: 0n, revision: 0n };
+        made = {
+          tx: tx(
+            signature,
+            "IssueLot",
+            getIssueLotInstruction({
+              sponsor,
+              protocol,
+              authority: custodianAuthority,
+              owner: khunou as Address,
+              custodian: kopano as Address,
+              classPolicy,
+              custodianClass: custodianClass as Address,
+              intake,
+              lot: lot as Address,
+              mint,
+              mintAuthority,
+              position: khunouPosition,
+              vaultAuthority: khunouVault.vaultAuthority,
+              vault: khunouVault.vault,
+              lotId: LENDING_LOT_ID,
+              grade: "G1",
+              quantityKg: 5_000_000n,
+              intakeDigest,
+              validUntil: now + 270n,
+            }),
+            bytesOf(getLotIssuedEventEncoder(), {
+              lot,
+              owner: khunou,
+              quantityKg: 5_000_000n,
+              intake,
+              revision: 0n,
+            }),
+            true,
+          ),
+          accounts: {
+            [lot]: enc.lot(issuedAt),
+            [intake]: thetis(
+              bytesOf(getIntakeIdentityEncoder(), {
+                protocol,
+                custodian: kopano,
+                intakeDigest,
+                lot,
+                retired: false,
+                bump: intakeBump,
+              }),
+            ),
+            [khunouPosition]: enc.khunouPosition(),
+            [custodianClass]: enc.custodianClass(),
+          },
+        };
+        break;
+      case "openFacility":
+        made = {
+          tx: tx(
+            signature,
+            "OpenFacility",
+            getOpenFacilityInstruction({
+              lender: lenderWallet,
+              payer: sponsor,
+              protocol,
+              authority: lenderAuthority,
+              lenderOrg: lenderOrg as Address,
+              borrowerOrg: khunou as Address,
+              facility,
+              ...(simulation ? { pool } : {}),
+              facilityId,
+              currency: usd,
+              currencyDecimals: 2,
+              termsVersion: 1,
+              rateBps: 1200,
+              maxLtvBps: 6000,
+              termsDigest: fill(32, 0x21),
+            }),
+            bytesOf(getFacilityOpenedEventEncoder(), {
+              facility,
+              lender: lenderOrg,
+              borrower: khunou,
+              currency: usd,
+              currencyDecimals: 2,
+              termsVersion: 1,
+              rateBps: 1200,
+              maxLtvBps: 6000,
+            }),
+            true,
+          ),
+          accounts: { [facility]: enc.facility() },
+        };
+        break;
+      case "setValuation":
+        made = setValuationStep(signature, now, 0x22);
+        break;
+      case "setValuation2":
+        made = setValuationStep(signature, now, 0x23);
+        break;
+      case "pledge": {
+        const expectedRevision = state.khunou.revision;
+        state.loanCount = 1;
+        state.khunou.lockedKg = 5_000_000n;
+        state.khunou.revision += 1n;
+        state.loan = {
+          principal: 0n,
+          bookedInterest: 0n,
+          accrualRemainder: 0n,
+          accruedAt: now,
+          status: LoanStatus.Active,
+          openExceptions: 0,
+          revision: 0n,
+        };
+        state.lockKg = 5_000_000n;
+        made = {
+          tx: tx(
+            signature,
+            "Pledge",
+            getPledgeInstruction({
+              sponsor,
+              protocol,
+              lot: lot as Address,
+              position: khunouPosition,
+              borrowerOrg: khunou as Address,
+              borrowerAuthority,
+              lenderOrg: lenderOrg as Address,
+              lenderAuthority,
+              facility,
+              loan,
+              lock,
+              loanIndex: 0,
+              quantityKg: 5_000_000n,
+              expectedRevision,
+              validUntil: now + 270n,
+            }),
+            bytesOf(getPledgedEventEncoder(), {
+              loan,
+              lock,
+              position: khunouPosition,
+              lot,
+              quantityKg: 5_000_000n,
+              positionRevision: state.khunou.revision,
+              revision: 0n,
+            }),
+            true,
+          ),
+          accounts: {
+            [loan]: enc.loan(),
+            [lock]: enc.lock(),
+            [khunouPosition]: enc.khunouPosition(),
+            [facility]: enc.facility(),
+          },
+        };
+        break;
+      }
+      case "recordAdvance": {
+        const current = loanState();
+        const expectedRevision = current.revision;
+        Object.assign(current, accrue(current, now));
+        current.principal += 60_000_000n;
+        current.revision += 1n;
+        made = {
+          tx: tx(
+            signature,
+            "RecordAdvance",
+            getRecordAdvanceInstruction({
+              lender: lenderWallet,
+              protocol,
+              lenderAuthority,
+              lenderOrg: lenderOrg as Address,
+              facility,
+              loan,
+              lock,
+              lot: lot as Address,
+              valuation: valuation as Address,
+              borrowerOrg: khunou as Address,
+              borrowerAuthority,
+              amount: 60_000_000n,
+              currency: usd,
+              expectedRevision,
+              validUntil: now + 270n,
+            }),
+            bytesOf(getAdvanceRecordedEventEncoder(), {
+              loan,
+              amount: 60_000_000n,
+              principal: current.principal,
+              bookedInterest: current.bookedInterest,
+              revision: current.revision,
+            }),
+          ),
+          accounts: { [loan]: enc.loan() },
+        };
+        break;
+      }
+      case "createReleaseIntent":
+        made = await intentStep(signature, now, 1n, 2_000_000n, 40_000_000n);
+        break;
+      case "createReleaseIntent2":
+        made = await intentStep(signature, now, 2n, 1_000_000n, 10_000_000n);
+        break;
+      case "confirmRelease":
+        made = await releaseStep(signature, now, "release", 0x31);
+        break;
+      case "confirmRelease2":
+        made = await releaseStep(signature, now, "release2", 0x34);
+        break;
+      case "sellPledged":
+        made = await saleStep(signature, now, "release");
+        break;
+      case "sellPledged2":
+        made = await saleStep(signature, now, "release2");
+        break;
+      case "confirmRepayment": {
+        const payment = await paymentState(
+          fill(32, 0x32),
+          PaymentPurpose.Repayment,
+          loan,
+          21_000_000n,
+          fill(32, 0x42),
+          now,
+        );
+        state.payments.set("repayment", payment);
+        made = {
+          tx: await confirm(
+            signature,
+            now,
+            payment,
+            null,
+            bytesOf(getPaymentConfirmedEventEncoder(), {
+              payment: payment.address,
+              loan,
+              purpose: payment.purpose,
+              subject: payment.subject,
+              amount: payment.amount,
+              currency: usd,
+            }),
+          ),
+          accounts: { [payment.address]: enc.payment(payment) },
+        };
+        break;
+      }
+      case "repay": {
+        const payment = state.payments.get("repayment") as PaymentState;
+        const current = loanState();
+        const accrual = accrue(current, now);
+        const application = applyPayment(current.principal, accrual.bookedInterest, payment.amount);
+        Object.assign(current, {
+          bookedInterest: application.bookedInterest,
+          accrualRemainder: accrual.accrualRemainder,
+          accruedAt: now,
+          principal: application.principal,
+          revision: current.revision + 1n,
+        });
+        payment.status = PaymentStatus.Consumed;
+        payment.applied = application.applied;
+        payment.surplus = application.surplus;
+        made = {
+          tx: tx(
+            signature,
+            "Repay",
+            getRepayInstruction({
+              signer: lenderWallet,
+              protocol,
+              facility,
+              loan,
+              authority: lenderAuthority,
+              lenderOrg: lenderOrg as Address,
+              payment: payment.address as Address,
+              amount: payment.amount,
+            }),
+            bytesOf(getRepaidEventEncoder(), {
+              loan,
+              payment: some(payment.address),
+              pool: none(),
+              poolRevision: none(),
+              applied: application.applied,
+              fromInterest: application.fromInterest,
+              fromPrincipal: application.fromPrincipal,
+              surplus: application.surplus,
+              principal: application.principal,
+              bookedInterest: application.bookedInterest,
+              revision: current.revision,
+            }),
+          ),
+          accounts: { [loan]: enc.loan(), [payment.address]: enc.payment(payment) },
+        };
+        break;
+      }
+      case "closeLoan": {
+        const current = loanState();
+        const expectedRevision = current.revision;
+        Object.assign(current, accrue(current, now));
+        if (current.principal + current.bookedInterest !== 0n) {
+          throw new Error("the scenario closes a loan that still has debt");
+        }
+        current.status = LoanStatus.Closed;
+        current.revision += 1n;
+        const released = state.lockKg;
+        state.khunou.lockedKg -= released;
+        state.khunou.revision += 1n;
+        state.lockKg = 0n;
+        made = {
+          tx: tx(
+            signature,
+            "CloseLoan",
+            getCloseLoanInstruction({
+              lender: lenderWallet,
+              protocol,
+              authority: lenderAuthority,
+              lenderOrg: lenderOrg as Address,
+              facility,
+              loan,
+              lock,
+              position: khunouPosition,
+              expectedRevision,
+            }),
+            bytesOf(getLoanClosedEventEncoder(), {
+              loan,
+              position: khunouPosition,
+              releasedKg: released,
+              revision: current.revision,
+            }),
+          ),
+          accounts: {
+            [loan]: enc.loan(),
+            [lock]: enc.lock(),
+            [khunouPosition]: enc.khunouPosition(),
+          },
+        };
+        break;
+      }
+      case "correctRepayment":
+        made = await correction(signature, now, 0x33, false);
+        break;
+      case "voidRepayment":
+        made = await correction(signature, now, 0x35, true);
+        break;
+      case "deposit": {
+        const first = state.share === null;
+        state.share = {
+          shares: (state.share?.shares ?? 0n) + 60_000_000n,
+          lentMinor: state.share?.lentMinor ?? 0n,
+        };
+        state.pool.cashMinor += 60_000_000n;
+        state.pool.totalShares += 60_000_000n;
+        state.pool.revision += 1n;
+        made = {
+          tx: thetisTransaction({
+            signature,
+            feePayer: sponsor.address,
+            name: "Deposit",
+            systemCpi: first,
+            instruction: getDepositInstruction({
+              depositor: depositorWallet,
+              payer: sponsor,
+              protocol,
+              authority: depositorAuthority,
+              depositorOrg: lenderOrg as Address,
+              pool,
+              share,
+              depositorToken,
+              poolVault,
+              mint: poolMint,
+              amount: 60_000_000n,
+            }),
+            events: [
+              bytesOf(getDepositedEventEncoder(), {
+                pool,
+                organisation: lenderOrg,
+                wallet: depositorWallet.address,
+                amount: 60_000_000n,
+                shares: state.share.shares,
+                poolRevision: state.pool.revision,
+              }),
+            ],
+          }),
+          accounts: { [pool]: enc.pool(), [share]: enc.share() },
+        };
+        break;
+      }
+      case "borrow": {
+        const current = loanState();
+        const expectedRevision = current.revision;
+        Object.assign(current, accrue(current, now));
+        current.principal += 40_000_000n;
+        current.revision += 1n;
+        state.pool.cashMinor -= 40_000_000n;
+        state.pool.lentMinor += 40_000_000n;
+        state.pool.revision += 1n;
+        const held = state.share as { shares: bigint; lentMinor: bigint };
+        held.lentMinor += 40_000_000n;
+        made = {
+          tx: tx(
+            signature,
+            "Borrow",
+            getBorrowInstruction({
+              sponsor,
+              protocol,
+              borrowerOrg: khunou as Address,
+              borrowerAuthority,
+              lenderOrg: lenderOrg as Address,
+              facility,
+              loan,
+              lock,
+              lot: lot as Address,
+              valuation: valuation as Address,
+              pool,
+              lenderShare: share,
+              poolAuthority,
+              poolVault,
+              mint: poolMint,
+              destination,
+              amount: 40_000_000n,
+              expectedRevision,
+              validUntil: now + 270n,
+            }),
+            bytesOf(getBorrowedEventEncoder(), {
+              loan,
+              pool,
+              amount: 40_000_000n,
+              principal: current.principal,
+              bookedInterest: current.bookedInterest,
+              revision: current.revision,
+              poolRevision: state.pool.revision,
+            }),
+          ),
+          accounts: { [loan]: enc.loan(), [pool]: enc.pool(), [share]: enc.share() },
+        };
+        break;
+      }
+      case "repaySimulated": {
+        const current = loanState();
+        const accrual = accrue(current, now);
+        const application = applyPayment(current.principal, accrual.bookedInterest, 10_000_000n);
+        Object.assign(current, {
+          bookedInterest: application.bookedInterest,
+          accrualRemainder: accrual.accrualRemainder,
+          accruedAt: now,
+          principal: application.principal,
+          revision: current.revision + 1n,
+        });
+        state.pool.cashMinor += application.applied;
+        state.pool.lentMinor -= application.fromPrincipal;
+        state.pool.incomeMinor += application.fromInterest;
+        state.pool.revision += 1n;
+        const held = state.share as { shares: bigint; lentMinor: bigint };
+        held.lentMinor -= application.fromPrincipal;
+        const instruction = getRepayInstruction({
+          signer: borrowerWallet,
+          protocol,
+          facility,
+          loan,
+          pool,
+          poolAuthority,
+          poolVault,
+          payerToken: destination,
+          mint: poolMint,
+          tokenProgram: TOKEN_PROGRAM_ADDRESS,
+          amount: 10_000_000n,
+        });
+        made = {
+          tx: tx(
+            signature,
+            "Repay",
+            {
+              ...instruction,
+              accounts: [...instruction.accounts, { address: share, role: AccountRole.WRITABLE }],
+            } as Instruction,
+            bytesOf(getRepaidEventEncoder(), {
+              loan,
+              payment: none(),
+              pool: some(pool),
+              poolRevision: some(state.pool.revision),
+              applied: application.applied,
+              fromInterest: application.fromInterest,
+              fromPrincipal: application.fromPrincipal,
+              surplus: 0n,
+              principal: application.principal,
+              bookedInterest: application.bookedInterest,
+              revision: current.revision,
+            }),
+          ),
+          accounts: { [loan]: enc.loan(), [pool]: enc.pool(), [share]: enc.share() },
+        };
+        break;
+      }
+      case "withdraw": {
+        const held = state.share as { shares: bigint; lentMinor: bigint };
+        held.shares -= 10_000_000n;
+        state.pool.cashMinor -= 10_000_000n;
+        state.pool.totalShares -= 10_000_000n;
+        state.pool.revision += 1n;
+        made = {
+          tx: tx(
+            signature,
+            "Withdraw",
+            getWithdrawInstruction({
+              depositor: depositorWallet,
+              protocol,
+              authority: depositorAuthority,
+              depositorOrg: lenderOrg as Address,
+              pool,
+              share,
+              depositorToken,
+              poolAuthority,
+              poolVault,
+              mint: poolMint,
+              amount: 10_000_000n,
+            }),
+            bytesOf(getWithdrawnEventEncoder(), {
+              pool,
+              organisation: lenderOrg,
+              wallet: depositorWallet.address,
+              amount: 10_000_000n,
+              shares: held.shares,
+              poolRevision: state.pool.revision,
+            }),
+          ),
+          accounts: { [pool]: enc.pool(), [share]: enc.share() },
+        };
+        break;
+      }
+    }
+    history.push({ slot, blockTime, transactions: [made.tx], accounts: made.accounts });
+  }
+
+  let base: History;
+  let firstSignature: string;
+  if (simulation) {
+    const { simulationSeed } = await import("./instances.ts");
+    base = await simulationSeed();
+    firstSignature = syntheticSignature(180);
+  } else {
+    base = (await all()).seed;
+    firstSignature = f.seedSignatures.deploy;
+  }
+  const payments = state.payments;
+  const addressOf = (key: string) => payments.get(key)?.address ?? "";
+  return {
+    history: cloneHistory([...base, ...history]),
+    steps,
+    protocol,
+    org,
+    classPolicy,
+    custodianClass,
+    lot,
+    facility,
+    valuation,
+    loan,
+    lock,
+    positions: { khunou: khunouPosition, buyer: buyerPosition },
+    intents: state.intents.map((intent) => intent.address),
+    payments: {
+      release: addressOf("release"),
+      repayment: addressOf("repayment"),
+      correction: addressOf(stepList.includes("voidRepayment") ? "voided" : "correction"),
+      release2: addressOf("release2"),
+    },
+    pool: simulation ? pool : null,
+    share: simulation ? share : null,
+    firstSignature,
+  };
+}
+
+/**
+ * seedHistory() followed by the 14 lending actions of live-lending.md §9.1, or by `steps` when
+ * given (the variants the lending tests need). One transaction per slot from 21,000.
+ */
+export async function lendingHistory(
+  steps: readonly LendingStep[] = LENDING_STEPS,
+): Promise<LendingScenario> {
+  return lendingScenario("fiat", steps);
+}
+
+/**
+ * The token-simulation instance: instances.ts simulationSeed() (initialize_protocol,
+ * register_class, the seven accredit_organisation, open_pool) followed by the nine pool actions of
+ * live-lending.md §9.1, one per slot from 41,000.
+ */
+export async function poolHistory(): Promise<LendingScenario> {
+  return lendingScenario("pool", POOL_STEPS);
 }
