@@ -42,8 +42,8 @@ const CUSTODIAN_ID: u8 = 2;
 const LENDER_ID: u8 = 7;
 const LENDER2_ID: u8 = 8;
 
-/// Every Phase 1 and lending scope bit, by its value.
-const SCOPE_BITS: u16 = 10;
+/// Every scope bit of Phases 1 to 3, and bit 15, which no role holds, by its value.
+const SCOPE_BITS: u16 = 16;
 
 /// One `open_facility` call, with every input a test may vary.
 #[derive(Clone)]
@@ -889,24 +889,33 @@ fn delegate_authority_phase2_scope_table() {
     let table = [
         (
             Role::Exporter,
-            scope::TRANSFER | scope::SPLIT | scope::REDEEM | scope::PLEDGE,
+            scope::TRANSFER | scope::SPLIT | scope::REDEEM | scope::PLEDGE | scope::SHIP,
         ),
         (
             Role::Buyer,
-            scope::TRANSFER | scope::SPLIT | scope::REDEEM | scope::BUY,
+            scope::TRANSFER | scope::SPLIT | scope::REDEEM | scope::BUY | scope::SHIP,
         ),
-        (Role::Custodian, scope::ISSUE | scope::REDEEM),
-        (Role::Transporter, 0),
-        (Role::Terminal, 0),
+        (
+            Role::Custodian,
+            scope::ISSUE | scope::REDEEM | scope::CARRY | scope::OBSERVE | scope::ATTEST_TRANSPORT,
+        ),
+        (Role::Transporter, scope::CARRY | scope::OBSERVE),
+        (
+            Role::Terminal,
+            scope::CARRY | scope::OBSERVE | scope::LOAD | scope::ATTEST_TRANSPORT,
+        ),
         (Role::Lender, scope::LEND | scope::POOL),
-        (Role::Inspector, 0),
-        (Role::DocumentIssuer, scope::ATTEST_ORIGIN),
+        (Role::Inspector, scope::OBSERVE | scope::INSPECT),
+        (
+            Role::DocumentIssuer,
+            scope::ATTEST_ORIGIN | scope::ATTEST_TRANSPORT,
+        ),
     ];
     let mut granted = 0;
     let mut refused = 0;
     for (index, (role, mask)) in table.into_iter().enumerate() {
         let org = f.add_org(index as u8, role);
-        // Every single bit, the first unknown one (bit 9) included, then the role's whole set.
+        // Every single bit, the unknown bit 15 included, then the role's whole set.
         let cases = (0..SCOPE_BITS).map(|bit| 1_u16 << bit).chain([mask]);
         for scopes in cases.filter(|scopes| *scopes != 0) {
             let wallet = Pubkey::new_unique();
@@ -929,20 +938,21 @@ fn delegate_authority_phase2_scope_table() {
             InvalidField,
         );
     }
-    // Single bits allowed: Exporter 4, Buyer 4, Custodian 2, Lender 2, DocumentIssuer 1;
-    // plus the whole set of each of those five roles.
-    assert_eq!(granted, 13 + 5);
-    assert_eq!(refused, 8 * SCOPE_BITS as usize - 13);
+    // Single bits allowed: Exporter 5, Buyer 5, Custodian 5, Transporter 2, Terminal 4,
+    // Lender 2, Inspector 2, DocumentIssuer 2; plus the whole set of each of the eight roles.
+    assert_eq!(granted, 27 + 8);
+    assert_eq!(refused, 8 * SCOPE_BITS as usize - 27);
+    assert_eq!(refused, 101);
 }
 
 #[test]
-fn pause_accepts_phase2_bits_and_rejects_bit_9() {
+fn pause_accepts_phase2_bits_and_rejects_unknown_bit() {
     assert_eq!(pause::PLEDGE, 1 << 4);
     assert_eq!(pause::ADVANCE, 1 << 5);
     assert_eq!(pause::RELEASE, 1 << 6);
     assert_eq!(pause::LIQUIDATE, 1 << 7);
     assert_eq!(pause::POOL, 1 << 8);
-    assert_eq!(pause::ALL, 0x1ff);
+    assert_eq!(pause::ALL, 0xfff);
 
     let mut f = Fixture::initialized();
     for (flags, expected) in [
@@ -951,22 +961,23 @@ fn pause_accepts_phase2_bits_and_rejects_bit_9() {
         (pause::RELEASE, 0x070),
         (pause::LIQUIDATE, 0x0f0),
         (pause::POOL, 0x1f0),
-        (pause::ALL, 0x1ff),
+        (pause::ALL, 0xfff),
     ] {
         let tx = f.ok(f.change_pause(Admin, flags, true), Admin);
         assert_event(&tx, events::PauseChanged { flags: expected });
         assert_eq!(f.read::<Protocol>(f.protocol).pause_flags, expected);
     }
 
-    // Bit 9, alone or with a valid bit, is refused both ways and changes nothing.
+    // Bit 12, the first unknown bit, alone or with valid bits, is refused both ways and changes
+    // nothing.
     for paused in [true, false] {
-        for flags in [0x200, 0x201, 0x210, 0x3ff, 0xffff] {
+        for flags in [0x1000, 0x1001, 0x1010, 0x1fff, 0xffff] {
             f.refused(f.change_pause(Admin, flags, paused), Admin, InvalidField);
-            assert_eq!(f.read::<Protocol>(f.protocol).pause_flags, 0x1ff);
+            assert_eq!(f.read::<Protocol>(f.protocol).pause_flags, 0xfff);
         }
     }
 
-    for (flags, expected) in [(pause::PLEDGE | pause::POOL, 0x0ef), (pause::ALL, 0)] {
+    for (flags, expected) in [(pause::PLEDGE | pause::POOL, 0xeef), (pause::ALL, 0)] {
         let tx = f.ok(f.change_pause(Admin, flags, false), Admin);
         assert_event(&tx, events::PauseChanged { flags: expected });
         assert_eq!(f.read::<Protocol>(f.protocol).pause_flags, expected);
