@@ -200,27 +200,13 @@ describe("custodyHandoverMessage", () => {
   });
 
   it("derives the stage as the program does, and the stage the program refuses otherwise", () => {
-    const carrier = "carrier";
-    const destination = "destination";
-    const base = { carrier, destinationCustodian: destination };
-    expect(
-      handoverStage({ ...base, batchStage: "AtSource", to: carrier, toIsTransporter: true }),
-    ).toBe("Departure");
-    expect(
-      handoverStage({ ...base, batchStage: "AtSource", to: "other", toIsTransporter: true }),
-    ).toBe("Departure");
-    expect(
-      handoverStage({ ...base, batchStage: "InTransit", to: destination, toIsTransporter: false }),
-    ).toBe("Arrival");
-    expect(
-      handoverStage({ ...base, batchStage: "InTransit", to: "other", toIsTransporter: true }),
-    ).toBe("Transfer");
-    expect(
-      handoverStage({ ...base, batchStage: "InTransit", to: "other", toIsTransporter: false }),
-    ).toBe("Transfer");
-    expect(
-      handoverStage({ ...base, batchStage: "Arrived", to: destination, toIsTransporter: false }),
-    ).toBe("Arrival");
+    const at = (batchStage: "AtSource" | "InTransit" | "Arrived", to: string) =>
+      handoverStage({ batchStage, to, destinationCustodian: "destination" });
+    expect(at("AtSource", "carrier")).toBe("Departure");
+    expect(at("AtSource", "other")).toBe("Departure"); // RecipientNotApproved on chain
+    expect(at("InTransit", "destination")).toBe("Arrival");
+    expect(at("InTransit", "carrier")).toBe("Transfer");
+    expect(at("Arrived", "destination")).toBe("Arrival"); // StageOutOfOrder on chain
   });
 });
 

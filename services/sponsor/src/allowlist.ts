@@ -149,6 +149,13 @@ const SPONSORED: readonly {
     protocol: 1,
     sponsorSlots: [0],
   },
+  {
+    name: "handover",
+    discriminator: [171, 165, 76, 229, 206, 160, 51, 122],
+    accounts: 15,
+    protocol: 1,
+    sponsorSlots: [0],
+  },
 ];
 
 export const SPONSORED_INSTRUCTIONS = SPONSORED;

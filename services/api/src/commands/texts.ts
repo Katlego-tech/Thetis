@@ -364,3 +364,54 @@ export function issueLotMessage(
     validUntil,
   );
 }
+
+export type HandoverStageName = "Departure" | "Transfer" | "Arrival";
+
+/** program-custody.md §6.3 (handover.rs step 5): the stage the program derives from the batch and
+ * the recipient. Where the program would refuse the recipient (RecipientNotApproved) or the stage
+ * (StageOutOfOrder), the stage the batch is attempting goes in the text and the program refuses it
+ * on chain (field-app.md fold 24). */
+export function handoverStage(input: {
+  batchStage: "AtSource" | "InTransit" | "Arrived";
+  to: string;
+  destinationCustodian: string;
+}): HandoverStageName {
+  if (input.batchStage === "AtSource") return "Departure";
+  if (input.batchStage === "Arrived" || input.to === input.destinationCustodian) return "Arrival";
+  return "Transfer";
+}
+
+/** program-custody.md §6.2's `custody_handover_message`, byte for byte. */
+export function custodyHandoverMessage(
+  programId: string,
+  instanceId: Uint8Array,
+  lotId: string,
+  shipmentId: Uint8Array,
+  batchNumber: number,
+  batchCount: number,
+  quantityKg: bigint,
+  from: string,
+  to: string,
+  stage: HandoverStageName,
+  manifestDigest: Uint8Array,
+  expectedSequence: bigint,
+  validUntil: bigint,
+): Uint8Array {
+  return envelope(
+    programId,
+    hex(instanceId),
+    "Hand over custody",
+    [
+      ["Lot", lotId],
+      ["Shipment", hex(shipmentId)],
+      ["Batch", `${batchNumber} of ${batchCount}`],
+      ["Quantity", formatTonnes(quantityKg)],
+      ["From", from],
+      ["To", to],
+      ["Stage", stage],
+      ["Manifest", hex(manifestDigest)],
+      ["Sequence", String(expectedSequence)],
+    ],
+    validUntil,
+  );
+}

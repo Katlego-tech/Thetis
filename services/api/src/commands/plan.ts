@@ -23,17 +23,20 @@ import {
   decodeFacility,
   decodeLoan,
   decodeLot,
+  decodeManifestBatch,
   decodeOrganisation,
   decodePaymentAttestation,
   decodePoolShare,
   decodePosition,
   decodeProtocol,
   decodeReleaseIntent,
+  decodeShipment,
   decodeSimulationPool,
   decodeValuation,
   type Facility,
   findAuthorityPda,
   findFacilityPda,
+  findHandoverPda,
   findIntakePda,
   findIntentPda,
   findLoanPda,
@@ -52,6 +55,7 @@ import {
   getConfirmPaymentInstruction,
   getCreateReleaseIntentInstruction,
   getDepositInstruction,
+  getHandoverInstruction,
   getIssueLotInstruction,
   getLiquidateInstruction,
   getOpenFacilityInstruction,
@@ -62,11 +66,13 @@ import {
   getSetValuationInstruction,
   getWithdrawInstruction,
   type Loan,
+  type ManifestBatch,
   type Organisation,
   PaymentPurpose,
   PaymentStatus,
   Role,
   SettlementMode,
+  type Shipment,
   THETIS_PROGRAM_ADDRESS,
   U64_MAX,
 } from "@thetis/contracts";
@@ -76,9 +82,11 @@ import {
   borrowMessage,
   buyPledgedMessage,
   correctionPaymentId,
+  custodyHandoverMessage,
   formatBps,
   formatMoney,
   formatSast,
+  handoverStage,
   intakeDigest,
   issueLotMessage,
   normaliseTicket,
@@ -107,6 +115,7 @@ const HOUR = 3_600n;
 const SCOPES = {
   ISSUE: 1 << 0,
   PLEDGE: 1 << 5,
+  CARRY: 1 << 10,
   BUY: 1 << 6,
   LEND: 1 << 7,
   POOL: 1 << 8,
@@ -138,11 +147,11 @@ const tx = (role: SignerRole, scope: ScopeName | null, preCheckAuthority = true)
   scope,
   preCheckAuthority,
 });
-const text = (role: SignerRole, scope: ScopeName): SignerSpec => ({
+const text = (role: SignerRole, scope: ScopeName, preCheckAuthority = true): SignerSpec => ({
   role,
   method: "text",
   scope,
-  preCheckAuthority: true,
+  preCheckAuthority,
 });
 
 export const KIND_SPECS: Record<CommandKind, KindSpec> = {
@@ -274,6 +283,14 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     event: "LotIssued",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
   },
+  handover: {
+    mode: "both",
+    args: ["batch", "to"],
+    // Owner, 27 Nov (field-app.md §11): a next holder without an Authority is refused on chain.
+    signers: [text("holder", "CARRY"), text("next_holder", "CARRY", false)],
+    event: "CustodyHandedOver",
+    textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+  },
 };
 
 export function scopeBit(scope: string): number | null {
@@ -301,6 +318,8 @@ function isBase58Address(value: string): boolean {
 const ARG_RULES: Record<string, (value: string) => boolean> = {
   borrower: (v) => UUID.test(v),
   owner: (v) => UUID.test(v),
+  to: (v) => UUID.test(v),
+  batch: isBase58Address,
   lotId: (v) => /^[A-Z0-9-]{1,16}$/.test(v),
   weighbridgeTicket: (v) =>
     Buffer.byteLength(v) >= 1 &&
@@ -673,7 +692,85 @@ async function readOrigin(context: PrepareContext, subject: Uint8Array) {
   return best;
 }
 
+const BATCH_STAGES = ["AtSource", "InTransit", "Arrived"] as const;
+
 const PREPARE: Record<CommandKind, Preparer> = {
+  async handover(context) {
+    const { args } = context;
+    const batchAddress = args.batch as Address;
+    const batch = (await context.reader.read(
+      "batch",
+      batchAddress,
+      decodeManifestBatch as never,
+      "ManifestBatch",
+    )) as ManifestBatch;
+    requireInitiator(context, batch.holder);
+    const shipment = (await context.reader.read(
+      "shipment",
+      batch.shipment,
+      decodeShipment as never,
+      "Shipment",
+    )) as Shipment;
+    const lot = await readLot(context, shipment.lot);
+    const holder = await context.reader.organisation("holderOrg", batch.holder);
+    const to = await context.reader.organisationByUuid("to", args.to as string);
+    const batchStage = BATCH_STAGES[batch.stage];
+    if (!batchStage)
+      throw new RelayError("ACCOUNT_MISSING", `${batchAddress}: not a ManifestBatch`);
+    const stage = handoverStage({
+      batchStage,
+      to: to.address,
+      destinationCustodian: shipment.destinationCustodian,
+    });
+    const [handover] = await findHandoverPda({
+      batch: batchAddress,
+      expectedSequence: batch.sequence,
+    });
+    const until = validUntil(context, "handover");
+    const manifest = Uint8Array.from(batch.manifestDigest as ArrayLike<number>);
+    const message = custodyHandoverMessage(
+      context.programId,
+      context.instanceId,
+      lot.lotId,
+      Uint8Array.from(shipment.shipmentId as ArrayLike<number>),
+      batch.index + 1,
+      batch.batchCount,
+      batch.quantityKg,
+      holder.name,
+      to.name,
+      stage,
+      manifest,
+      batch.sequence,
+      until,
+    );
+    return {
+      plan: {
+        shipment: batch.shipment,
+        batch: batchAddress,
+        lot: shipment.lot,
+        fromOrg: batch.holder,
+        toOrg: to.address,
+        sourceClass: shipment.source,
+        destinationClass: shipment.destination,
+        ...(stage === "Departure" ? { departureDocument: shipment.departureDocument } : {}),
+        handover,
+        stage,
+        manifestDigest: hex(manifest),
+        expectedSequence: String(batch.sequence),
+        validUntil: String(until),
+      },
+      fields: textFields(message),
+      text: message,
+      validUntil: until,
+      signers: stored("handover", [holder, to]),
+      lot: shipment.lot,
+      facility: null,
+      loan: null,
+      intent: null,
+      payment: null,
+    };
+  },
+
   async issue_lot(context) {
     const { args } = context;
     const custodianClass = args.custodianClass as Address;
@@ -1642,6 +1739,25 @@ export async function buildInstruction(input: BuildInput): Promise<Instruction> 
     return createNoopSigner(wallet);
   };
   switch (input.kind) {
+    case "handover":
+      return getHandoverInstruction({
+        sponsor,
+        protocol,
+        shipment: a(plan.shipment),
+        batch: a(plan.batch),
+        lot: a(plan.lot),
+        fromOrg: a(plan.fromOrg),
+        fromAuthority: await authority(protocol, wallets.holder),
+        toOrg: a(plan.toOrg),
+        toAuthority: await authority(protocol, wallets.next_holder),
+        sourceClass: a(plan.sourceClass),
+        destinationClass: a(plan.destinationClass),
+        ...(plan.departureDocument ? { departureDocument: a(plan.departureDocument) } : {}),
+        handover: a(plan.handover),
+        manifestDigest: bytes(plan.manifestDigest),
+        expectedSequence: n(plan.expectedSequence),
+        validUntil: n(plan.validUntil),
+      });
     case "issue_lot":
       return getIssueLotInstruction({
         sponsor,
