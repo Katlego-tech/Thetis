@@ -454,3 +454,73 @@ export function observationMessage(
     validUntil,
   );
 }
+
+/** program-custody.md §6.2's `loading_intent_message` (the owner's `Prepare loading`), byte for
+ * byte. */
+export function loadingIntentMessage(
+  programId: string,
+  instanceId: Uint8Array,
+  lotId: string,
+  quantityKg: bigint,
+  owner: string,
+  terminal: string,
+  siteCode: string,
+  documentSha256: Uint8Array,
+  nonce: bigint,
+  expiresAt: bigint,
+  expectedRevision: bigint,
+  validUntil: bigint,
+): Uint8Array {
+  return envelope(
+    programId,
+    hex(instanceId),
+    "Prepare loading",
+    [
+      ["Lot", lotId],
+      ["Quantity", formatTonnes(quantityKg)],
+      ["Owner", owner],
+      ["Terminal", terminal],
+      ["Site", siteCode],
+      ["Loading document", hex(documentSha256)],
+      ["Intent", String(nonce)],
+      ["Intent expires", formatSast(expiresAt)],
+      ["Revision", String(expectedRevision)],
+    ],
+    validUntil,
+  );
+}
+
+/** program-custody.md §6.2's `record_loading_message` (owner and terminal), byte for byte.
+ * `loansAccepted` is k, the number of triples the transaction passes. */
+export function recordLoadingMessage(
+  programId: string,
+  instanceId: Uint8Array,
+  lotId: string,
+  quantityKg: bigint,
+  owner: string,
+  terminal: string,
+  documentSha256: Uint8Array,
+  nonce: bigint,
+  lockedKg: bigint,
+  loansAccepted: number,
+  expectedRevision: bigint,
+  validUntil: bigint,
+): Uint8Array {
+  return envelope(
+    programId,
+    hex(instanceId),
+    "Record loading",
+    [
+      ["Lot", lotId],
+      ["Quantity", formatTonnes(quantityKg)],
+      ["Owner", owner],
+      ["Terminal", terminal],
+      ["Loading document", hex(documentSha256)],
+      ["Intent", String(nonce)],
+      ["Locked", formatTonnes(lockedKg)],
+      ["Loan acceptances", String(loansAccepted)],
+      ["Revision", String(expectedRevision)],
+    ],
+    validUntil,
+  );
+}

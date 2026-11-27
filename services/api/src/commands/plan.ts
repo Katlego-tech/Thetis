@@ -21,7 +21,10 @@ import {
   decodeCustodianClass,
   decodeDocumentAttestation,
   decodeFacility,
+  decodeHandoffAcceptance,
+  decodeLoadingIntent,
   decodeLoan,
+  decodeLockAllocation,
   decodeLot,
   decodeManifestBatch,
   decodeOrganisation,
@@ -34,11 +37,13 @@ import {
   decodeSimulationPool,
   decodeValuation,
   type Facility,
+  findAcceptancePda,
   findAuthorityPda,
   findFacilityPda,
   findHandoverPda,
   findIntakePda,
   findIntentPda,
+  findLoadingIntentPda,
   findLoanPda,
   findLockPda,
   findMintAuthorityPda,
@@ -53,20 +58,28 @@ import {
   getBorrowInstruction,
   getCloseLoanInstruction,
   getConfirmPaymentInstruction,
+  getCreateLoadingIntentInstruction,
   getCreateReleaseIntentInstruction,
   getDepositInstruction,
   getHandoverInstruction,
   getIssueLotInstruction,
   getLiquidateInstruction,
+  getLockAllocationSize,
   getOpenFacilityInstruction,
   getPledgeInstruction,
   getRecordAdvanceInstruction,
+  getRecordLoadingInstruction,
   getRecordObservationInstruction,
   getRepayInstruction,
   getSellPledgedInstruction,
   getSetValuationInstruction,
   getWithdrawInstruction,
+  type HandoffAcceptance,
+  LOCK_ALLOCATION_DISCRIMINATOR,
+  type LoadingIntent,
   type Loan,
+  LoanStatus,
+  type LockAllocation,
   type ManifestBatch,
   ObservationKind,
   type Organisation,
@@ -91,17 +104,26 @@ import {
   handoverStage,
   intakeDigest,
   issueLotMessage,
+  loadingIntentMessage,
   normaliseTicket,
   type ObservationKindName,
   observationMessage,
   paymentId,
   pledgeMessage,
+  recordLoadingMessage,
   releaseIntentMessage,
   sourceDigest,
   termsDigest,
   textFields,
 } from "./texts.ts";
 import { type CommandKind, RelayError, type SignerRole, type StoredSigner } from "./views.ts";
+
+// LockAllocation (state.rs): 8 discriminator + protocol 32 + loan 32, then the position
+// (field-app.md T067r.3 fold 43).
+const LOCK_POSITION_OFFSET = 72;
+const LOCK_DISCRIMINATOR = Buffer.from(LOCK_ALLOCATION_DISCRIMINATOR);
+/** state.rs MAX_LOADING_LOANS: the triples one record_loading takes (driver decision D3). */
+const MAX_LOADING_LOANS = 4;
 
 // DocumentAttestation (state.rs): 8 discriminator + protocol 32 + kind 1, then the subject.
 const DOCUMENT_SUBJECT_OFFSET = 41;
@@ -124,6 +146,8 @@ const SCOPES = {
   BUY: 1 << 6,
   LEND: 1 << 7,
   POOL: 1 << 8,
+  SHIP: 1 << 9,
+  LOAD: 1 << 12,
 } as const;
 type ScopeName = keyof typeof SCOPES;
 
@@ -142,6 +166,9 @@ export interface KindSpec {
   args: readonly string[];
   signers: readonly SignerSpec[];
   event: string;
+  /** An event the instruction emits once per item after `event` (field-app.md T067r.3 fold 42):
+   * record_loading's LoanHandedOff, one per triple. */
+  trailingEvent?: string;
   /** validUntil = chainTime + this (field-app.md fold 17); unused by kinds without a text. */
   textWindowSecs: bigint;
   /** Plan keys of program-signer PDAs that never hold an account (field-app.md fold 25): they
@@ -312,6 +339,23 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     // field-app.md §4.3: every field role but handover's next_holder keeps the relay pre-check.
     signers: [text("observer", "OBSERVE")],
     event: "ObservationRecorded",
+    textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+  },
+  create_loading_intent: {
+    mode: "both",
+    args: ["lot", "evidenceVersionId", "expiresInHours"],
+    // field-app.md T067r.3 fold 41: the owner's Prepare loading, signed on the web.
+    signers: [text("owner", "SHIP")],
+    event: "LoadingIntentCreated",
+    textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+  },
+  record_loading: {
+    mode: "both",
+    args: ["intent"],
+    // Fold 46: the terminal keeps the relay pre-check (only handover's next_holder skips it).
+    signers: [text("owner", "SHIP"), text("terminal", "LOAD")],
+    event: "LoadingRecorded",
+    trailingEvent: "LoanHandedOff",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
   },
 };
@@ -576,8 +620,8 @@ export interface PrepareContext {
  * owner organisation, the purpose and, for custody evidence, the subject. */
 export interface EvidenceExpectation {
   ownerOrgId: string;
-  purpose: "bank" | "transport";
-  subject?: { kind: "batch"; ref: string };
+  purpose: "bank" | "transport" | "loading";
+  subject?: { kind: "batch" | "lot"; ref: string };
   /** The EVIDENCE_INVALID detail; the lending kinds send none. */
   detail?: string;
 }
@@ -758,7 +802,236 @@ const OBSERVER_ROLES: readonly number[] = [
   Role.Inspector,
 ];
 
+/** field-app.md T067r.3 fold 43, amended by the driver's PR #76 decisions D1–D3: one
+ * (acceptance, loan, lock) triple per positive lock of the position, ascending by the raw loan
+ * key. More than MAX_LOADING_LOANS positive locks is TOO_MANY_LOANS (D3). Each acceptance is read
+ * and decoded, and must name this intent, the lock's loan and the lock (D1): lamports at the PDA
+ * are not an acceptance. A lock without one is ACCEPTANCE_MISSING, and an accepted loan that is
+ * not Active is LOAN_NOT_ACTIVE (D2), both before any text exists. The chain's AcceptanceMissing
+ * and LoanNotActive stay the backstops for a change between create and send. */
+async function readTriples(context: PrepareContext, intent: Address, position: Address) {
+  const found = await context.reader.chain.programAccounts({
+    memcmp: { offset: LOCK_POSITION_OFFSET, bytes: position },
+    dataSize: getLockAllocationSize(),
+  });
+  const encoder = getAddressEncoder();
+  const locks: { loan: Address; lock: Address }[] = [];
+  for (const account of found) {
+    if (account.programAddress !== THETIS_PROGRAM_ADDRESS) continue;
+    if (!Buffer.from(account.data.subarray(0, 8)).equals(LOCK_DISCRIMINATOR)) continue;
+    let lock: LockAllocation;
+    try {
+      lock = decodeLockAllocation(account).data;
+    } catch {
+      continue;
+    }
+    if (lock.protocol !== context.protocol || lock.position !== position || lock.quantityKg === 0n)
+      continue;
+    locks.push({ loan: lock.loan, lock: account.address });
+  }
+  if (locks.length > MAX_LOADING_LOANS) {
+    throw new RelayError(
+      "TOO_MANY_LOANS",
+      `${locks.length} locked loans; a loading takes at most ${MAX_LOADING_LOANS}`,
+    );
+  }
+  locks.sort((left, right) =>
+    Buffer.compare(Buffer.from(encoder.encode(left.loan)), Buffer.from(encoder.encode(right.loan))),
+  );
+  const triples: { acceptance: Address; loan: Address; lock: Address }[] = [];
+  for (const { loan, lock } of locks) {
+    const [acceptance] = await findAcceptancePda({ intent, loan });
+    if (!(await acceptanceOf(context, acceptance, intent, loan, lock))) {
+      throw new RelayError("ACCEPTANCE_MISSING", `loan: ${loan}`);
+    }
+    const held = (await context.reader.read("loan", loan, decodeLoan as never, "Loan")) as Loan;
+    if (held.status !== LoanStatus.Active) throw new RelayError("LOAN_NOT_ACTIVE", `loan: ${loan}`);
+    triples.push({ acceptance, loan, lock });
+  }
+  return triples;
+}
+
+/** D1: true only for a decoded HandoffAcceptance of this instance naming this intent, loan and
+ * lock. A missing, foreign-owned or undecodable account is no acceptance. */
+async function acceptanceOf(
+  context: PrepareContext,
+  address: Address,
+  intent: Address,
+  loan: Address,
+  lock: Address,
+): Promise<boolean> {
+  if (!(await context.reader.exists(address))) return false;
+  let accepted: HandoffAcceptance;
+  try {
+    accepted = (await context.reader.read(
+      "acceptance",
+      address,
+      decodeHandoffAcceptance as never,
+      "HandoffAcceptance",
+    )) as HandoffAcceptance;
+  } catch (error) {
+    if (error instanceof RelayError && error.code === "ACCOUNT_MISSING") return false;
+    throw error;
+  }
+  return accepted.intent === intent && accepted.loan === loan && accepted.lock === lock;
+}
+
 const PREPARE: Record<CommandKind, Preparer> = {
+  async create_loading_intent(context) {
+    const { args } = context;
+    const lotAddress = args.lot as Address;
+    const lot = (await context.reader.read("lot", lotAddress, decodeLot as never, "Lot")) as {
+      lotId: string;
+      custodianClass: Address;
+    };
+    // Fold 41: the initiator must hold a position of the lot (the position is its PDA).
+    const owner = context.initiator;
+    const [position] = await findPositionPda({ lot: lotAddress, owner: owner.address });
+    if (!(await context.reader.exists(position))) {
+      notAuthorised("the organisation holds no position in this lot");
+    }
+    const held = (await context.reader.read(
+      "position",
+      position,
+      decodePosition as never,
+      "Position",
+    )) as { quantityKg: bigint; revision: bigint };
+    const site = (await context.reader.read(
+      "custodianClass",
+      lot.custodianClass,
+      decodeCustodianClass as never,
+      "CustodianClass",
+    )) as { custodian: Address; siteCode: string };
+    const terminal = await context.reader.organisation("terminalOrg", site.custodian);
+    const digestHex = await context.evidenceDigest(args.evidenceVersionId as string, {
+      ownerOrgId: owner.uuid,
+      purpose: "loading",
+      subject: { kind: "lot", ref: lotAddress },
+      detail: "loading document of this lot",
+    });
+    const nonce = new DataView(new Uint8Array(randomBytes(8)).buffer).getBigUint64(0, true);
+    const [intent] = await findLoadingIntentPda({ position, nonce });
+    const expiresAt = context.chainTime + BigInt(args.expiresInHours as string) * HOUR;
+    const until = validUntil(context, "create_loading_intent");
+    const message = loadingIntentMessage(
+      context.programId,
+      context.instanceId,
+      lot.lotId,
+      held.quantityKg,
+      owner.name,
+      terminal.name,
+      site.siteCode,
+      Uint8Array.from(Buffer.from(digestHex, "hex")),
+      nonce,
+      expiresAt,
+      held.revision,
+      until,
+    );
+    return {
+      plan: {
+        lot: lotAddress,
+        position,
+        ownerOrg: owner.address,
+        custodianClass: lot.custodianClass,
+        terminalOrg: site.custodian,
+        intent,
+        nonce: String(nonce),
+        documentSha256: digestHex,
+        expiresAt: String(expiresAt),
+        expectedRevision: String(held.revision),
+        validUntil: String(until),
+      },
+      fields: textFields(message),
+      text: message,
+      validUntil: until,
+      signers: stored("create_loading_intent", [owner]),
+      lot: lotAddress,
+      facility: null,
+      loan: null,
+      intent,
+      payment: null,
+    };
+  },
+
+  async record_loading(context) {
+    const intentAddress = context.args.intent as Address;
+    const intent = (await context.reader.read(
+      "intent",
+      intentAddress,
+      decodeLoadingIntent as never,
+      "LoadingIntent",
+    )) as LoadingIntent;
+    requireInitiator(context, intent.terminal, intent.owner);
+    const position = (await context.reader.read(
+      "position",
+      intent.position,
+      decodePosition as never,
+      "Position",
+    )) as { revision: bigint };
+    const lot = (await context.reader.read("lot", intent.lot, decodeLot as never, "Lot")) as {
+      lotId: string;
+      intake: Address;
+      mint: Address;
+      parent: { __option: "Some"; value: Address } | { __option: "None" };
+      root: Address;
+    };
+    await context.reader.read(
+      "custodianClass",
+      intent.custodianClass,
+      decodeCustodianClass as never,
+      "CustodianClass",
+    );
+    const owner = await context.reader.organisation("ownerOrg", intent.owner);
+    const terminal = await context.reader.organisation("terminalOrg", intent.terminal);
+    const root = lot.parent.__option === "Some" ? lot.root : null;
+    if (root) await context.reader.read("root", root, decodeLot as never, "Lot");
+    const { vaultAuthority, vault } = await lotVault(intent.position, lot.mint);
+    const triples = await readTriples(context, intentAddress, intent.position);
+    const until = validUntil(context, "record_loading");
+    const message = recordLoadingMessage(
+      context.programId,
+      context.instanceId,
+      lot.lotId,
+      intent.quantityKg,
+      owner.name,
+      terminal.name,
+      Uint8Array.from(intent.documentSha256 as ArrayLike<number>),
+      intent.nonce,
+      intent.lockedKg,
+      triples.length,
+      position.revision,
+      until,
+    );
+    return {
+      plan: {
+        intent: intentAddress,
+        lot: intent.lot,
+        position: intent.position,
+        custodianClass: intent.custodianClass,
+        ownerOrg: intent.owner,
+        terminalOrg: intent.terminal,
+        ...(root ? { root } : {}),
+        intake: lot.intake,
+        mint: lot.mint,
+        vaultAuthority,
+        vault,
+        expectedRevision: String(position.revision),
+        validUntil: String(until),
+        k: String(triples.length),
+        triples: triples.flatMap((t) => [t.acceptance, t.loan, t.lock]).join(","),
+      },
+      fields: textFields(message),
+      text: message,
+      validUntil: until,
+      signers: stored("record_loading", [owner, terminal]),
+      lot: intent.lot,
+      facility: null,
+      loan: null,
+      intent: intentAddress,
+      payment: null,
+    };
+  },
+
   async handover(context) {
     const { args } = context;
     const batchAddress = args.batch as Address;
@@ -1883,6 +2156,57 @@ export async function buildInstruction(input: BuildInput): Promise<Instruction> 
     return createNoopSigner(wallet);
   };
   switch (input.kind) {
+    case "create_loading_intent":
+      return getCreateLoadingIntentInstruction({
+        sponsor,
+        protocol,
+        ownerOrg: a(plan.ownerOrg),
+        ownerAuthority: await authority(protocol, wallets.owner),
+        lot: a(plan.lot),
+        position: a(plan.position),
+        custodianClass: a(plan.custodianClass),
+        terminalOrg: a(plan.terminalOrg),
+        intent: a(plan.intent),
+        nonce: n(plan.nonce),
+        documentSha256: bytes(plan.documentSha256),
+        expiresAt: n(plan.expiresAt),
+        expectedRevision: n(plan.expectedRevision),
+        validUntil: n(plan.validUntil),
+      });
+    case "record_loading": {
+      const instruction = getRecordLoadingInstruction({
+        sponsor,
+        protocol,
+        ownerOrg: a(plan.ownerOrg),
+        ownerAuthority: await authority(protocol, wallets.owner),
+        terminalOrg: a(plan.terminalOrg),
+        terminalAuthority: await authority(protocol, wallets.terminal),
+        custodianClass: a(plan.custodianClass),
+        lot: a(plan.lot),
+        ...(plan.root ? { root: a(plan.root) } : {}),
+        intake: a(plan.intake),
+        mint: a(plan.mint),
+        position: a(plan.position),
+        vaultAuthority: a(plan.vaultAuthority),
+        vault: a(plan.vault),
+        intent: a(plan.intent),
+        expectedRevision: n(plan.expectedRevision),
+        validUntil: n(plan.validUntil),
+      });
+      // Fold 43: the triples after the 17 accounts, acceptance read-only, loan and lock writable.
+      const triples = plan.triples ? plan.triples.split(",") : [];
+      if (triples.length !== Number(n(plan.k)) * 3) throw new Error("plan triples do not match k");
+      return {
+        ...instruction,
+        accounts: [
+          ...instruction.accounts,
+          ...triples.map((key, index) => ({
+            address: key as Address,
+            role: index % 3 === 0 ? AccountRole.READONLY : AccountRole.WRITABLE,
+          })),
+        ],
+      };
+    }
     case "handover":
       return getHandoverInstruction({
         sponsor,
