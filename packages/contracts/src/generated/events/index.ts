@@ -13,6 +13,7 @@ export * from './batchRegistered.ts';
 export * from './borrowed.ts';
 export * from './classRegistered.ts';
 export * from './custodianClassAccredited.ts';
+export * from './custodyHandedOver.ts';
 export * from './deposited.ts';
 export * from './documentAttested.ts';
 export * from './documentRevoked.ts';

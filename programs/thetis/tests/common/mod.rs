@@ -74,6 +74,14 @@ pub enum Actor {
     Buyer2,
     /// A wallet of a second exporter organisation, which is not the borrower.
     Owner2,
+    /// A transporter's driver: the carrier's wallet in the custody tests.
+    Driver,
+    /// A driver of a second transporter organisation.
+    OtherDriver,
+    /// A transporter member's second wallet that holds no Authority (the refused driver).
+    UnlinkedDriver,
+    /// A wallet of a second custodian organisation.
+    SecondCustodian,
 }
 
 use Actor::*;
@@ -108,6 +116,10 @@ pub struct Fixture {
     lender_treasury: Keypair,
     buyer2: Keypair,
     owner2: Keypair,
+    driver: Keypair,
+    other_driver: Keypair,
+    unlinked_driver: Keypair,
+    second_custodian: Keypair,
     pub protocol: Pubkey,
 }
 
@@ -145,6 +157,10 @@ impl Fixture {
             lender_treasury: Keypair::new(),
             buyer2: Keypair::new(),
             owner2: Keypair::new(),
+            driver: Keypair::new(),
+            other_driver: Keypair::new(),
+            unlinked_driver: Keypair::new(),
+            second_custodian: Keypair::new(),
             protocol: pda(&[b"protocol", &INSTANCE]),
         }
     }
@@ -175,6 +191,10 @@ impl Fixture {
             LenderTreasury => &self.lender_treasury,
             Buyer2 => &self.buyer2,
             Owner2 => &self.owner2,
+            Driver => &self.driver,
+            OtherDriver => &self.other_driver,
+            UnlinkedDriver => &self.unlinked_driver,
+            SecondCustodian => &self.second_custodian,
         }
     }
 
@@ -929,6 +949,23 @@ impl Fixture {
         instructions: &[Instruction],
         index: u8,
         expected: ThetisError,
+    ) {
+        let code: u32 = expected.into();
+        let failure = self.sponsored_failure(instructions);
+        assert_eq!(
+            failure.err,
+            TransactionError::InstructionError(index, InstructionError::Custom(code)),
+            "{}",
+            failure.meta.pretty_logs()
+        );
+    }
+
+    /// As `sponsored_refused`, for a fault Anchor's account checks catch before the handler.
+    pub fn sponsored_refused_anchor(
+        &mut self,
+        instructions: &[Instruction],
+        index: u8,
+        expected: anchor_lang::error::ErrorCode,
     ) {
         let code: u32 = expected.into();
         let failure = self.sponsored_failure(instructions);
