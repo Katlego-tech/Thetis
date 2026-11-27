@@ -10,12 +10,14 @@ import {
   getHandoverInstruction,
   getManifestBatchDecoder,
   getManifestBatchEncoder,
+  getRecordObservationInstruction,
   getShipmentCancelledEventDecoder,
   getShipmentCancelledEventEncoder,
   getShipmentDecoder,
   getShipmentEncoder,
   getShipmentPreparedEventDecoder,
   getShipmentPreparedEventEncoder,
+  ObservationKind,
   type Shipment,
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
@@ -222,25 +224,27 @@ describe("Phase 3 custody, the shipment part", () => {
     );
   });
 
-  it("1. handles every instruction and event of the IDL it is built on, but handover", () => {
-    // The IDL at main has the handover instruction (pre-check fold 1): 33 instructions and 33 events, of
-    // which T063d.1 handles all but Handover and CustodyHandedOver.
+  it("1. handles every instruction and event of the IDL it is built on, but handover and observation", () => {
+    // The IDL at main has the handover and record_observation instructions: 34 instructions and 34
+    // events, of which this slice handles all but Handover, RecordObservation and their events.
     const idl = JSON.parse(readFileSync(IDL, "utf8")) as {
       instructions: { name: string }[];
       events: { name: string }[];
     };
-    expect(idl.instructions).toHaveLength(33);
-    expect(idl.events).toHaveLength(33);
+    expect(idl.instructions).toHaveLength(34);
+    expect(idl.events).toHaveLength(34);
+    const unhandledInstructions = ["Handover", "RecordObservation"];
+    const unhandledEvents = ["CustodyHandedOver", "ObservationRecorded"];
     const instructions = idl.instructions.map((entry) => pascal(entry.name));
+    for (const name of unhandledInstructions) expect(instructions).toContain(name);
     expect([...HANDLED_INSTRUCTIONS].sort()).toEqual(
-      instructions.filter((name) => name !== "Handover").sort(),
+      instructions.filter((name) => !unhandledInstructions.includes(name)).sort(),
     );
     expect(HANDLED_INSTRUCTIONS).toHaveLength(32);
+    const eventNames = idl.events.map((entry) => entry.name);
+    for (const name of unhandledEvents) expect(eventNames).toContain(name);
     expect([...HANDLED_EVENTS].sort()).toEqual(
-      idl.events
-        .map((entry) => entry.name)
-        .filter((name) => name !== "CustodyHandedOver")
-        .sort(),
+      eventNames.filter((name) => !unhandledEvents.includes(name)).sort(),
     );
     expect(HANDLED_EVENTS).toHaveLength(32);
   });
@@ -754,6 +758,43 @@ describe("Phase 3 custody, the shipment part", () => {
       step: "decode",
       signature: handover.signature,
       mentions: ["Handover", "not handled"],
+    });
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
+  });
+
+  it("12. halts with UNKNOWN_INSTRUCTION on its own instance's record_observation until it is handled", async () => {
+    const scenario = await custodyHistory();
+    const sponsor = await syntheticSigner(97);
+    const other = async (n: number) => (await syntheticSigner(n)).address;
+    const observation = thetisTransaction({
+      signature: syntheticSignature(254),
+      feePayer: sponsor.address,
+      name: "RecordObservation",
+      events: [],
+      instruction: getRecordObservationInstruction({
+        sponsor,
+        protocol: scenario.protocol as Address,
+        observerOrg: scenario.org("port-t1") as Address,
+        observerAuthority: await other(96),
+        holderOrg: scenario.org("kopano") as Address,
+        shipment: scenario.shipments.s2 as Address,
+        batch: scenario.batches.b2 as Address,
+        lot: scenario.lot as Address,
+        kind: ObservationKind.Checkpoint,
+        locationCode: "CHECKPOINT-1",
+        evidenceDigest: new Uint8Array(32).fill(0x77),
+        observedAt: 1_795_000_000n,
+        expectedObservation: 0,
+        validUntil: 1_800_000_000n,
+      }),
+    });
+    const slot = lastSlot(scenario.history) + 1000;
+    scenario.history.push({ slot, blockTime: null, transactions: [observation], accounts: {} });
+    const h = await harness(scenario.history);
+    await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
+      step: "decode",
+      signature: observation.signature,
+      mentions: ["RecordObservation", "not handled"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });
