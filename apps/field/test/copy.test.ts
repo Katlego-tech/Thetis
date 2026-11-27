@@ -6,6 +6,7 @@ import {
   FAILED_COMMAND_MESSAGES,
   failedCommandCopy,
   LATER_FAILED_CODES,
+  LOADING_FAILED_MESSAGES,
   OBSERVATION_FAILED_MESSAGES,
   relayErrorCopy,
 } from "../src/copy";
@@ -109,6 +110,46 @@ describe("record_observation copy (field-app.md §6.7 observation rows, §7.8)",
       "Thetis could not prepare this text (VALIDATION). Nothing was sent. Try again.",
     );
     expect(relayErrorCopy("NOT_AUTHORISED", "create", { org: "Khunou Ore Exports" })).toBe(
+      "Thetis could not prepare this text (NOT_AUTHORISED). Nothing was sent. Try again.",
+    );
+  });
+});
+
+describe("record_loading copy (field-app.md T067r.3 fold 47: a loan in Recovery)", () => {
+  const upperSnake = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+  const vars = { org: "Port Terminal T1", owner: "Khunou Ore Exports" };
+
+  it("every loading key is exported by @thetis/contracts", () => {
+    const keys = Object.keys(LOADING_FAILED_MESSAGES);
+    expect(keys.sort()).toStrictEqual(["AcceptanceMissing", "LoanNotActive"]);
+    for (const key of keys) {
+      expect(contracts, key).toHaveProperty(`THETIS_ERROR__${upperSnake(key)}`);
+    }
+  });
+
+  it("a missing acceptance and a loan in recovery say the lot can't be loaded until the recovery clears its lock", () => {
+    expect(failedCommandCopy("AcceptanceMissing", vars, "record_loading")).toBe(
+      "Not every lender with a lock on this lot has accepted this loading. If a loan on this lot is in recovery, the lot can't be loaded until the lender's recovery clears its lock.",
+    );
+    expect(failedCommandCopy("LoanNotActive", vars, "record_loading")).toBe(
+      "A loan on this lot is in recovery, so the lot can't be loaded until the lender's recovery clears its lock.",
+    );
+    // Other kinds keep the shared table; a code without a loading row falls back to it.
+    expect(failedCommandCopy("LoanNotActive", vars, "issue_lot")).toBe(
+      "See the transaction on the explorer for the program's message.",
+    );
+    expect(failedCommandCopy("InvalidField", vars, "record_loading")).toBe(
+      "Thetis refused one of the values in this text.",
+    );
+  });
+
+  it("a caller that is neither the owner nor the terminal is told so on create", () => {
+    expect(
+      relayErrorCopy("NOT_AUTHORISED", "create", { org: "Mosela Haulage", kind: "record_loading" }),
+    ).toBe(
+      "Mosela Haulage is neither the owner nor the terminal of this loading. Nothing was sent.",
+    );
+    expect(relayErrorCopy("NOT_AUTHORISED", "create", { org: "Mosela Haulage" })).toBe(
       "Thetis could not prepare this text (NOT_AUTHORISED). Nothing was sent. Try again.",
     );
   });

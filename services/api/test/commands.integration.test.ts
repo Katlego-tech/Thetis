@@ -46,14 +46,18 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   DocumentKind,
   decodeCustodianClass,
+  decodeLoadingIntent,
   decodeLoan,
   decodeLot,
   decodeManifestBatch,
   decodePaymentAttestation,
+  decodePosition,
   decodeShipment,
+  findAcceptancePda,
   findAuthorityPda,
   findHandoverPda,
   findIntakePda,
+  findLockPda,
   findMintAuthorityPda,
   findMintPda,
   findOrganisationPda,
@@ -62,6 +66,7 @@ import {
   findPositionPda,
   findProtocolPda,
   findVaultAuthorityPda,
+  getAcceptLoadingInstruction,
   getAccreditCustodianClassInstruction,
   getAccreditOrganisationInstruction,
   getAttestDocumentInstruction,
@@ -92,7 +97,9 @@ import {
   formatTonnes,
   intakeDigest,
   issueLotMessage,
+  loadingIntentMessage,
   observationMessage,
+  recordLoadingMessage,
 } from "../src/commands/texts.ts";
 import type { CommandView } from "../src/commands/views.ts";
 import { localSupabaseEnv } from "../src/local.ts";
@@ -156,7 +163,10 @@ type WalletKey =
   | "kopanoNoAuthority"
   | "khunouShip"
   | "mosela"
-  | "moselaNoAuthority";
+  | "moselaNoAuthority"
+  | "khunouLoading"
+  | "portT1"
+  | "portT1NoLoad";
 const SCOPE = {
   ISSUE: 1,
   TRANSFER: 2,
@@ -167,6 +177,7 @@ const SCOPE = {
   SHIP: 512,
   CARRY: 1024,
   OBSERVE: 2048,
+  LOAD: 4096,
   ATTEST_ORIGIN: 16,
   ATTEST_TRANSPORT: 16384,
 } as const;
@@ -192,6 +203,11 @@ const WALLETS: Record<
   // Phone 2: Mosela's carrier wallet, and the second wallet with no Authority (the refused driver).
   mosela: { org: "mosela", scopes: SCOPE.CARRY | SCOPE.OBSERVE, linked: true },
   moselaNoAuthority: { org: "mosela", scopes: 0, linked: true, delegated: false },
+  // The loading (field-app.md §7.7, T067r.3 folds): Khunou's owner wallet on the web, Port
+  // Terminal T1's terminal wallet on phone 1, and a terminal wallet without LOAD.
+  khunouLoading: { org: "khunou", scopes: SCOPE.SHIP, linked: true },
+  portT1: { org: "portT1", scopes: SCOPE.CARRY | SCOPE.LOAD, linked: true },
+  portT1NoLoad: { org: "portT1", scopes: SCOPE.CARRY, linked: true },
 };
 
 let clients: AccessClients;
@@ -2979,4 +2995,440 @@ describe("record_observation on the real program", () => {
     expect(errorOf(future)).toMatchObject({ code: "VALIDATION", detail: "observedAt" });
     expect(w.chain.sent.length).toBe(before);
   });
+});
+
+// ---------------------------------------------------------------- the loading (T067r.3 folds 41–50)
+
+const khunouOwner = (): Actor => ({ org: "khunou", wallet: wallets.khunouLoading });
+const portTerminal = (): Actor => ({ org: "portT1", wallet: wallets.portT1 });
+const loadingSigners = { owner: khunouOwner(), terminal: portTerminal() };
+
+/** CR-0001 at Port Terminal T1: optionally pledged to Lender One as `pledges` loans (kg each),
+ * then shipped from Kopano's site, handed to Mosela at Departure and to the terminal at Arrival,
+ * all through the relay. */
+async function lotAtTerminal(w: World, pledges: string[] = []) {
+  let facility: string | null = null;
+  const loans: Address[] = [];
+  if (pledges.length > 0) {
+    facility = await openFacility(w);
+    await setValuation(w, facility);
+    for (const quantityKg of pledges) {
+      const pledged = confirmed(await pledge(w, facility, lenderOne(), quantityKg), "Pledged");
+      loans.push(address(pledged.loan ?? ""));
+    }
+  }
+  const { batch } = await shippedBatch(w);
+  confirmed(
+    await run(
+      w,
+      "kopano",
+      "handover",
+      { batch, to: orgIds.mosela },
+      { holder: kopanoHolder(), next_holder: { org: "mosela", wallet: wallets.mosela } },
+    ),
+    "CustodyHandedOver",
+  );
+  confirmed(
+    await run(
+      w,
+      "mosela",
+      "handover",
+      { batch, to: orgIds.portT1 },
+      { holder: { org: "mosela", wallet: wallets.mosela }, next_holder: portTerminal() },
+    ),
+    "CustodyHandedOver",
+  );
+  const lot = decodeLot(w.svm.getAccount(w.lot) as never).data;
+  const [position] = await findPositionPda({ lot: w.lot, owner: w.orgs.khunou });
+  return { facility, loans, terminalClass: lot.custodianClass, position };
+}
+
+/** A finalized loading document (the bill of lading) of `org` for `subjectRef`. */
+async function loadingEvidence(
+  w: World,
+  org: OrgKey,
+  object: { subjectRef?: string; purpose?: string } = {},
+) {
+  const person = people[org];
+  const bytes = Buffer.from(
+    `%PDF-1.4\nSynthetic test bill of lading ${randomUUID()}, not a real shipping record\n%%EOF\n`,
+  );
+  const { id: objectId } = mustSucceed(
+    await person.client
+      .from("evidence_objects")
+      .insert({
+        owner_organisation_id: orgIds[org],
+        subject_kind: "lot",
+        subject_ref: object.subjectRef ?? w.lot,
+        purpose: object.purpose ?? "loading",
+        created_by: person.id,
+      })
+      .select("id")
+      .single(),
+  );
+  const storagePath = `${orgIds[org]}/${objectId}/1`;
+  const { id: versionId } = mustSucceed(
+    await person.client
+      .from("evidence_versions")
+      .insert({
+        object_id: objectId,
+        version: 1,
+        storage_path: storagePath,
+        mime: "application/pdf",
+        uploaded_by: person.id,
+      })
+      .select("id")
+      .single(),
+  );
+  mustSucceed(
+    await person.client.storage
+      .from("originals")
+      .upload(storagePath, bytes, { contentType: "application/pdf" }),
+  );
+  const finalized = data<{ sha256: string }>(
+    await call(w, "POST", `/v1/evidence/${versionId}/finalize`, person),
+  );
+  return { versionId: versionId as string, sha256: finalized.sha256 };
+}
+
+/** The owner's loading intent through the relay; returns the intent and the confirmed view. */
+async function createIntent(w: World) {
+  const evidence = await loadingEvidence(w, "khunou");
+  const view = confirmed(
+    await run(
+      w,
+      "khunou",
+      "create_loading_intent",
+      { lot: w.lot, evidenceVersionId: evidence.versionId, expiresInHours: "48" },
+      { owner: khunouOwner() },
+    ),
+    "LoadingIntentCreated",
+  );
+  return { intent: address(view.intent ?? ""), view, evidence };
+}
+
+/** Lender One accepts the hand-off for `loan`, from its own wallet (program-custody.md §4.4: the
+ * lender's transaction; the relay does not carry accept_loading, pre-check gap 1). */
+async function acceptLoading(w: World, loan: Address, intent: Address) {
+  const data = loanAccount(w, loan);
+  const [lock] = await findLockPda({ loan });
+  const [acceptance] = await findAcceptancePda({ intent, loan });
+  const [authority] = await findAuthorityPda({
+    protocol: w.protocol,
+    wallet: wallets.lenderOne.address,
+  });
+  await send(
+    w.svm,
+    [
+      getAcceptLoadingInstruction({
+        lender: wallets.lenderOne,
+        payer,
+        protocol: w.protocol,
+        authority,
+        lenderOrg: w.orgs.lenderOne,
+        facility: data.facility,
+        loan,
+        lock,
+        lot: data.lot,
+        position: data.position,
+        intent,
+        acceptance,
+        expectedRevision: data.revision,
+      }),
+    ],
+    [wallets.lenderOne],
+  );
+  return acceptance;
+}
+
+const byRawKey = (left: Address, right: Address) =>
+  Buffer.compare(
+    Buffer.from(getAddressEncoder().encode(left)),
+    Buffer.from(getAddressEncoder().encode(right)),
+  );
+
+function sentText(view: CommandView) {
+  return new Uint8Array(getBase64Encoder().encode(view.text?.messageBase64 ?? ""));
+}
+
+describe("the loading on the real program", () => {
+  it("create_loading_intent: the owner's Prepare loading text lands with LoadingIntentCreated and raises the position revision", async () => {
+    const w = await world();
+    const { position, terminalClass } = await lotAtTerminal(w);
+    const revision = decodePosition(w.svm.getAccount(position) as never).data.revision;
+    const evidence = await loadingEvidence(w, "khunou");
+    const chainTime = w.svm.getClock().unixTimestamp;
+    const created = await create(w, "khunou", "create_loading_intent", {
+      lot: w.lot,
+      evidenceVersionId: evidence.versionId,
+      expiresInHours: "48",
+    });
+    expect(created.lot).toBe(w.lot);
+    expect(created.signers.map((s) => [s.role, s.organisationId, s.method])).toStrictEqual([
+      ["owner", orgIds.khunou, "text"],
+    ]);
+    const validUntil = BigInt(Date.parse(created.text?.validUntil ?? "") / 1000);
+    expect(validUntil - chainTime).toBe(570n);
+    const field = (label: string) => created.fields.find((f) => f.label === label)?.value ?? "";
+    const nonce = BigInt(field("Intent"));
+    const expected = loadingIntentMessage(
+      THETIS_PROGRAM_ADDRESS,
+      w.instanceId,
+      LOT_ID,
+      LOT_KG,
+      ORGS.khunou.name,
+      ORGS.portT1.name,
+      "PORT-T1",
+      Uint8Array.from(Buffer.from(evidence.sha256, "hex")),
+      nonce,
+      chainTime + 48n * 3_600n,
+      revision,
+      validUntil,
+    );
+    expect(Buffer.from(sentText(created)).equals(Buffer.from(expected))).toBe(true);
+
+    const view = confirmed(
+      data<CommandView>(await signText(w, "khunou", created, "owner", wallets.khunouLoading)),
+      "LoadingIntentCreated",
+    );
+    const intent = address(view.intent ?? "");
+    expect(view.outcome?.data).toMatchObject({
+      intent,
+      lot: w.lot,
+      position,
+      owner: w.orgs.khunou,
+      terminal: w.orgs.portT1,
+      quantityKg: String(LOT_KG),
+      lockedKg: "0",
+      documentSha256: evidence.sha256,
+      positionRevision: String(revision + 1n),
+    });
+    const stored = decodeLoadingIntent(w.svm.getAccount(intent) as never).data;
+    expect(stored.nonce).toBe(nonce);
+    expect(stored.custodianClass).toBe(terminalClass);
+    expect(stored.status).toBe(0); // Open
+    expect(decodePosition(w.svm.getAccount(position) as never).data.revision).toBe(revision + 1n);
+  }, 180_000);
+
+  it("record_loading with no lender lock: owner then terminal sign one text, and LoadingRecorded lands with no hand-offs", async () => {
+    const w = await world();
+    const { position } = await lotAtTerminal(w);
+    const { intent } = await createIntent(w);
+    const created = await create(w, "portT1", "record_loading", { intent });
+    expect(created.intent).toBe(intent);
+    expect(created.signers.map((s) => [s.role, s.organisationId])).toStrictEqual([
+      ["owner", orgIds.khunou],
+      ["terminal", orgIds.portT1],
+    ]);
+    const stored = decodeLoadingIntent(w.svm.getAccount(intent) as never).data;
+    const revision = decodePosition(w.svm.getAccount(position) as never).data.revision;
+    const validUntil = BigInt(Date.parse(created.text?.validUntil ?? "") / 1000);
+    const expected = recordLoadingMessage(
+      THETIS_PROGRAM_ADDRESS,
+      w.instanceId,
+      LOT_ID,
+      LOT_KG,
+      ORGS.khunou.name,
+      ORGS.portT1.name,
+      Uint8Array.from(stored.documentSha256),
+      stored.nonce,
+      0n,
+      0,
+      revision,
+      validUntil,
+    );
+    expect(Buffer.from(sentText(created)).equals(Buffer.from(expected))).toBe(true);
+
+    let view = data<CommandView>(
+      await signText(w, "khunou", created, "owner", wallets.khunouLoading),
+    );
+    expect(view.status).toBe("awaiting_signatures");
+    view = confirmed(
+      data<CommandView>(await signText(w, "portT1", view, "terminal", wallets.portT1)),
+      "LoadingRecorded",
+    );
+    expect(view.outcome?.data).toMatchObject({
+      intent,
+      lot: w.lot,
+      position,
+      quantityKg: String(LOT_KG),
+      loansAccepted: 0,
+      lotLoaded: true,
+      loanHandOffs: [],
+    });
+    expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(0n);
+    expect(decodeLoadingIntent(w.svm.getAccount(intent) as never).data.status).toBe(1); // Executed
+  }, 180_000);
+
+  it("record_loading with two accepted loans: the triples go in ascending loan order, into the table, and both LoanHandedOff events land", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["3000000", "2000000"]);
+    const [first, second] = loans as [Address, Address];
+    await advance(w, first, "30000000");
+    const { intent } = await createIntent(w);
+    const acceptances = [
+      await acceptLoading(w, first, intent),
+      await acceptLoading(w, second, intent),
+    ];
+    const created = await create(w, "khunou", "record_loading", { intent });
+    expect(created.fields).toContainEqual({ label: "Loan acceptances", value: "2" });
+    expect(created.fields).toContainEqual({ label: "Locked", value: formatTonnes(LOT_KG) });
+    let view = data<CommandView>(
+      await signText(w, "khunou", created, "owner", wallets.khunouLoading),
+    );
+    view = confirmed(
+      data<CommandView>(await signText(w, "portT1", view, "terminal", wallets.portT1)),
+      "LoadingRecorded",
+    );
+    const ordered = [...loans].sort(byRawKey);
+    const handOffs = (view.outcome?.data ?? {}).loanHandOffs as { loan: string }[];
+    expect(view.outcome?.data).toMatchObject({ loansAccepted: 2, lotLoaded: true });
+    expect(handOffs.map((h) => h.loan)).toStrictEqual(ordered);
+    expect(handOffs.find((h) => h.loan === first)).toMatchObject({
+      externalHandoff: true,
+      releasedKg: "3000000",
+    });
+    expect(handOffs.find((h) => h.loan === second)).toMatchObject({
+      externalHandoff: false,
+      releasedKg: "2000000",
+    });
+    expect(loanAccount(w, first).status).toBe(2); // ExternalHandoff
+    // Fold 9 holds for the acceptances: existing chain accounts, so they entered the table.
+    const { address: table } = mustSucceed(
+      await service
+        .from("relay_lookup_tables")
+        .select("address")
+        .eq("protocol", w.protocol)
+        .single(),
+    );
+    const inTable = lookupTableAddresses(w.svm, address(table as string));
+    for (const acceptance of acceptances) expect(inTable).toContain(acceptance);
+  }, 240_000);
+
+  it("a lock whose lender has not accepted is left out, and the loading fails on chain as AcceptanceMissing", async () => {
+    const w = await world();
+    await lotAtTerminal(w, ["5000000"]);
+    const { intent } = await createIntent(w);
+    const before = w.chain.sent.length;
+    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners);
+    expect(view.fields).toContainEqual({ label: "Loan acceptances", value: "0" });
+    failedWith(view, "AcceptanceMissing");
+    expect(w.chain.sent.length).toBe(before + 1);
+    expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(LOT_KG);
+  }, 180_000);
+
+  it("a lot whose loan went into Recovery after the lender accepted fails on chain as LoanNotActive", async () => {
+    const w = await world();
+    const { loans, facility, terminalClass } = await lotAtTerminal(w, ["5000000"]);
+    const [loan] = loans as [Address];
+    await advance(w, loan);
+    // The lender's valuation for the terminal's site, which liquidate reads (the lot's class).
+    confirmed(
+      await run(
+        w,
+        "lenderOne",
+        "set_valuation",
+        {
+          facility: facility ?? "",
+          custodianClass: terminalClass,
+          grade: GRADE,
+          valuePerKgMinor: "20",
+          haircutBps: "0",
+          validForDays: "30",
+          sourceNote: "Synthetic test price per kg, not a market quote",
+        },
+        { lender: lenderOne() },
+      ),
+      "ValuationSet",
+    );
+    const { intent } = await createIntent(w);
+    await acceptLoading(w, loan, intent);
+    const clock = w.svm.getClock();
+    clock.unixTimestamp += DAY;
+    w.svm.setClock(clock);
+    confirmed(
+      await run(w, "lenderOne", "liquidate", { loan }, { lender: lenderOne() }),
+      "Liquidated",
+    );
+    expect(loanAccount(w, loan).status).toBe(1); // Recovery
+    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners);
+    expect(view.fields).toContainEqual({ label: "Loan acceptances", value: "1" });
+    failedWith(view, "LoanNotActive");
+    expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(LOT_KG);
+  }, 240_000);
+
+  it("a loading prepared before a newer intent fails on chain as StaleRevision", async () => {
+    const w = await world();
+    await lotAtTerminal(w);
+    const { intent } = await createIntent(w);
+    const created = await create(w, "portT1", "record_loading", { intent });
+    // The owner replaces the bill of lading: a new intent raises the position revision.
+    await createIntent(w);
+    let view = data<CommandView>(
+      await signText(w, "khunou", created, "owner", wallets.khunouLoading),
+    );
+    view = data<CommandView>(await signText(w, "portT1", view, "terminal", wallets.portT1));
+    failedWith(view, "StaleRevision");
+  }, 180_000);
+
+  it("a terminal wallet without LOAD is AUTHORITY_INVALID and nothing is sent", async () => {
+    const w = await world();
+    await lotAtTerminal(w);
+    const { intent } = await createIntent(w);
+    const before = w.chain.sent.length;
+    const created = await create(w, "portT1", "record_loading", { intent });
+    const view = data<CommandView>(
+      await signText(w, "khunou", created, "owner", wallets.khunouLoading),
+    );
+    const response = await signText(w, "portT1", view, "terminal", wallets.portT1NoLoad);
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "AUTHORITY_INVALID",
+      detail: "scope LOAD missing",
+    });
+    expect(w.chain.sent.length).toBe(before);
+  }, 180_000);
+
+  it("refuses a non-owner's intent, evidence that is not the owner's loading document of this lot, and a non-party's loading, sending nothing", async () => {
+    const w = await world();
+    await lotAtTerminal(w);
+    const before = w.chain.sent.length;
+    const terminalDocument = await loadingEvidence(w, "portT1");
+    const notOwner = await call(w, "POST", "/v1/commands", people.portT1, {
+      kind: "create_loading_intent",
+      organisationId: orgIds.portT1,
+      args: { lot: w.lot, evidenceVersionId: terminalDocument.versionId, expiresInHours: "48" },
+    });
+    expect(notOwner.statusCode, notOwner.body).toBe(403);
+    expect(errorOf(notOwner).code).toBe("NOT_AUTHORISED");
+
+    for (const evidence of [
+      await loadingEvidence(w, "khunou", { purpose: "bank" }),
+      await loadingEvidence(w, "khunou", { subjectRef: LOT_ID }),
+      terminalDocument,
+    ]) {
+      const response = await call(w, "POST", "/v1/commands", people.khunou, {
+        kind: "create_loading_intent",
+        organisationId: orgIds.khunou,
+        args: { lot: w.lot, evidenceVersionId: evidence.versionId, expiresInHours: "48" },
+      });
+      expect(response.statusCode, response.body).toBe(409);
+      expect(errorOf(response)).toMatchObject({
+        code: "EVIDENCE_INVALID",
+        detail: "loading document of this lot",
+      });
+    }
+    expect(w.chain.sent.length).toBe(before);
+
+    const { intent } = await createIntent(w);
+    const sent = w.chain.sent.length;
+    const outsider = await call(w, "POST", "/v1/commands", people.mosela, {
+      kind: "record_loading",
+      organisationId: orgIds.mosela,
+      args: { intent },
+    });
+    expect(outsider.statusCode, outsider.body).toBe(403);
+    expect(errorOf(outsider).code).toBe("NOT_AUTHORISED");
+    expect(w.chain.sent.length).toBe(sent);
+  }, 180_000);
 });

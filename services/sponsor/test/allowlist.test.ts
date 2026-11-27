@@ -73,6 +73,8 @@ const SPONSORED_NAMES = [
   "issue_lot",
   "handover",
   "record_observation",
+  "create_loading_intent",
+  "record_loading",
 ];
 const TEXT_SIGNED = new Set([
   "pledge",
@@ -83,6 +85,8 @@ const TEXT_SIGNED = new Set([
   "issue_lot",
   "handover",
   "record_observation",
+  "create_loading_intent",
+  "record_loading",
 ]);
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 const SYSTEM = "11111111111111111111111111111111" as Address;
@@ -308,12 +312,34 @@ describe("sponsor allowlist", () => {
       ["issue_lot", "custodian"],
       ["handover", "from_org"],
       ["record_observation", "observer_org"],
+      ["create_loading_intent", "owner_org"],
+      ["record_loading", "owner_org"],
     ] as const) {
       const shape = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === name);
       expect(shape?.sponsorSlots, name).toStrictEqual([0]);
       refused(wire([limit(), ed25519(), thetis(name, { sponsorAt: slot })]), /sponsor/);
       refused(wire([limit(), ed25519(), thetis(name, { drop: 1 })]), /too few accounts/);
     }
+  });
+
+  it("signs record_loading with up to four triples after its 17 accounts, and refuses the sponsor among them (field-app.md fold 49)", () => {
+    const shape = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === "record_loading");
+    expect(shape).toMatchObject({ accounts: 17, protocol: 1, sponsorSlots: [0] });
+    const triples = Array.from({ length: 12 }, () => filler);
+    expect(() =>
+      checkSponsorTransaction(
+        wire([limit(), ed25519(), thetis("record_loading", { extra: triples })], {
+          tables: { [table]: [filler] },
+        }),
+        context,
+      ),
+    ).not.toThrow();
+    refused(
+      wire([limit(), ed25519(), thetis("record_loading", { extra: [filler, sponsor, filler] })]),
+      /sponsor/,
+    );
+    const intent = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === "create_loading_intent");
+    expect(intent).toMatchObject({ accounts: 11, protocol: 1, sponsorSlots: [0] });
   });
 
   it("refuses a protocol through the table, foreign lookup-table authorities, another table, an Ed25519 instruction with accounts, a compute price, a trailing instruction and short lookup-table data", () => {
