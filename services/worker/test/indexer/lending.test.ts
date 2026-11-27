@@ -5,7 +5,6 @@ import type { Address } from "@solana/kit";
 import {
   getAdvanceRecordedEventDecoder,
   getAdvanceRecordedEventEncoder,
-  getHandoverInstruction,
   getLoanDecoder,
   getLoanEncoder,
   getPaymentConfirmedEventEncoder,
@@ -13,12 +12,14 @@ import {
   getPaymentCorrectedEventEncoder,
   getPoolShareDecoder,
   getPoolShareEncoder,
+  getRecordObservationInstruction,
   getRepaidEventDecoder,
   getRepaidEventEncoder,
   getSimulationPoolDecoder,
   getSimulationPoolEncoder,
   getValuationDecoder,
   getValuationEncoder,
+  ObservationKind,
   PaymentPurpose,
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
@@ -965,32 +966,31 @@ describe("Phase 2 lending", () => {
     }
   });
 
-  // T063d.2 replaces this case with record_observation once handover is handled
-  // (live-custody.md §9.3 and its T063d.1 pre-check fold 2).
-  it("halts with UNKNOWN_INSTRUCTION on its own instance's Handover, a Phase 3 instruction not yet handled", async () => {
+  // T063d.3 replaces this case with the next unhandled Phase 3 instruction once record_observation
+  // is handled (live-custody.md §9.3 and its T063d.2 pre-check fold 2).
+  it("halts with UNKNOWN_INSTRUCTION on its own instance's RecordObservation, a Phase 3 instruction not yet handled", async () => {
     const scenario = await lendingHistory();
     const sponsor = await syntheticSigner(97);
     const other = async (n: number) => (await syntheticSigner(n)).address;
     const prepare = thetisTransaction({
       signature: syntheticSignature(218),
       feePayer: sponsor.address,
-      name: "Handover",
+      name: "RecordObservation",
       events: [],
-      instruction: getHandoverInstruction({
+      instruction: getRecordObservationInstruction({
         sponsor,
         protocol: scenario.protocol as Address,
+        observerOrg: await other(94),
+        observerAuthority: await other(96),
+        holderOrg: scenario.org("kopano") as Address,
         shipment: await other(91),
         batch: await other(90),
         lot: scenario.lot as Address,
-        fromOrg: scenario.org("kopano") as Address,
-        fromAuthority: await other(96),
-        toOrg: await other(94),
-        toAuthority: await other(95),
-        sourceClass: scenario.custodianClass as Address,
-        destinationClass: await other(93),
-        handover: await other(92),
-        manifestDigest: new Uint8Array(32).fill(0x52),
-        expectedSequence: 0n,
+        kind: ObservationKind.Border,
+        locationCode: "BORDER-1",
+        evidenceDigest: new Uint8Array(32).fill(0x52),
+        observedAt: 1_795_000_000n,
+        expectedObservation: 0,
         validUntil: 1_800_000_000n,
       }),
     });
@@ -1000,7 +1000,7 @@ describe("Phase 2 lending", () => {
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
       signature: prepare.signature,
-      mentions: ["Handover", "not handled"],
+      mentions: ["RecordObservation", "not handled"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });

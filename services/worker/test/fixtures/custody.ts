@@ -7,13 +7,14 @@
 // release.rs, pledge.rs, documents.rs); the manifest root is program-custody.md §6.3's tree.
 
 import { createHash } from "node:crypto";
-import { type Address, getAddressEncoder, getProgramDerivedAddress, none } from "@solana/kit";
+import { type Address, getAddressEncoder, getProgramDerivedAddress, none, some } from "@solana/kit";
 import {
   BatchStage,
   DocumentKind,
   findAuthorityPda,
   findBatchPda,
   findFacilityPda,
+  findHandoverPda,
   findIntakePda,
   findIntentPda,
   findLoanPda,
@@ -26,6 +27,7 @@ import {
   findShipmentPda,
   findVaultAuthorityPda,
   getAccreditCustodianClassInstruction,
+  getAccreditOrganisationInstruction,
   getAdvanceRecordedEventEncoder,
   getAttestDocumentInstruction,
   getBatchRegisteredEventEncoder,
@@ -33,10 +35,13 @@ import {
   getCreateReleaseIntentInstruction,
   getCustodianClassAccreditedEventEncoder,
   getCustodianClassEncoder,
+  getCustodyHandedOverEventEncoder,
   getDocumentAttestationEncoder,
   getDocumentAttestedEventEncoder,
   getFacilityEncoder,
   getFacilityOpenedEventEncoder,
+  getHandoverInstruction,
+  getHandoverRecordEncoder,
   getIntakeIdentityEncoder,
   getIssueLotInstruction,
   getLoanEncoder,
@@ -45,6 +50,9 @@ import {
   getLotIssuedEventEncoder,
   getManifestBatchEncoder,
   getOpenFacilityInstruction,
+  getOrganisationAccreditedEventEncoder,
+  getOrganisationEncoder,
+  getOrganisationNameEncoder,
   getPledgedEventEncoder,
   getPledgeInstruction,
   getPositionEncoder,
@@ -59,15 +67,22 @@ import {
   getShipmentPreparedEventEncoder,
   getValuationEncoder,
   getValuationSetEventEncoder,
+  HandoverStage,
   IntentStatus,
   LoanStatus,
   LockControl,
   LotState,
   Restriction,
+  Role,
   ShipmentStatus,
 } from "@thetis/contracts";
 import { accrueSimple } from "../../../../packages/domain/src/accrual.ts";
-import { findClassPolicyPda, instanceIdBytes, SEED } from "../../../../scripts/seed-demo.ts";
+import {
+  findClassPolicyPda,
+  findOrganisationNamePda,
+  instanceIdBytes,
+  SEED,
+} from "../../../../scripts/seed-demo.ts";
 import {
   type AccountState,
   bytesOf,
@@ -176,9 +191,20 @@ export type CustodyStep =
   | "registerB1"
   | "cancelS1"
   | "prepareS2"
-  | "registerB2";
+  | "registerB2"
+  | "registerB3"
+  | "departB2"
+  | "departB3"
+  | "accreditHaulier"
+  | "transferB2"
+  | "arriveB2"
+  | "arriveB3";
 
-/** SYNTHETIC: one signature index per step (live-custody.md §9.1: k from 240). */
+/**
+ * SYNTHETIC: one signature index per step (live-custody.md §9.1: k from 240; the route steps below
+ * 240 because a synthetic signature index stops at 255, T063d.2 pre-check fold 6; 237 is kept for
+ * T063d.3's border observation).
+ */
 const STEP_SIGNATURE: Record<CustodyStep, number> = {
   accreditKopano: 240,
   accreditPort: 241,
@@ -195,6 +221,13 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   cancelS1: 251,
   prepareS2: 252,
   registerB2: 253,
+  accreditHaulier: 232,
+  transferB2: 233,
+  registerB3: 234,
+  departB3: 235,
+  departB2: 236,
+  arriveB2: 238,
+  arriveB3: 239,
 };
 
 export type CustodyScenario = {
@@ -210,7 +243,12 @@ export type CustodyScenario = {
   intents: string[];
   document: string;
   shipments: { s1: string; s2: string };
-  batches: { b1: string; b2: string };
+  /** B3 is S2's second batch, in the partial-arrival variant only. */
+  batches: { b1: string; b2: string; b3?: string };
+  /** The HandoverRecord each handover step creates. */
+  handovers: Partial<Record<CustodyStep, string>>;
+  /** Haulier Two Test Org's Organisation, in the transfer variant only. */
+  haulier?: string;
   /** The prepared_at of S1 and S2 (unix seconds). */
   preparedAt: { s1: bigint; s2: bigint };
   firstSignature: string;
@@ -222,15 +260,29 @@ const PORT_SITE = "PORT-T1";
 const KOPANO_CAPACITY_KG = 10_000_000n;
 const PORT_CAPACITY_KG = 5_000_000n;
 const LOT_KG = 5_000_000n;
+/**
+ * SYNTHETIC, test only (T063d.2 pre-check fold 3): a second Transporter, so a Transfer handover can
+ * happen. Not in seed.sql, so its slug is null; never in the demo cast.
+ */
+const HAULIER_NAME = "Haulier Two Test Org";
+const HAULIER_ORG_ID = "11000000-0000-4000-8000-000000000009";
+
+export type CustodyOptions = {
+  secondIntent?: boolean;
+  /** routeHistory(): S2's batches depart, and arrive at PORT-T1 (live-custody.md §9.1). */
+  route?: boolean;
+  /** With `route`: B2 is transferred to Haulier Two Test Org in transit, which hands it on. */
+  transfer?: boolean;
+  /** S2 carries two batches (3,000,000 and 2,000,000 kg); with `route`, both depart and arrive. */
+  partial?: boolean;
+};
 
 /**
  * seedHistory() then the custody actions of live-custody.md §9.1, one transaction per slot from
  * 51,000, block times from 2026-11-28T00:00:00Z one second apart. `secondIntent` adds nonce 2
  * right after nonce 1, expiring at the block time of S1's preparation.
  */
-export async function custodyHistory(
-  options: { secondIntent?: boolean } = {},
-): Promise<CustodyScenario> {
+export async function custodyHistory(options: CustodyOptions = {}): Promise<CustodyScenario> {
   const f = await fixture();
   const [protocol] = await findProtocolPda({ instanceId: instanceIdBytes() });
   const classPolicy = await findClassPolicyPda(protocol, SEED.classCode, SEED.classVersion);
@@ -325,39 +377,68 @@ export async function custodyHistory(
     ],
   });
 
-  // The two shipments: one batch each, carried by Mosela Haulage (live-custody.md §9.1).
-  const shipmentInput = async (id: number, load: number, manifest: number) => {
+  // The two shipments, carried by Mosela Haulage (live-custody.md §9.1): one batch each, or, in
+  // the partial variant, two for S2 (T063d.2 pre-check fold 4: program-custody.md §6.3's M2 split).
+  const shipmentInput = async (
+    id: number,
+    parts: { load: number; manifest: number; quantityKg: bigint }[],
+  ) => {
     const shipmentId = fill(16, id);
     const [address, bump] = await findShipmentPda({ protocol, shipmentId });
-    const leafInput = {
-      index: 0,
-      quantityKg: LOT_KG,
+    const leafInputs = parts.map((part, index) => ({
+      index,
+      quantityKg: part.quantityKg,
       carrier: mosela,
-      loadDigest: fill(32, load),
-      manifestDigest: fill(32, manifest),
-    };
-    const leaves = [batchLeaf(leafInput)];
-    const [batch, batchBump] = await findBatchPda({ protocol, loadDigest: leafInput.loadDigest });
-    return {
-      address,
-      bump,
-      shipmentId,
-      leafInput,
-      root: manifestRoot(leaves),
-      proof: manifestProof(leaves, 0),
-      batch,
-      batchBump,
-    };
+      loadDigest: fill(32, part.load),
+      manifestDigest: fill(32, part.manifest),
+    }));
+    const leaves = leafInputs.map((leafInput) => batchLeaf(leafInput));
+    const batches = await Promise.all(
+      leafInputs.map(async (leafInput, index) => {
+        const [batch, batchBump] = await findBatchPda({
+          protocol,
+          loadDigest: leafInput.loadDigest,
+        });
+        return {
+          address: batch as string,
+          bump: batchBump,
+          leafInput,
+          proof: manifestProof(leaves, index),
+        };
+      }),
+    );
+    return { address, bump, shipmentId, root: manifestRoot(leaves), batches };
   };
-  const s1 = await shipmentInput(0x22, 0x33, 0x44);
-  const s2 = await shipmentInput(0x23, 0x55, 0x66);
+  const s1 = await shipmentInput(0x22, [{ load: 0x33, manifest: 0x44, quantityKg: LOT_KG }]);
+  const s2 = await shipmentInput(
+    0x23,
+    options.partial
+      ? [
+          { load: 0x55, manifest: 0x66, quantityKg: 3_000_000n },
+          { load: 0x57, manifest: 0x67, quantityKg: 2_000_000n },
+        ]
+      : [{ load: 0x55, manifest: 0x66, quantityKg: LOT_KG }],
+  );
+  const haulierOrgId = Uint8Array.from(Buffer.from(HAULIER_ORG_ID.replaceAll("-", ""), "hex"));
+  const [haulier, haulierBump] = await findOrganisationPda({ protocol, orgId: haulierOrgId });
+  const haulierName = await findOrganisationNamePda(protocol, HAULIER_NAME);
+  const haulierAdmin = await syntheticSigner(47);
+  // Who signs a handover for each party (live-custody.md §9.1 keys; 47 is fold 3's).
+  const carrierKey: Record<string, number> = {
+    [kopano]: 43,
+    [port]: 45,
+    [mosela]: 46,
+    [haulier]: 47,
+  };
 
   // ---- the chain state the steps change ----
   const state = {
     kopanoOccupied: 0n,
     portReserved: 0n,
+    portOccupied: 0n,
     lotRevision: 0n,
     lotState: LotState.Stored as LotState,
+    lotClass: kopanoClass as string,
     positionRevision: 0n,
     lockedKg: 0n,
     loanCount: 0,
@@ -382,7 +463,27 @@ export async function custodyHistory(
     documentValidUntil: 0n,
     shipments: new Map<
       string,
-      { status: ShipmentStatus; preparedAt: bigint; revision: bigint; registered: number }
+      {
+        status: ShipmentStatus;
+        preparedAt: bigint;
+        revision: bigint;
+        registered: number;
+        registeredKg: bigint;
+        departed: number;
+        departedKg: bigint;
+        arrived: number;
+        arrivedKg: bigint;
+      }
+    >(),
+    batches: new Map<
+      string,
+      {
+        holder: string;
+        stage: BatchStage;
+        sequence: bigint;
+        departedAt: bigint | null;
+        arrivedAt: bigint | null;
+      }
     >(),
   };
 
@@ -408,7 +509,7 @@ export async function custodyHistory(
           classPolicy,
           siteCode: PORT_SITE,
           approvedCapacityKg: PORT_CAPACITY_KG,
-          occupiedKg: 0n,
+          occupiedKg: state.portOccupied,
           reservedInboundKg: state.portReserved,
           bump: portClassBump,
         }),
@@ -421,7 +522,7 @@ export async function custodyHistory(
           classPolicy,
           classVersion: SEED.classVersion,
           grade: "G1",
-          custodianClass: kopanoClass,
+          custodianClass: state.lotClass as Address,
           intake,
           parent: none(),
           root: lot,
@@ -564,15 +665,15 @@ export async function custodyHistory(
           destinationCustodian: port,
           committedKg: LOT_KG,
           lockedKg: LOT_KG,
-          batchCount: 1,
+          batchCount: input.batches.length,
           manifestRoot: input.root,
           departureDocument: document,
           registeredCount: current.registered,
-          registeredKg: current.registered === 0 ? 0n : LOT_KG,
-          departedCount: 0,
-          departedKg: 0n,
-          arrivedCount: 0,
-          arrivedKg: 0n,
+          registeredKg: current.registeredKg,
+          departedCount: current.departed,
+          departedKg: current.departedKg,
+          arrivedCount: current.arrived,
+          arrivedKg: current.arrivedKg,
           status: current.status,
           preparedAt: current.preparedAt,
           revision: current.revision,
@@ -580,25 +681,41 @@ export async function custodyHistory(
         }),
       );
     },
-    batch: (input: typeof s1) =>
-      thetis(
+    batch: (input: typeof s1, index: number) => {
+      const entry = input.batches[index] as (typeof input.batches)[number];
+      const current = state.batches.get(entry.address);
+      if (!current) throw new Error("the batch is not registered");
+      return thetis(
         bytesOf(getManifestBatchEncoder(), {
           protocol,
           shipment: input.address,
           lot,
-          index: 0,
-          batchCount: 1,
-          quantityKg: LOT_KG,
+          index,
+          batchCount: input.batches.length,
+          quantityKg: entry.leafInput.quantityKg,
           carrier: mosela,
-          loadDigest: input.leafInput.loadDigest,
-          manifestDigest: input.leafInput.manifestDigest,
-          holder: kopano,
-          stage: BatchStage.AtSource,
-          sequence: 0n,
+          loadDigest: entry.leafInput.loadDigest,
+          manifestDigest: entry.leafInput.manifestDigest,
+          holder: current.holder as Address,
+          stage: current.stage,
+          sequence: current.sequence,
           observationCount: 0,
-          departedAt: none(),
-          arrivedAt: none(),
-          bump: input.batchBump,
+          departedAt: current.departedAt === null ? none() : some(current.departedAt),
+          arrivedAt: current.arrivedAt === null ? none() : some(current.arrivedAt),
+          bump: entry.bump,
+        }),
+      );
+    },
+    haulier: () =>
+      thetis(
+        bytesOf(getOrganisationEncoder(), {
+          protocol,
+          orgId: haulierOrgId,
+          role: Role.Transporter,
+          displayName: HAULIER_NAME,
+          admin: haulierAdmin.address,
+          related: [],
+          bump: haulierBump,
         }),
       ),
   };
@@ -630,6 +747,11 @@ export async function custodyHistory(
       preparedAt: now,
       revision: 0n,
       registered: 0,
+      registeredKg: 0n,
+      departed: 0,
+      departedKg: 0n,
+      arrived: 0,
+      arrivedKg: 0n,
     });
     return {
       tx: tx(
@@ -649,7 +771,7 @@ export async function custodyHistory(
           departureIssuer: kopano as Address,
           shipment: input.address,
           shipmentId: input.shipmentId,
-          batchCount: 1,
+          batchCount: input.batches.length,
           manifestRoot: input.root,
           expectedRevision,
           validUntil: now + 570n,
@@ -662,7 +784,7 @@ export async function custodyHistory(
           destination: portClass,
           committedKg: LOT_KG,
           lockedKg: LOT_KG,
-          batchCount: 1,
+          batchCount: input.batches.length,
           manifestRoot: input.root,
           departureDocument: document,
           lotRevision: state.lotRevision,
@@ -678,10 +800,19 @@ export async function custodyHistory(
       },
     };
   };
-  const register = (input: typeof s1, signature: string) => {
+  const register = (input: typeof s1, index: number, signature: string) => {
     const current = state.shipments.get(input.address);
     if (!current) throw new Error("the shipment is not prepared");
+    const entry = input.batches[index] as (typeof input.batches)[number];
     current.registered += 1;
+    current.registeredKg += entry.leafInput.quantityKg;
+    state.batches.set(entry.address, {
+      holder: kopano,
+      stage: BatchStage.AtSource,
+      sequence: 0n,
+      departedAt: null,
+      arrivedAt: null,
+    });
     return {
       tx: thetisTransaction({
         signature,
@@ -692,30 +823,156 @@ export async function custodyHistory(
           payer: sponsor,
           protocol,
           shipment: input.address,
-          batch: input.batch,
-          index: 0,
-          quantityKg: LOT_KG,
+          batch: entry.address as Address,
+          index,
+          quantityKg: entry.leafInput.quantityKg,
           carrier: mosela as Address,
-          loadDigest: input.leafInput.loadDigest,
-          manifestDigest: input.leafInput.manifestDigest,
-          proof: input.proof,
+          loadDigest: entry.leafInput.loadDigest,
+          manifestDigest: entry.leafInput.manifestDigest,
+          proof: entry.proof,
         }),
         events: [
           bytesOf(getBatchRegisteredEventEncoder(), {
-            batch: input.batch,
+            batch: entry.address,
             shipment: input.address,
-            index: 0,
-            quantityKg: LOT_KG,
+            index,
+            quantityKg: entry.leafInput.quantityKg,
             carrier: mosela,
-            loadDigest: input.leafInput.loadDigest,
-            manifestDigest: input.leafInput.manifestDigest,
+            loadDigest: entry.leafInput.loadDigest,
+            manifestDigest: entry.leafInput.manifestDigest,
             registeredCount: current.registered,
           }),
         ],
       }),
       accounts: {
-        [input.batch]: enc.batch(input),
+        [entry.address]: enc.batch(input, index),
         [input.address]: enc.shipment(input),
+      },
+    };
+  };
+
+  // handover.rs, step 5 and step 7: the stage from the batch's stage and the recipient, then the
+  // writes. The first departure moves the lot to InTransit, the last arrival to Stored at PORT-T1.
+  const handover = async (
+    input: typeof s1,
+    index: number,
+    from: string,
+    to: string,
+    now: bigint,
+    signature: string,
+    step: CustodyStep,
+  ) => {
+    const shipment = state.shipments.get(input.address);
+    const entry = input.batches[index] as (typeof input.batches)[number];
+    const batch = state.batches.get(entry.address);
+    if (!shipment || !batch) throw new Error("the batch is not registered");
+    if (batch.holder !== from) throw new Error(`${step}: the batch is not held by ${from}`);
+    const stage =
+      batch.stage === BatchStage.AtSource
+        ? HandoverStage.Departure
+        : to === port
+          ? HandoverStage.Arrival
+          : HandoverStage.Transfer;
+    const q = entry.leafInput.quantityKg;
+    const expectedSequence = batch.sequence;
+    const [record, recordBump] = await findHandoverPda({
+      batch: entry.address as Address,
+      expectedSequence,
+    });
+    handovers[step] = record;
+    if (stage === HandoverStage.Departure) {
+      state.kopanoOccupied -= q;
+      shipment.departed += 1;
+      shipment.departedKg += q;
+      if (shipment.status === ShipmentStatus.Prepared) {
+        state.lotRevision += 1n;
+        shipment.status = ShipmentStatus.InTransit;
+        state.lotState = LotState.InTransit;
+      }
+      batch.stage = BatchStage.InTransit;
+      batch.departedAt = now;
+    }
+    if (stage === HandoverStage.Arrival) {
+      state.portReserved -= q;
+      state.portOccupied += q;
+      shipment.arrived += 1;
+      shipment.arrivedKg += q;
+      if (shipment.arrived === input.batches.length) {
+        state.lotRevision += 1n;
+        shipment.status = ShipmentStatus.Arrived;
+        state.lotState = LotState.Stored;
+        state.lotClass = portClass;
+      }
+      batch.stage = BatchStage.Arrived;
+      batch.arrivedAt = now;
+    }
+    batch.holder = to;
+    batch.sequence += 1n;
+    shipment.revision += 1n;
+    const fromSigner = await syntheticSigner(carrierKey[from] as number);
+    const toSigner = await syntheticSigner(carrierKey[to] as number);
+    return {
+      tx: tx(
+        signature,
+        "Handover",
+        getHandoverInstruction({
+          sponsor,
+          protocol,
+          shipment: input.address,
+          batch: entry.address as Address,
+          lot: lot as Address,
+          fromOrg: from as Address,
+          fromAuthority: await authorityOf(carrierKey[from] as number),
+          toOrg: to as Address,
+          toAuthority: await authorityOf(carrierKey[to] as number),
+          sourceClass: kopanoClass,
+          destinationClass: portClass,
+          ...(stage === HandoverStage.Departure ? { departureDocument: document } : {}),
+          handover: record,
+          manifestDigest: entry.leafInput.manifestDigest,
+          expectedSequence,
+          validUntil: now + 570n,
+        }),
+        bytesOf(getCustodyHandedOverEventEncoder(), {
+          handover: record,
+          batch: entry.address,
+          shipment: input.address,
+          lot,
+          sequence: expectedSequence,
+          from,
+          to,
+          stage,
+          quantityKg: q,
+          shipmentStatus: shipment.status,
+          lotState: state.lotState,
+          shipmentRevision: shipment.revision,
+          lotRevision: state.lotRevision,
+        }),
+        true,
+      ),
+      accounts: {
+        [record]: thetis(
+          bytesOf(getHandoverRecordEncoder(), {
+            protocol,
+            batch: entry.address,
+            shipment: input.address,
+            sequence: expectedSequence,
+            from,
+            to,
+            fromWallet: fromSigner.address,
+            toWallet: toSigner.address,
+            stage,
+            quantityKg: q,
+            manifestDigest: entry.leafInput.manifestDigest,
+            at: now,
+            bump: recordBump,
+          }),
+        ),
+        [entry.address]: enc.batch(input, index),
+        [input.address]: enc.shipment(input),
+        [lot]: enc.lot(),
+        [kopanoClass]: enc.kopanoClass(),
+        [portClass]: enc.portClass(),
       },
     };
   };
@@ -736,7 +993,16 @@ export async function custodyHistory(
     "cancelS1",
     "prepareS2",
     "registerB2",
+    ...(options.partial ? (["registerB3"] as const) : []),
+    ...(options.route
+      ? options.partial
+        ? (["departB2", "departB3", "arriveB2", "arriveB3"] as const)
+        : options.transfer
+          ? (["departB2", "accreditHaulier", "transferB2", "arriveB2"] as const)
+          : (["departB2", "arriveB2"] as const)
+      : []),
   ];
+  const handovers: CustodyScenario["handovers"] = {};
   const firstTime = Date.parse("2026-11-28T00:00:00Z");
   const timeAt = (index: number) => new Date(firstTime + index * 1000).toISOString();
   const prepareS1At = unix(timeAt(order.indexOf("prepareS1")));
@@ -1095,10 +1361,67 @@ export async function custodyHistory(
         made = prepare(s2, now, signature);
         break;
       case "registerB1":
-        made = register(s1, signature);
+        made = register(s1, 0, signature);
         break;
       case "registerB2":
-        made = register(s2, signature);
+        made = register(s2, 0, signature);
+        break;
+      case "registerB3":
+        made = register(s2, 1, signature);
+        break;
+      case "departB2":
+        made = await handover(s2, 0, kopano, mosela, now, signature, step);
+        break;
+      case "departB3":
+        made = await handover(s2, 1, kopano, mosela, now, signature, step);
+        break;
+      case "transferB2":
+        made = await handover(s2, 0, mosela, haulier, now, signature, step);
+        break;
+      case "arriveB2":
+        made = await handover(
+          s2,
+          0,
+          options.transfer ? haulier : mosela,
+          port,
+          now,
+          signature,
+          step,
+        );
+        break;
+      case "arriveB3":
+        made = await handover(s2, 1, mosela, port, now, signature, step);
+        break;
+      case "accreditHaulier":
+        made = {
+          tx: thetisTransaction({
+            signature,
+            feePayer: deployer.address,
+            name: "AccreditOrganisation",
+            systemCpi: true,
+            instruction: getAccreditOrganisationInstruction({
+              protocol,
+              organisation: haulier,
+              organisationName: haulierName,
+              accreditor,
+              payer: deployer,
+              orgId: haulierOrgId,
+              role: Role.Transporter,
+              displayName: HAULIER_NAME,
+              admin: haulierAdmin.address,
+            }),
+            events: [
+              bytesOf(getOrganisationAccreditedEventEncoder(), {
+                organisation: haulier,
+                role: Role.Transporter,
+              }),
+            ],
+          }),
+          accounts: {
+            [haulier]: enc.haulier(),
+            [haulierName]: thetis(bytesOf(getOrganisationNameEncoder(), {})),
+          },
+        };
         break;
       case "cancelS1": {
         const current = state.shipments.get(s1.address);
@@ -1158,11 +1481,29 @@ export async function custodyHistory(
     intents: state.intents.map((intent) => intent.address),
     document,
     shipments: { s1: s1.address, s2: s2.address },
-    batches: { b1: s1.batch, b2: s2.batch },
+    batches: {
+      b1: s1.batches[0]?.address as string,
+      b2: s2.batches[0]?.address as string,
+      ...(s2.batches[1] ? { b3: s2.batches[1].address } : {}),
+    },
+    handovers,
+    ...(options.transfer ? { haulier } : {}),
     preparedAt: {
       s1: state.shipments.get(s1.address)?.preparedAt ?? 0n,
       s2: state.shipments.get(s2.address)?.preparedAt ?? 0n,
     },
     firstSignature: f.seedSignatures.deploy,
   };
+}
+
+/**
+ * custodyHistory() then S2's route (live-custody.md §9.1, routeHistory without 256): B2 departs
+ * Kopano Stockyard Custody to Mosela Haulage, then arrives at Port Terminal T1. `transfer` hands B2
+ * to Haulier Two Test Org in transit first; `partial` ships S2 as two batches that both depart and
+ * arrive (T063d.2 pre-check folds 3 and 4).
+ */
+export async function routeHistory(
+  options: { transfer?: boolean; partial?: boolean } = {},
+): Promise<CustodyScenario> {
+  return custodyHistory({ ...options, route: true });
 }

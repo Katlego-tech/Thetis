@@ -6,6 +6,7 @@
  * @see https://github.com/codama-idl/codama
  */
 
+export * from './acceptance.ts';
 export * from './authority.ts';
 export * from './batch.ts';
 export * from './buyerPosition.ts';
@@ -19,6 +20,7 @@ export * from './fromVaultAuthority.ts';
 export * from './handover.ts';
 export * from './intake.ts';
 export * from './intent.ts';
+export * from './loadingIntent.ts';
 export * from './loan.ts';
 export * from './lock.ts';
 export * from './mint.ts';
