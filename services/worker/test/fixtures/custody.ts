@@ -49,6 +49,7 @@ import {
   getLotEncoder,
   getLotIssuedEventEncoder,
   getManifestBatchEncoder,
+  getObservationRecordedEventEncoder,
   getOpenFacilityInstruction,
   getOrganisationAccreditedEventEncoder,
   getOrganisationEncoder,
@@ -58,6 +59,7 @@ import {
   getPositionEncoder,
   getPrepareShipmentInstruction,
   getRecordAdvanceInstruction,
+  getRecordObservationInstruction,
   getRegisterBatchInstruction,
   getReleaseIntentCreatedEventEncoder,
   getReleaseIntentEncoder,
@@ -72,6 +74,7 @@ import {
   LoanStatus,
   LockControl,
   LotState,
+  ObservationKind,
   Restriction,
   Role,
   ShipmentStatus,
@@ -194,6 +197,7 @@ export type CustodyStep =
   | "registerB2"
   | "registerB3"
   | "departB2"
+  | "observeB2"
   | "departB3"
   | "accreditHaulier"
   | "transferB2"
@@ -202,8 +206,8 @@ export type CustodyStep =
 
 /**
  * SYNTHETIC: one signature index per step (live-custody.md §9.1: k from 240; the route steps below
- * 240 because a synthetic signature index stops at 255, T063d.2 pre-check fold 6; 237 is kept for
- * T063d.3's border observation).
+ * 240 because a synthetic signature index stops at 255, T063d.2 pre-check fold 6; 237 is
+ * T063d.3's border observation, its pre-check fold 2).
  */
 const STEP_SIGNATURE: Record<CustodyStep, number> = {
   accreditKopano: 240,
@@ -226,6 +230,7 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   registerB3: 234,
   departB3: 235,
   departB2: 236,
+  observeB2: 237,
   arriveB2: 238,
   arriveB3: 239,
 };
@@ -481,6 +486,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         holder: string;
         stage: BatchStage;
         sequence: bigint;
+        observationCount: number;
         departedAt: bigint | null;
         arrivedAt: bigint | null;
       }
@@ -699,7 +705,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           holder: current.holder as Address,
           stage: current.stage,
           sequence: current.sequence,
-          observationCount: 0,
+          observationCount: current.observationCount,
           departedAt: current.departedAt === null ? none() : some(current.departedAt),
           arrivedAt: current.arrivedAt === null ? none() : some(current.arrivedAt),
           bump: entry.bump,
@@ -810,6 +816,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
       holder: kopano,
       stage: BatchStage.AtSource,
       sequence: 0n,
+      observationCount: 0,
       departedAt: null,
       arrivedAt: null,
     });
@@ -977,6 +984,58 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     };
   };
 
+  // observation.rs, steps 4 and 7: a Border observation by the batch's holder (a Transporter), at
+  // the block time; only the batch's observation_count moves (live-custody.md §9.1, 256 → 237).
+  const observe = async (
+    input: typeof s1,
+    index: number,
+    observer: string,
+    now: bigint,
+    signature: string,
+  ) => {
+    const entry = input.batches[index] as (typeof input.batches)[number];
+    const batch = state.batches.get(entry.address);
+    if (!batch) throw new Error("the batch is not registered");
+    const expectedObservation = batch.observationCount;
+    batch.observationCount += 1;
+    const evidenceDigest = fill(32, 0x77);
+    return {
+      tx: tx(
+        signature,
+        "RecordObservation",
+        getRecordObservationInstruction({
+          sponsor,
+          protocol,
+          observerOrg: observer as Address,
+          observerAuthority: await authorityOf(carrierKey[observer] as number),
+          holderOrg: batch.holder as Address,
+          shipment: input.address,
+          batch: entry.address as Address,
+          lot: lot as Address,
+          kind: ObservationKind.Border,
+          locationCode: "BORDER-1",
+          evidenceDigest,
+          observedAt: now,
+          expectedObservation,
+          validUntil: now + 570n,
+        }),
+        bytesOf(getObservationRecordedEventEncoder(), {
+          batch: entry.address,
+          shipment: input.address,
+          lot,
+          observer,
+          holder: batch.holder,
+          kind: ObservationKind.Border,
+          locationCode: "BORDER-1",
+          evidenceDigest,
+          observedAt: now,
+          index: expectedObservation,
+        }),
+      ),
+      accounts: { [entry.address]: enc.batch(input, index) },
+    };
+  };
+
   const order: CustodyStep[] = [
     "accreditKopano",
     "accreditPort",
@@ -999,7 +1058,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         ? (["departB2", "departB3", "arriveB2", "arriveB3"] as const)
         : options.transfer
           ? (["departB2", "accreditHaulier", "transferB2", "arriveB2"] as const)
-          : (["departB2", "arriveB2"] as const)
+          : (["departB2", "observeB2", "arriveB2"] as const)
       : []),
   ];
   const handovers: CustodyScenario["handovers"] = {};
@@ -1375,6 +1434,9 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
       case "departB3":
         made = await handover(s2, 1, kopano, mosela, now, signature, step);
         break;
+      case "observeB2":
+        made = await observe(s2, 0, mosela, now, signature);
+        break;
       case "transferB2":
         made = await handover(s2, 0, mosela, haulier, now, signature, step);
         break;
@@ -1497,8 +1559,9 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
 }
 
 /**
- * custodyHistory() then S2's route (live-custody.md §9.1, routeHistory without 256): B2 departs
- * Kopano Stockyard Custody to Mosela Haulage, then arrives at Port Terminal T1. `transfer` hands B2
+ * custodyHistory() then S2's route (live-custody.md §9.1, routeHistory with the observation): B2
+ * departs Kopano Stockyard Custody to Mosela Haulage, Mosela records a Border observation at
+ * BORDER-1 (signature 237, T063d.3 pre-check fold 2), then B2 arrives at Port Terminal T1. `transfer` hands B2
  * to Haulier Two Test Org in transit first; `partial` ships S2 as two batches that both depart and
  * arrive (T063d.2 pre-check folds 3 and 4).
  */
