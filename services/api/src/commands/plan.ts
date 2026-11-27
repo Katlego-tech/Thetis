@@ -21,6 +21,7 @@ import {
   decodeCustodianClass,
   decodeDocumentAttestation,
   decodeFacility,
+  decodeHandoffAcceptance,
   decodeLoadingIntent,
   decodeLoan,
   decodeLockAllocation,
@@ -73,9 +74,11 @@ import {
   getSellPledgedInstruction,
   getSetValuationInstruction,
   getWithdrawInstruction,
+  type HandoffAcceptance,
   LOCK_ALLOCATION_DISCRIMINATOR,
   type LoadingIntent,
   type Loan,
+  LoanStatus,
   type LockAllocation,
   type ManifestBatch,
   ObservationKind,
@@ -119,6 +122,8 @@ import { type CommandKind, RelayError, type SignerRole, type StoredSigner } from
 // (field-app.md T067r.3 fold 43).
 const LOCK_POSITION_OFFSET = 72;
 const LOCK_DISCRIMINATOR = Buffer.from(LOCK_ALLOCATION_DISCRIMINATOR);
+/** state.rs MAX_LOADING_LOANS: the triples one record_loading takes (driver decision D3). */
+const MAX_LOADING_LOANS = 4;
 
 // DocumentAttestation (state.rs): 8 discriminator + protocol 32 + kind 1, then the subject.
 const DOCUMENT_SUBJECT_OFFSET = 41;
@@ -797,16 +802,20 @@ const OBSERVER_ROLES: readonly number[] = [
   Role.Inspector,
 ];
 
-/** field-app.md T067r.3 fold 43: one (acceptance, loan, lock) triple per positive lock of the
- * position whose lender has accepted this intent, ascending by the raw loan key. A lock without an
- * acceptance is left out, so the program refuses AcceptanceMissing; the relay refuses nothing. */
+/** field-app.md T067r.3 fold 43, amended by the driver's PR #76 decisions D1–D3: one
+ * (acceptance, loan, lock) triple per positive lock of the position, ascending by the raw loan
+ * key. More than MAX_LOADING_LOANS positive locks is TOO_MANY_LOANS (D3). Each acceptance is read
+ * and decoded, and must name this intent, the lock's loan and the lock (D1): lamports at the PDA
+ * are not an acceptance. A lock without one is ACCEPTANCE_MISSING, and an accepted loan that is
+ * not Active is LOAN_NOT_ACTIVE (D2), both before any text exists. The chain's AcceptanceMissing
+ * and LoanNotActive stay the backstops for a change between create and send. */
 async function readTriples(context: PrepareContext, intent: Address, position: Address) {
   const found = await context.reader.chain.programAccounts({
     memcmp: { offset: LOCK_POSITION_OFFSET, bytes: position },
     dataSize: getLockAllocationSize(),
   });
   const encoder = getAddressEncoder();
-  const triples: { acceptance: Address; loan: Address; lock: Address }[] = [];
+  const locks: { loan: Address; lock: Address }[] = [];
   for (const account of found) {
     if (account.programAddress !== THETIS_PROGRAM_ADDRESS) continue;
     if (!Buffer.from(account.data.subarray(0, 8)).equals(LOCK_DISCRIMINATOR)) continue;
@@ -818,13 +827,53 @@ async function readTriples(context: PrepareContext, intent: Address, position: A
     }
     if (lock.protocol !== context.protocol || lock.position !== position || lock.quantityKg === 0n)
       continue;
-    const [acceptance] = await findAcceptancePda({ intent, loan: lock.loan });
-    if (!(await context.reader.exists(acceptance))) continue;
-    triples.push({ acceptance, loan: lock.loan, lock: account.address });
+    locks.push({ loan: lock.loan, lock: account.address });
   }
-  return triples.sort((left, right) =>
+  if (locks.length > MAX_LOADING_LOANS) {
+    throw new RelayError(
+      "TOO_MANY_LOANS",
+      `${locks.length} locked loans; a loading takes at most ${MAX_LOADING_LOANS}`,
+    );
+  }
+  locks.sort((left, right) =>
     Buffer.compare(Buffer.from(encoder.encode(left.loan)), Buffer.from(encoder.encode(right.loan))),
   );
+  const triples: { acceptance: Address; loan: Address; lock: Address }[] = [];
+  for (const { loan, lock } of locks) {
+    const [acceptance] = await findAcceptancePda({ intent, loan });
+    if (!(await acceptanceOf(context, acceptance, intent, loan, lock))) {
+      throw new RelayError("ACCEPTANCE_MISSING", `loan: ${loan}`);
+    }
+    const held = (await context.reader.read("loan", loan, decodeLoan as never, "Loan")) as Loan;
+    if (held.status !== LoanStatus.Active) throw new RelayError("LOAN_NOT_ACTIVE", `loan: ${loan}`);
+    triples.push({ acceptance, loan, lock });
+  }
+  return triples;
+}
+
+/** D1: true only for a decoded HandoffAcceptance of this instance naming this intent, loan and
+ * lock. A missing, foreign-owned or undecodable account is no acceptance. */
+async function acceptanceOf(
+  context: PrepareContext,
+  address: Address,
+  intent: Address,
+  loan: Address,
+  lock: Address,
+): Promise<boolean> {
+  if (!(await context.reader.exists(address))) return false;
+  let accepted: HandoffAcceptance;
+  try {
+    accepted = (await context.reader.read(
+      "acceptance",
+      address,
+      decodeHandoffAcceptance as never,
+      "HandoffAcceptance",
+    )) as HandoffAcceptance;
+  } catch (error) {
+    if (error instanceof RelayError && error.code === "ACCOUNT_MISSING") return false;
+    throw error;
+  }
+  return accepted.intent === intent && accepted.loan === loan && accepted.lock === lock;
 }
 
 const PREPARE: Record<CommandKind, Preparer> = {

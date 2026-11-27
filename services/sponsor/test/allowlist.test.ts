@@ -338,6 +338,28 @@ describe("sponsor allowlist", () => {
       wire([limit(), ed25519(), thetis("record_loading", { extra: [filler, sponsor, filler] })]),
       /sponsor/,
     );
+    // PR #76 D4: exactly 17 + 3k accounts, k from 0 to 4.
+    expect(shape).toMatchObject({ maxAccounts: 29, step: 3 });
+    for (const k of [0, 1, 2, 3]) {
+      expect(() =>
+        checkSponsorTransaction(
+          wire([limit(), ed25519(), thetis("record_loading", { extra: triples.slice(0, 3 * k) })]),
+          context,
+        ),
+      ).not.toThrow();
+    }
+    refused(
+      wire([
+        limit(),
+        ed25519(),
+        thetis("record_loading", { extra: Array.from({ length: 15 }, () => filler) }),
+      ]),
+      /too many accounts/,
+    );
+    refused(
+      wire([limit(), ed25519(), thetis("record_loading", { extra: triples.slice(0, 4) })]),
+      /partial group/,
+    );
     const intent = SPONSORED_INSTRUCTIONS.find((entry) => entry.name === "create_loading_intent");
     expect(intent).toMatchObject({ accounts: 11, protocol: 1, sponsorSlots: [0] });
   });

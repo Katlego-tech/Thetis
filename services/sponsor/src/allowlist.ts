@@ -42,6 +42,10 @@ const SPONSORED: readonly {
   accounts: number;
   protocol: number;
   sponsorSlots: readonly number[];
+  /** When set, the most accounts the instruction may name, and the size of each group of
+   * remaining accounts after the IDL's: the count is `accounts + step * k`, exactly. */
+  maxAccounts?: number;
+  step?: number;
 }[] = [
   {
     name: "borrow",
@@ -164,7 +168,8 @@ const SPONSORED: readonly {
     sponsorSlots: [0],
   },
   // The loading kinds (field-app.md T067r.3 fold 49). record_loading's triples follow its 17
-  // accounts; the sponsor may not appear among them (the slot rule below covers every index).
+  // accounts, at most four (state.rs MAX_LOADING_LOANS), so it names exactly 17 + 3k accounts
+  // (PR #76 decision D4); the sponsor may not appear among them (the slot rule covers every index).
   {
     name: "create_loading_intent",
     discriminator: [138, 182, 30, 209, 196, 170, 77, 2],
@@ -178,6 +183,8 @@ const SPONSORED: readonly {
     accounts: 17,
     protocol: 1,
     sponsorSlots: [0],
+    maxAccounts: 29,
+    step: 3,
   },
 ];
 
@@ -294,6 +301,12 @@ export function checkSponsorTransaction(wireBase64: string, context: SponsorCont
   const shape = SPONSORED.find((entry) => startsWith(data, entry.discriminator));
   if (!shape) refuse("the Thetis instruction is not a sponsored command");
   if (indices.length < shape.accounts) refuse(`${shape.name} names too few accounts`);
+  if (shape.maxAccounts !== undefined && indices.length > shape.maxAccounts) {
+    refuse(`${shape.name} names too many accounts`);
+  }
+  if (shape.step !== undefined && (indices.length - shape.accounts) % shape.step !== 0) {
+    refuse(`${shape.name} names a partial group of accounts`);
+  }
   const protocolIndex = indices[shape.protocol];
   if (protocolIndex === undefined || protocolIndex >= accounts.length) {
     refuse("the protocol account is not a static account");

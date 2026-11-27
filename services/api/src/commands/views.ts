@@ -162,6 +162,15 @@ export const RELAY_ERRORS = {
   TEXT_EXPIRED: [409, "The text expired before it was submitted."],
   BLOCKHASH_EXPIRED: [409, "The transaction is too old. Request a new one."],
   TOKEN_ACCOUNT_MISSING: [409, "The wallet has no token account for the pool's test token."],
+  ACCEPTANCE_MISSING: [409, "A lender with a lock on this lot has not accepted this loading."],
+  LOAN_NOT_ACTIVE: [
+    409,
+    "A loan with a lock on this lot is not active, so the lot can't be loaded.",
+  ],
+  TOO_MANY_LOANS: [
+    409,
+    "More than four loans hold locks on this lot; one loading takes at most four.",
+  ],
   ROLE_INVALID: [422, "That role is not a signer of this command."],
   TRANSACTION_TOO_LARGE: [
     422,

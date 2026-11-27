@@ -610,7 +610,8 @@ function parseEvent(line: string): { name: string; data: Record<string, unknown>
 
 /** The outcome's data: exactly the kind's one event, or for a kind with a trailing event
  * (field-app.md T067r.3 fold 42) the event, then one trailing event per item of the plan's `k`,
- * gathered under `loanHandOffs`. Anything else is unreadable (null). */
+ * gathered under `loanHandOffs`, each naming the plan's loan of its triple. Anything else is
+ * unreadable (null). */
 function outcomeData(row: CommandRow, lines: string[]): Record<string, unknown> | null {
   const spec = KIND_SPECS[row.kind];
   const trailing = spec.trailingEvent ? Number(row.plan.k ?? Number.NaN) : 0;
@@ -620,6 +621,10 @@ function outcomeData(row: CommandRow, lines: string[]): Record<string, unknown> 
   if (!spec.trailingEvent) return head.data;
   if (head.data.loansAccepted !== trailing) return null;
   if (rest.some((event) => !event || event.name !== spec.trailingEvent)) return null;
+  // PR #76 review N4: each hand-off names the plan's loan of the same triple, in order.
+  const triples = (row.plan.triples ?? "").split(",").filter((key) => key !== "");
+  if (triples.length !== 3 * trailing) return null;
+  if (rest.some((event, index) => event?.data.loan !== triples[3 * index + 1])) return null;
   return { ...head.data, loanHandOffs: rest.map((event) => event?.data) };
 }
 

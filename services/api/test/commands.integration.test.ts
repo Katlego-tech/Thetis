@@ -3001,7 +3001,6 @@ describe("record_observation on the real program", () => {
 
 const khunouOwner = (): Actor => ({ org: "khunou", wallet: wallets.khunouLoading });
 const portTerminal = (): Actor => ({ org: "portT1", wallet: wallets.portT1 });
-const loadingSigners = () => ({ owner: khunouOwner(), terminal: portTerminal() });
 
 /** CR-0001 at Port Terminal T1: optionally pledged to Lender One as `pledges` loans (kg each),
  * then shipped from Kopano's site, handed to Mosela at Departure and to the terminal at Arrival,
@@ -3326,19 +3325,56 @@ describe("the loading on the real program", () => {
     for (const acceptance of acceptances) expect(inTable).toContain(acceptance);
   }, 240_000);
 
-  it("a lock whose lender has not accepted is left out, and the loading fails on chain as AcceptanceMissing", async () => {
+  it("a lock whose lender has not accepted is ACCEPTANCE_MISSING at create, naming the loan, and nothing is signed or sent (PR #76 D2)", async () => {
     const w = await world();
-    await lotAtTerminal(w, ["5000000"]);
+    const { loans } = await lotAtTerminal(w, ["5000000"]);
+    const [loan] = loans as [Address];
     const { intent } = await createIntent(w);
     const before = w.chain.sent.length;
-    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners());
-    expect(view.fields).toContainEqual({ label: "Loan acceptances", value: "0" });
-    failedWith(view, "AcceptanceMissing");
-    expect(w.chain.sent.length).toBe(before + 1);
+    const response = await call(w, "POST", "/v1/commands", people.portT1, {
+      kind: "record_loading",
+      organisationId: orgIds.portT1,
+      args: { intent },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "ACCEPTANCE_MISSING",
+      detail: `loan: ${loan}`,
+    });
+    expect(w.chain.sent.length).toBe(before);
     expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(LOT_KG);
   }, 180_000);
 
-  it("a lot whose loan went into Recovery after the lender accepted fails on chain as LoanNotActive", async () => {
+  it("lamports sent to the acceptance PDA are not an acceptance: ACCEPTANCE_MISSING, nothing sent (PR #76 D1)", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["5000000"]);
+    const [loan] = loans as [Address];
+    const { intent } = await createIntent(w);
+    const [acceptance] = await findAcceptancePda({ intent, loan });
+    w.svm.setAccount({
+      address: acceptance,
+      programAddress: address("11111111111111111111111111111111"),
+      lamports: 1_000_000n,
+      executable: false,
+      space: 0n,
+      data: new Uint8Array(),
+    } as never);
+    expect(w.svm.getAccount(acceptance).exists).toBe(true);
+    const before = w.chain.sent.length;
+    const response = await call(w, "POST", "/v1/commands", people.portT1, {
+      kind: "record_loading",
+      organisationId: orgIds.portT1,
+      args: { intent },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "ACCEPTANCE_MISSING",
+      detail: `loan: ${loan}`,
+    });
+    expect(w.chain.sent.length).toBe(before);
+  }, 180_000);
+
+  it("an accepted loan in Recovery is LOAN_NOT_ACTIVE at create, and a loading prepared before the liquidation fails on chain as LoanNotActive (PR #76 D2)", async () => {
     const w = await world();
     const { loans } = await lotAtTerminal(w, ["5000000"]);
     const [loan] = loans as [Address];
@@ -3348,16 +3384,46 @@ describe("the loading on the real program", () => {
     const clock = w.svm.getClock();
     clock.unixTimestamp += DAY;
     w.svm.setClock(clock);
+    // Prepared while the loan is Active: the chain's refusal is the backstop.
+    const prepared = await create(w, "portT1", "record_loading", { intent });
+    expect(prepared.fields).toContainEqual({ label: "Loan acceptances", value: "1" });
     confirmed(
       await run(w, "lenderOne", "liquidate", { loan }, { lender: lenderOne() }),
       "Liquidated",
     );
     expect(loanAccount(w, loan).status).toBe(1); // Recovery
-    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners());
-    expect(view.fields).toContainEqual({ label: "Loan acceptances", value: "1" });
+    const before = w.chain.sent.length;
+    const response = await call(w, "POST", "/v1/commands", people.portT1, {
+      kind: "record_loading",
+      organisationId: orgIds.portT1,
+      args: { intent },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({ code: "LOAN_NOT_ACTIVE", detail: `loan: ${loan}` });
+    expect(w.chain.sent.length).toBe(before);
+
+    let view = data<CommandView>(
+      await signText(w, "khunou", prepared, "owner", wallets.khunouLoading),
+    );
+    view = data<CommandView>(await signText(w, "portT1", view, "terminal", wallets.portT1));
     failedWith(view, "LoanNotActive");
     expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(LOT_KG);
   }, 240_000);
+
+  it("more than four locked loans is TOO_MANY_LOANS at create, and nothing is sent (PR #76 D3)", async () => {
+    const w = await world();
+    await lotAtTerminal(w, ["1000000", "1000000", "1000000", "1000000", "1000000"]);
+    const { intent } = await createIntent(w);
+    const before = w.chain.sent.length;
+    const response = await call(w, "POST", "/v1/commands", people.portT1, {
+      kind: "record_loading",
+      organisationId: orgIds.portT1,
+      args: { intent },
+    });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response).code).toBe("TOO_MANY_LOANS");
+    expect(w.chain.sent.length).toBe(before);
+  }, 300_000);
 
   it("a loading prepared before a newer intent fails on chain as StaleRevision", async () => {
     const w = await world();
