@@ -810,7 +810,7 @@ export const ISSUE_LOT_MESSAGE_PARAMS = [
   "owner",
   "custodian",
   "siteCode",
-  "intakeDigest",
+  "intake",
   "origin",
   "validUntil",
 ] as const;

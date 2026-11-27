@@ -683,7 +683,7 @@ describe("demo reset (demo.md §5)", () => {
       "owner",
       "custodian",
       "siteCode",
-      "intakeDigest",
+      "intake",
       "origin",
       "validUntil",
     ]);
