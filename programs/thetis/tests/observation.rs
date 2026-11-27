@@ -1051,7 +1051,11 @@ fn record_observation_rejects_observer_without_authority() {
 fn record_observation_rejects_revoked_or_expired_authority() {
     let (mut w, _, batch) = in_transit();
     let args = w.border_args(batch);
-    // An Authority past its expiry.
+    // The organisation revokes the driver's Authority.
+    let revoke = w.f.revoke(OrgAdmin, w.transporter, w.authority_of(Driver));
+    w.f.ok(revoke, OrgAdmin);
+    w.observe_refused(&args, AuthorityRevoked);
+    // An unrevoked Authority that expires at the block time.
     w.f.forge_authority(
         w.transporter,
         w.f.key(Driver),
@@ -1059,16 +1063,6 @@ fn record_observation_rejects_revoked_or_expired_authority() {
         w.now,
     );
     w.observe_refused(&args, AuthorityExpired);
-    // A revoked Authority.
-    w.f.forge_authority(
-        w.transporter,
-        w.f.key(Driver),
-        scope::CARRY | scope::OBSERVE,
-        w.now + AUTHORITY_LIFETIME,
-    );
-    let revoke = w.f.revoke(OrgAdmin, w.transporter, w.authority_of(Driver));
-    w.f.ok(revoke, OrgAdmin);
-    w.observe_refused(&args, AuthorityRevoked);
 }
 
 #[test]

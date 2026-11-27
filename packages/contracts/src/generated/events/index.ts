@@ -22,6 +22,7 @@ export * from './liquidated.ts';
 export * from './loanClosed.ts';
 export * from './lotIssued.ts';
 export * from './lotSplit.ts';
+export * from './observationRecorded.ts';
 export * from './organisationAccredited.ts';
 export * from './pauseChanged.ts';
 export * from './paymentConfirmed.ts';

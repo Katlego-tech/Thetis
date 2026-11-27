@@ -3,6 +3,7 @@ pub mod documents;
 pub mod facility;
 pub mod handover;
 pub mod issue;
+pub mod observation;
 pub mod payment;
 pub mod pledge;
 pub mod recovery;

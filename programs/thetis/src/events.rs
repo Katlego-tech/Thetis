@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 
-use crate::state::{DocumentKind, HandoverStage, LotState, PaymentPurpose, Role, ShipmentStatus};
+use crate::state::{
+    DocumentKind, HandoverStage, LotState, ObservationKind, PaymentPurpose, Role, ShipmentStatus,
+};
 
 #[event]
 pub struct ProtocolInitialized {
@@ -317,4 +319,18 @@ pub struct CustodyHandedOver {
     pub lot_state: LotState,
     pub shipment_revision: u64,
     pub lot_revision: u64,
+}
+
+#[event]
+pub struct ObservationRecorded {
+    pub batch: Pubkey,
+    pub shipment: Pubkey,
+    pub lot: Pubkey,
+    pub observer: Pubkey,
+    pub holder: Pubkey,
+    pub kind: ObservationKind,
+    pub location_code: String,
+    pub evidence_digest: [u8; 32],
+    pub observed_at: i64,
+    pub index: u32,
 }

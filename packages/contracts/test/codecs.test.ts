@@ -23,7 +23,7 @@ function codecRoundTrip(
 
 describe("IDL sanity", () => {
   it("lists the Phase 1 instructions and accounts and the lending setup ones", () => {
-    expect(idl.instructions.length).toBe(33);
+    expect(idl.instructions.length).toBe(34);
     expect(idl.accounts.length).toBe(21);
     const instructions = idl.instructions.map((i) => i.name);
     expect(instructions).toContain("redeem");
