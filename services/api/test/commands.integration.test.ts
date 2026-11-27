@@ -73,7 +73,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChainPort } from "../src/commands/chain.ts";
 import { KIND_SPECS } from "../src/commands/plan.ts";
 import type { CommandDependencies } from "../src/commands/routes.ts";
-import { keyFileSponsor } from "../src/commands/sponsor.ts";
+import { keyFileSponsor, SponsorUnavailableError } from "../src/commands/sponsor.ts";
 import { envelope, formatTonnes } from "../src/commands/texts.ts";
 import type { CommandView } from "../src/commands/views.ts";
 import { localSupabaseEnv } from "../src/local.ts";
@@ -86,6 +86,7 @@ const programSo = join(projectRoot, "target/deploy/thetis.so");
 const namespace = randomUUID();
 const password = "Thetis-local-integration-password";
 const clientOptions = { auth: { autoRefreshToken: false, persistSession: false } };
+const MAX_TRANSACTION_BYTES = 1_232;
 const DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 const TOKEN_2022 = address("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const NOW = 1_795_098_155n;
@@ -289,6 +290,9 @@ function svmChain(svm: LiteSVM): SvmChain {
       return { addresses: lookupTableAddresses(svm, table), lastExtendedSlot };
     },
     async send(wireBase64) {
+      // LiteSVM takes any size; devnet refuses a transaction above 1,232 bytes (S1 fold 9).
+      const size = getBase64Encoder().encode(wireBase64).length;
+      if (size > MAX_TRANSACTION_BYTES) throw new Error(`transaction of ${size} bytes`);
       const transaction = getTransactionDecoder().decode(getBase64Encoder().encode(wireBase64));
       const feePayerSignature = Object.values(transaction.signatures)[0];
       if (!feePayerSignature) throw new Error("unsigned transaction");
@@ -1082,8 +1086,25 @@ beforeAll(async () => {
     .address;
 }, 60_000);
 
+/** Removes this suite's open commands, so each test starts under the five-open cap (fold 10). */
+function closeOpenCommands() {
+  const users = Object.values(people).map((person) => `'${person.id}'`);
+  if (users.length === 0) return;
+  execFileSync(
+    "supabase",
+    [
+      "db",
+      "query",
+      "--local",
+      `delete from public.commands where created_by in (${users.join(", ")}) and status in ('awaiting_signatures', 'submitted', 'outcome_unknown')`,
+    ],
+    { cwd: projectRoot, timeout: 15_000 },
+  );
+}
+
 afterEach(() => {
   vi.useRealTimers();
+  closeOpenCommands();
 });
 
 // ---------------------------------------------------------------- tests
@@ -1418,6 +1439,177 @@ describe("relay commands on the real program", () => {
       data<CommandView>(await signTransactionAs(w, "lenderOne", lost, wallets.lenderOne)),
       "FacilityOpened",
     );
+  }, 120_000);
+
+  it("three transactions that did not land, then a fourth, keep the command signable and the fifth confirms", async () => {
+    const w = await world();
+    let view = await create(w, "lenderOne", "open_facility", {
+      borrower: orgIds.khunou,
+      currency: "USD",
+      currencyDecimals: "2",
+      termsVersion: "1",
+      rateBps: "1200",
+      maxLtvBps: "6000",
+    });
+    w.chain.dropSends = true;
+    for (let cycle = 0; cycle < 4; cycle++) {
+      view = data<CommandView>(await signTransactionAs(w, "lenderOne", view, wallets.lenderOne));
+      expect(view.status, `cycle ${cycle + 1}`).toBe("awaiting_signatures");
+      expect(view.transaction).toBeNull();
+    }
+    w.chain.dropSends = false;
+    const final = confirmed(
+      data<CommandView>(await signTransactionAs(w, "lenderOne", view, wallets.lenderOne)),
+      "FacilityOpened",
+    );
+    expect(final.transaction?.sends).toBe(1);
+  }, 180_000);
+
+  it("transaction requests never put an account the instruction creates into the lookup table", async () => {
+    const w = await world();
+    // One of each kind confirms first, so every account that exists is already in the table.
+    const { facility, loan } = await pledgedLoan(w);
+    await advance(w, loan);
+    confirmed(
+      await confirmPayment(w, loan, "Repayment", "1000000", "BANK-TBL-0000"),
+      "PaymentConfirmed",
+    );
+    confirmed(
+      await run(
+        w,
+        "lenderOne",
+        "open_facility",
+        {
+          borrower: orgIds.khunou,
+          currency: "USD",
+          currencyDecimals: "2",
+          termsVersion: "1",
+          rateBps: "1200",
+          maxLtvBps: "6000",
+        },
+        { lender: lenderOne() },
+      ),
+      "FacilityOpened",
+    );
+    const { address: table } = mustSucceed(
+      await service
+        .from("relay_lookup_tables")
+        .select("address")
+        .eq("protocol", w.protocol)
+        .single(),
+    );
+    const before = lookupTableAddresses(w.svm, table as Address);
+    const created: string[] = [];
+    for (let round = 0; round < 3; round++) {
+      const opened = await create(w, "lenderOne", "open_facility", {
+        borrower: orgIds.khunou,
+        currency: "USD",
+        currencyDecimals: "2",
+        termsVersion: "1",
+        rateBps: "1200",
+        maxLtvBps: "6000",
+      });
+      await requestTransaction(w, "lenderOne", opened, wallets.lenderOne);
+      created.push(opened.facility as string);
+      const valued = await create(w, "lenderOne", "set_valuation", {
+        facility,
+        custodianClass: w.custodianClass,
+        grade: `G-ALT-${round}`,
+        valuePerKgMinor: "20",
+        haircutBps: "0",
+        validForDays: "30",
+        sourceNote: "Synthetic test price per kg, not a market quote",
+      });
+      await requestTransaction(w, "lenderOne", valued, wallets.lenderOne);
+      const { plan } = mustSucceed(
+        await service.from("commands").select("plan").eq("id", valued.id).single(),
+      );
+      created.push((plan as { valuation: string }).valuation);
+      const paid = await create(w, "lenderOne", "confirm_payment", {
+        loan,
+        purpose: "Repayment",
+        amountMinor: "1000000",
+        bankReference: `BANK-TBL-${round + 1}`,
+        observedAt: String(w.svm.getClock().unixTimestamp - 60n),
+        evidenceVersionId: await finalizedEvidence(w),
+      });
+      await requestTransaction(w, "lenderOne", paid, wallets.lenderOne);
+      created.push(paid.payment as string);
+      closeOpenCommands();
+    }
+    const after = lookupTableAddresses(w.svm, table as Address);
+    for (const key of created) expect(after, key).not.toContain(key);
+    expect(after).toEqual(before);
+  }, 240_000);
+
+  it("a user with five open commands gets TOO_MANY_OPEN_COMMANDS (429) on a sixth, and creates again once one is terminal", async () => {
+    const w = await world();
+    const args = {
+      borrower: orgIds.khunou,
+      currency: "USD",
+      currencyDecimals: "2",
+      termsVersion: "1",
+      rateBps: "1200",
+      maxLtvBps: "6000",
+    };
+    const createRequest = () =>
+      call(w, "POST", "/v1/commands", people.lenderOne, {
+        kind: "open_facility",
+        organisationId: orgIds.lenderOne,
+        args,
+      });
+    const open: CommandView[] = [];
+    for (let index = 0; index < 5; index++)
+      open.push(await create(w, "lenderOne", "open_facility", args));
+    const sixth = await createRequest();
+    expect(sixth.statusCode).toBe(429);
+    expect(errorOf(sixth).code).toBe("TOO_MANY_OPEN_COMMANDS");
+    // Another user is not counted against this one.
+    await create(w, "lenderTwo", "open_facility", args);
+    // One reaches a terminal status: a new create succeeds, and the cap holds again after it.
+    confirmed(
+      data<CommandView>(
+        await signTransactionAs(w, "lenderOne", open[0] as CommandView, wallets.lenderOne),
+      ),
+      "FacilityOpened",
+    );
+    await create(w, "lenderOne", "open_facility", args);
+    expect((await createRequest()).statusCode).toBe(429);
+    // Seven creates at once with none open: exactly five are accepted.
+    closeOpenCommands();
+    const burst = await Promise.all(Array.from({ length: 7 }, createRequest));
+    expect(burst.map((response) => response.statusCode).sort()).toEqual([
+      201, 201, 201, 201, 201, 429, 429,
+    ]);
+  }, 180_000);
+
+  it("a sponsor that does not answer its address is SPONSOR_UNAVAILABLE (503)", async () => {
+    const w = await world();
+    const view = await create(w, "lenderOne", "open_facility", {
+      borrower: orgIds.khunou,
+      currency: "USD",
+      currencyDecimals: "2",
+      termsVersion: "1",
+      rateBps: "1200",
+      maxLtvBps: "6000",
+    });
+    const working = w.deps.sponsor;
+    w.deps = {
+      ...w.deps,
+      sponsor: {
+        address: () => Promise.reject(new SponsorUnavailableError("the sponsor did not answer")),
+        sign: working.sign,
+      },
+    };
+    const response = await call(
+      w,
+      "POST",
+      `/v1/commands/${view.id}/transaction-request`,
+      people.lenderOne,
+      { wallet: wallets.lenderOne.address },
+    );
+    expect(response.statusCode).toBe(503);
+    expect(errorOf(response).code).toBe("SPONSOR_UNAVAILABLE");
   }, 120_000);
 
   it("a signed transaction whose message differs from the issued one is TRANSACTION_MISMATCH", async () => {

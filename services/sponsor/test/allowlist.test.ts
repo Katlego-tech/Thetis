@@ -23,7 +23,10 @@ import {
   getCreateLookupTableInstruction,
   getExtendLookupTableInstruction,
 } from "@solana-program/address-lookup-table";
-import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
+import {
+  getSetComputeUnitLimitInstruction,
+  getSetComputeUnitPriceInstruction,
+} from "@solana-program/compute-budget";
 import { THETIS_PROGRAM_ADDRESS } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -75,6 +78,7 @@ const TEXT_SIGNED = new Set([
 ]);
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 const SYSTEM = "11111111111111111111111111111111" as Address;
+const LOOKUP_TABLE = "AddressLookupTab1e1111111111111111111111111" as Address;
 const MEMO = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" as Address;
 const BLOCKHASH = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY" as Blockhash;
 
@@ -286,5 +290,84 @@ describe("sponsor allowlist", () => {
     refused(getBase64EncodedWireTransaction(compileTransaction(legacy)), /version/);
     // Not a transaction at all.
     refused(Buffer.from("not a transaction").toString("base64"));
+  });
+
+  it("refuses a protocol through the table, foreign lookup-table authorities, another table, an Ed25519 instruction with accounts, a compute price, a trailing instruction and short lookup-table data", () => {
+    // The protocol slot must be a static account, never a table entry.
+    refused(
+      wire([limit(), thetis("close_loan")], { tables: { [table]: [protocol] } }),
+      /protocol/,
+    );
+    const sponsorSigner = createNoopSigner(sponsor);
+    const other = createNoopSigner(lender);
+    for (const [authority, payer] of [
+      [other, sponsorSigner],
+      [sponsorSigner, other],
+    ] as const) {
+      refused(
+        wire([
+          getCreateLookupTableInstruction({
+            address: [table, 255 as never],
+            authority,
+            payer,
+            recentSlot: 10n,
+          }),
+        ]),
+        /authority and payer/,
+      );
+      refused(
+        wire([
+          getExtendLookupTableInstruction({ address: table, authority, payer, addresses: [filler] }),
+        ]),
+        /authority and payer/,
+      );
+    }
+    refused(
+      wire([
+        getExtendLookupTableInstruction({
+          address: otherTable,
+          authority: sponsorSigner,
+          payer: sponsorSigner,
+          addresses: [filler],
+        }),
+      ]),
+      /extended table/,
+    );
+    refused(
+      wire([
+        limit(),
+        {
+          programAddress: ED25519,
+          accounts: [{ address: filler, role: AccountRole.READONLY }],
+          data: new Uint8Array(2 + 14 + 96 + 10),
+        },
+        thetis("pledge"),
+      ]),
+      /Ed25519/,
+    );
+    const price = getSetComputeUnitPriceInstruction({ microLamports: 1n });
+    refused(wire([price, thetis("close_loan")]), /compute/);
+    refused(wire([limit(), price, thetis("close_loan")]));
+    refused(wire([price, limit(), thetis("close_loan")]));
+    refused(wire([limit(), thetis("close_loan"), limit()]), /instructions/);
+    refused(wire([limit(), ed25519(), thetis("pledge"), ed25519()]), /instructions/);
+    refused(wire([limit(), thetis("close_loan"), price]), /instructions/);
+    // Lookup-table instruction data shorter than its 4-byte tag.
+    for (const length of [0, 1, 2, 3]) {
+      refused(
+        wire([
+          {
+            programAddress: LOOKUP_TABLE,
+            accounts: [
+              { address: table, role: AccountRole.WRITABLE },
+              { address: sponsor, role: AccountRole.READONLY_SIGNER },
+              { address: sponsor, role: AccountRole.WRITABLE_SIGNER },
+              { address: SYSTEM, role: AccountRole.READONLY },
+            ],
+            data: Uint8Array.from([2, 0, 0].slice(0, length)),
+          },
+        ]),
+      );
+    }
   });
 });
