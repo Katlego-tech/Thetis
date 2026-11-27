@@ -9,7 +9,10 @@ const checkpoint = {
   last_success_at: "2026-11-27T08:02:00.000Z",
   halt_reason: null,
 };
-const protocolRow = { instance_id_hex: "666961742d64656d6f2d72756e2d3031", settlement_mode: "FiatAttestationTest" };
+const protocolRow = {
+  instance_id_hex: "666961742d64656d6f2d72756e2d3031",
+  settlement_mode: "FiatAttestationTest",
+};
 
 describe("resolveProtocol", () => {
   it("zero checkpoint rows is No Thetis instance", () => {
@@ -43,7 +46,9 @@ describe("resolveProtocol", () => {
 
 describe("instanceLabel", () => {
   it("is the hex when a byte is not printable", () => {
-    expect(instanceLabel("00112233445566778899aabbccddeeff")).toBe("00112233445566778899aabbccddeeff");
+    expect(instanceLabel("00112233445566778899aabbccddeeff")).toBe(
+      "00112233445566778899aabbccddeeff",
+    );
   });
 });
 
@@ -51,6 +56,8 @@ describe("a command for another protocol", () => {
   it("is refused before the wallet opens", () => {
     const context = { protocol: PROTOCOL } as const;
     expect(isSameProtocol(commandView("awaiting_signatures"), context)).toBe(true);
-    expect(isSameProtocol(commandView("awaiting_signatures", { protocol: PROGRAM }), context)).toBe(false);
+    expect(isSameProtocol(commandView("awaiting_signatures", { protocol: PROGRAM }), context)).toBe(
+      false,
+    );
   });
 });

@@ -73,7 +73,9 @@ describe("revision", () => {
     expect(start.status).toBe("editing");
     const one = editDraft(start, { grade: "G1" }, NOW);
     expect(one.revision).toBe(1);
-    expect(editDraft(one, { quantityText: "5000", weighbridgeTicket: "wb 2611-0042" }, NOW).revision).toBe(2);
+    expect(
+      editDraft(one, { quantityText: "5000", weighbridgeTicket: "wb 2611-0042" }, NOW).revision,
+    ).toBe(2);
   });
 
   it("an edit clears the command", () => {
@@ -85,7 +87,13 @@ describe("revision", () => {
   });
 
   it("refuses edits while submitted or unknown", () => {
-    for (const status of ["submitted", "unknown", "awaiting_signature", "issued", "preparing"] as DraftStatus[]) {
+    for (const status of [
+      "submitted",
+      "unknown",
+      "awaiting_signature",
+      "issued",
+      "preparing",
+    ] as DraftStatus[]) {
       expect(() => editDraft({ ...draft(), status }, { grade: "G1" }, NOW)).toThrow();
     }
   });
@@ -115,16 +123,24 @@ describe("mapping a command status", () => {
   });
 
   it("keeps the transaction signature and lot only once the relay reports them", () => {
-    const waiting = applyCommand({ ...draft(), status: "preparing" }, commandView("awaiting_signatures"));
+    const waiting = applyCommand(
+      { ...draft(), status: "preparing" },
+      commandView("awaiting_signatures"),
+    );
     expect(waiting.command?.transactionSignature).toBeNull();
     const done = applyCommand(waiting, commandView("confirmed"));
-    expect(done.command?.transactionSignature).toBe(commandView("confirmed").transaction?.signature);
+    expect(done.command?.transactionSignature).toBe(
+      commandView("confirmed").transaction?.signature,
+    );
     expect(done.command?.lot).toBe(commandView("confirmed").lot);
   });
 });
 
 describe("resume (field-app.md §5.1)", () => {
-  const withCommand = applyCommand({ ...draft(), status: "preparing" }, commandView("awaiting_signatures"));
+  const withCommand = applyCommand(
+    { ...draft(), status: "preparing" },
+    commandView("awaiting_signatures"),
+  );
 
   it.each([
     ["awaiting_signatures", "awaiting_signature"],

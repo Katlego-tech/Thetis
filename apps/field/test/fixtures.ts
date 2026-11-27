@@ -31,7 +31,10 @@ export const DEMO_TEXT = [
   "Test network only. Synthetic data.",
 ].join("\n");
 
-export function commandView(status: CommandStatus, overrides: Partial<CommandView> = {}): CommandView {
+export function commandView(
+  status: CommandStatus,
+  overrides: Partial<CommandView> = {},
+): CommandView {
   const sent = status !== "awaiting_signatures" && status !== "expired";
   const confirmed = status === "confirmed";
   return {
@@ -62,11 +65,20 @@ export function commandView(status: CommandStatus, overrides: Partial<CommandVie
         role: "custodian",
         organisationId: KOPANO_ORG,
         method: "text",
-        signed: sent ? { wallet: "G7sTxBJ1geeqZF7T3JuPX4bEqhQzyBLYPKAye11RXLrp", signedAt: "2026-11-27T08:06:01.000Z" } : null,
+        signed: sent
+          ? {
+              wallet: "G7sTxBJ1geeqZF7T3JuPX4bEqhQzyBLYPKAye11RXLrp",
+              signedAt: "2026-11-27T08:06:01.000Z",
+            }
+          : null,
       },
     ],
     transaction: sent
-      ? { signature: TX_SIGNATURE, sends: 1, explorerUrl: `https://explorer.solana.com/tx/${TX_SIGNATURE}?cluster=devnet` }
+      ? {
+          signature: TX_SIGNATURE,
+          sends: 1,
+          explorerUrl: `https://explorer.solana.com/tx/${TX_SIGNATURE}?cluster=devnet`,
+        }
       : null,
     confirmedSlot: confirmed ? "526890114" : null,
     confirmedCommitment: confirmed ? "confirmed" : null,

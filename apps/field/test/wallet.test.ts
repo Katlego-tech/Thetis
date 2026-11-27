@@ -5,8 +5,8 @@ import {
   authorizationRequest,
   connectWallet,
   signText,
-  type WalletConnection,
   WalletAccountError,
+  type WalletConnection,
   WalletRefused,
 } from "../src/wallet";
 
@@ -33,7 +33,9 @@ function mockWallet(wallet: Partial<MobileWallet>) {
   vi.mocked(transact).mockImplementation(async (callback) => callback(wallet as MobileWallet));
 }
 
-beforeEach(() => vi.mocked(transact).mockReset());
+beforeEach(() => {
+  vi.mocked(transact).mockReset();
+});
 
 it("asks for devnet with the field identity", async () => {
   const authorize = vi.fn().mockResolvedValue(authorization);
@@ -74,7 +76,11 @@ it.each([false, true])(
     expect(decodeBase64(signMessages.mock.lastCall?.[0].payloads[0])).toEqual(
       new Uint8Array(message),
     );
-    expect(result).toStrictEqual({ kind: "signed", address, signatureBase58: encodeBase58(signature) });
+    expect(result).toStrictEqual({
+      kind: "signed",
+      address,
+      signatureBase58: encodeBase58(signature),
+    });
   },
 );
 
@@ -88,9 +94,9 @@ it("refuses the wrong account before saving its token or asking it to sign", asy
     }),
     signMessages,
   });
-  await expect(signText(connection, request, onAuthorized, async () => true)).rejects.toBeInstanceOf(
-    WalletAccountError,
-  );
+  await expect(
+    signText(connection, request, onAuthorized, async () => true),
+  ).rejects.toBeInstanceOf(WalletAccountError);
   expect(onAuthorized).not.toHaveBeenCalled();
   expect(signMessages).not.toHaveBeenCalled();
 });
@@ -124,9 +130,9 @@ it("a cancel in the wallet is WalletRefused, after the refreshed token is saved"
     authorize: vi.fn().mockResolvedValue(authorization),
     signMessages: vi.fn().mockRejectedValue(new Error("User cancelled")),
   });
-  await expect(signText(connection, request, onAuthorized, async () => true)).rejects.toBeInstanceOf(
-    WalletRefused,
-  );
+  await expect(
+    signText(connection, request, onAuthorized, async () => true),
+  ).rejects.toBeInstanceOf(WalletRefused);
   expect(onAuthorized).toHaveBeenCalledWith({
     accounts: [{ address, addressBase64 }],
     authToken: "refreshed-token",
@@ -151,8 +157,12 @@ it("beforeSigning false never calls signMessages", async () => {
 it("opens the session at the stored wallet URI", async () => {
   mockWallet({
     authorize: vi.fn().mockResolvedValue(authorization),
-    signMessages: vi.fn().mockResolvedValue({ signed_payloads: [encodeBase64(new Uint8Array(64))] }),
+    signMessages: vi
+      .fn()
+      .mockResolvedValue({ signed_payloads: [encodeBase64(new Uint8Array(64))] }),
   });
   await signText(connection, request, vi.fn(), async () => true);
-  expect(vi.mocked(transact).mock.lastCall?.[1]).toStrictEqual({ baseUri: "https://wallet.example" });
+  expect(vi.mocked(transact).mock.lastCall?.[1]).toStrictEqual({
+    baseUri: "https://wallet.example",
+  });
 });

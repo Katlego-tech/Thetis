@@ -9,7 +9,12 @@ import {
 
 const ORG = "0b9f4d2e-3c1a-4f6e-9d8b-7a6c5e4d3b2a";
 const USER = "fa57ea5f-9cf6-43fc-82b1-592d505bc3d7";
-const subject = { organisationId: ORG, userId: USER, subjectKind: "lot" as const, subjectRef: "CR-0001" };
+const subject = {
+  organisationId: ORG,
+  userId: USER,
+  subjectKind: "lot" as const,
+  subjectRef: "CR-0001",
+};
 const SHA = "7e8533c2".padEnd(64, "0");
 
 function local(): EvidenceItem {
@@ -68,7 +73,13 @@ describe("the happy path", () => {
       supersedes_id: null,
     });
     expect(deps.upload).toHaveBeenCalledWith(`${ORG}/obj-1/1`, local().localUri, "image/jpeg");
-    expect(done).toMatchObject({ upload: "finalized", sha256: SHA, objectId: "obj-1", versionId: "ver-1", version: 1 });
+    expect(done).toMatchObject({
+      upload: "finalized",
+      sha256: SHA,
+      objectId: "obj-1",
+      versionId: "ver-1",
+      version: 1,
+    });
   });
 
   it("a duplicate row means it landed: continue", async () => {
@@ -87,7 +98,12 @@ describe("failures and retry from each step", () => {
   it("registering fails, retry registers with the same ids", async () => {
     deps.insertVersion.mockRejectedValueOnce(new UploadStepError("network", "offline"));
     const failed = await advanceUpload(local(), subject, deps);
-    expect(failed).toMatchObject({ upload: "failed", objectId: "obj-1", versionId: "ver-1", storagePath: null });
+    expect(failed).toMatchObject({
+      upload: "failed",
+      objectId: "obj-1",
+      versionId: "ver-1",
+      storagePath: null,
+    });
     expect(failed.error).toBe("offline");
     deps.insertObject.mockRejectedValueOnce(new UploadStepError("duplicate", "23505"));
     const retried = await advanceUpload(failed, subject, deps);
@@ -119,7 +135,10 @@ describe("failures and retry from each step", () => {
   it("finalize 404 reads the version: finalized when it holds a digest", async () => {
     deps.finalize.mockRejectedValueOnce(new UploadStepError("not_found", "NOT_FOUND"));
     deps.selectVersion.mockResolvedValueOnce({ sha256: SHA, finalized_at: "2026-11-27T08:05:00Z" });
-    expect(await advanceUpload(local(), subject, deps)).toMatchObject({ upload: "finalized", sha256: SHA });
+    expect(await advanceUpload(local(), subject, deps)).toMatchObject({
+      upload: "finalized",
+      sha256: SHA,
+    });
   });
 
   it("finalize 404 with no digest on the version is failed", async () => {
@@ -138,7 +157,9 @@ describe("failures and retry from each step", () => {
   });
 
   it("409 EVIDENCE_VERSION_INVALID is rejected; retry registers version + 1 superseding it", async () => {
-    deps.finalize.mockRejectedValueOnce(new UploadStepError("invalid_version", "EVIDENCE_VERSION_INVALID"));
+    deps.finalize.mockRejectedValueOnce(
+      new UploadStepError("invalid_version", "EVIDENCE_VERSION_INVALID"),
+    );
     const rejected = await advanceUpload(local(), subject, deps);
     expect(rejected.upload).toBe("rejected");
     deps.insertObject.mockClear();
@@ -153,12 +174,20 @@ describe("failures and retry from each step", () => {
       uploaded_by: USER,
       supersedes_id: "ver-1",
     });
-    expect(next).toMatchObject({ upload: "finalized", version: 2, versionId: "ver-2", supersedesId: "ver-1" });
+    expect(next).toMatchObject({
+      upload: "finalized",
+      version: 2,
+      versionId: "ver-2",
+      supersedesId: "ver-1",
+    });
   });
 
   it("any other error marks the item failed with it", async () => {
     deps.insertObject.mockRejectedValueOnce(new UploadStepError("other", "NOT_AUTHORISED"));
-    expect(await advanceUpload(local(), subject, deps)).toMatchObject({ upload: "failed", error: "NOT_AUTHORISED" });
+    expect(await advanceUpload(local(), subject, deps)).toMatchObject({
+      upload: "failed",
+      error: "NOT_AUTHORISED",
+    });
   });
 
   it("a finalized item is left alone", async () => {
@@ -172,7 +201,10 @@ describe("failures and retry from each step", () => {
 describe("local checks", () => {
   it("refuses large or unstorable files", () => {
     expect(checkLocalFile("image/jpeg", 20_971_520)).toBeNull();
-    expect(checkLocalFile("image/jpeg", 24_536_678)).toStrictEqual({ kind: "too_large", sizeBytes: 24_536_678 });
+    expect(checkLocalFile("image/jpeg", 24_536_678)).toStrictEqual({
+      kind: "too_large",
+      sizeBytes: 24_536_678,
+    });
     expect(checkLocalFile("image/heic", 10)).toStrictEqual({ kind: "type" });
     expect(checkLocalFile("application/pdf", 10)).toBeNull();
     expect(checkLocalFile("image/png", 10)).toBeNull();

@@ -23,7 +23,14 @@ const ctx: OutcomeContext = {
   signBefore: "10:14:05 SAST",
 };
 
-const STATUSES: CommandStatus[] = ["awaiting_signatures", "submitted", "confirmed", "failed", "outcome_unknown", "expired"];
+const STATUSES: CommandStatus[] = [
+  "awaiting_signatures",
+  "submitted",
+  "confirmed",
+  "failed",
+  "outcome_unknown",
+  "expired",
+];
 
 describe("outcomeView", () => {
   it.each([
@@ -60,7 +67,10 @@ describe("outcomeView", () => {
     const view = outcomeView(
       {
         ...base,
-        outcome: base.outcome && { ...base.outcome, data: { owner: "11111111111111111111111111111111", quantityKg: "4999875" } },
+        outcome: base.outcome && {
+          ...base.outcome,
+          data: { owner: "11111111111111111111111111111111", quantityKg: "4999875" },
+        },
       },
       { ...ctx, signed: { ...ctx.signed, owner: "Signed Owner Name" } },
     );
@@ -70,7 +80,10 @@ describe("outcomeView", () => {
   });
 
   it("failed shows the program message, the code and the explorer", () => {
-    const view = outcomeView(commandView("failed", { error: { code: "OverCapacity", detail: null } }), ctx);
+    const view = outcomeView(
+      commandView("failed", { error: { code: "OverCapacity", detail: null } }),
+      ctx,
+    );
     expect(view.lines).toStrictEqual(["5,000.000 t is more than KOPANO-YARD-1 has room for."]);
     expect(view.refusal).toBe("Refused by the Thetis program: OverCapacity");
     expect(view.after).toBe("Nothing was recorded. The refusal is on devnet:");
@@ -78,9 +91,18 @@ describe("outcomeView", () => {
   });
 
   it.each([
-    ["Anchor0", "Thetis already has this intake or this lot ID. A second lot for the same intake is refused."],
-    ["RelatedCustodian", "Kopano Stockyard Custody is declared related to Khunou Ore Exports, so it can't hold this lot as an independent custodian."],
-    ["WrongRole", "Khunou Ore Exports is not accredited as an exporter, so it can't own a new lot."],
+    [
+      "Anchor0",
+      "Thetis already has this intake or this lot ID. A second lot for the same intake is refused.",
+    ],
+    [
+      "RelatedCustodian",
+      "Kopano Stockyard Custody is declared related to Khunou Ore Exports, so it can't hold this lot as an independent custodian.",
+    ],
+    [
+      "WrongRole",
+      "Khunou Ore Exports is not accredited as an exporter, so it can't own a new lot.",
+    ],
     ["AuthorityRevoked", "A signer's authority does not allow this action."],
     ["WrongSigner", "A signer's authority does not allow this action."],
     ["WrongSignatureCount", "The signature did not match what Thetis expected."],
@@ -89,7 +111,9 @@ describe("outcomeView", () => {
     ["Paused", "This action is paused on this Thetis instance."],
     ["TransactionError", "See the transaction on the explorer for the program's message."],
   ])("failed %s", (code, message) => {
-    expect(outcomeView(commandView("failed", { error: { code, detail: null } }), ctx).lines).toStrictEqual([message]);
+    expect(
+      outcomeView(commandView("failed", { error: { code, detail: null } }), ctx).lines,
+    ).toStrictEqual([message]);
   });
 
   it("outcome unknown keeps polling and warns against a second issue", () => {
@@ -108,7 +132,12 @@ describe("outcomeView", () => {
 
   it.each(STATUSES)("only confirmed says issued (%s)", (status) => {
     for (const commitment of ["confirmed", "finalized", null] as const) {
-      const view = outcomeView(commandView(status, { confirmedCommitment: status === "confirmed" ? commitment ?? "confirmed" : null }), ctx);
+      const view = outcomeView(
+        commandView(status, {
+          confirmedCommitment: status === "confirmed" ? (commitment ?? "confirmed") : null,
+        }),
+        ctx,
+      );
       const all = [view.mark, view.title ?? "", ...view.lines].join(" ");
       expect(view.issued).toBe(status === "confirmed");
       if (status !== "confirmed") {
@@ -131,7 +160,9 @@ describe("<Outcome>", () => {
   });
 
   it("links the transaction on the explorer", () => {
-    const text = textOf(<Outcome command={commandView("submitted")} context={ctx} onPrimary={() => {}} />).join(" ");
+    const text = textOf(
+      <Outcome command={commandView("submitted")} context={ctx} onPrimary={() => {}} />,
+    ).join(" ");
     expect(text).toContain(TX_SIGNATURE);
     expect(text).toContain("View on Solana Explorer (devnet)");
   });
