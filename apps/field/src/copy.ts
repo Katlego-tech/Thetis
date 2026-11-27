@@ -6,6 +6,8 @@ export interface CopyVars {
   site?: string;
   quantity?: string;
   to?: string;
+  /** The lender of the loan a loading refusal names, when the screen knows it. */
+  lender?: string;
 }
 
 const AUTHORITY = "A signer's authority does not allow this action.";
@@ -60,11 +62,33 @@ export const OBSERVATION_FAILED_MESSAGES: Record<
     "Another observation of this batch was recorded first. Prepare the text again.",
 };
 
-/** `kind` is the command's kind; an observation's own rows win over the shared table. */
+/**
+ * A loading's own wording: each row says the next step. `lender` names the lender when the screen knows it; the chain's refusal does not say
+ * which loan it was, so the rows read without it.
+ */
+export const LOADING_FAILED_MESSAGES: Record<string, (v: CopyVars & { code: string }) => string> = {
+  AcceptanceMissing: (v) =>
+    `Not every lender with a lock on this lot has accepted this loading. ${askToAccept(v.lender)} If a loan on this lot is in recovery, the lot can't be loaded until the lender's recovery clears its lock.`,
+  LoanNotActive: (v) => inRecovery(v.lender),
+};
+
+function askToAccept(lender: string | undefined): string {
+  return `Ask ${lender ?? "each lender with a lock on this lot"} to accept the loading in Thetis.`;
+}
+
+function inRecovery(lender: string | undefined): string {
+  return `${lender ? `${lender}'s loan` : "A loan on this lot"} is in recovery; the lot cannot be loaded until it is settled.`;
+}
+
+/** `kind` is the command's kind; an observation's or a loading's own rows win over the shared table. */
 export function failedCommandCopy(code: string, vars: CopyVars, kind?: string): string {
-  const message =
-    (kind === "record_observation" ? OBSERVATION_FAILED_MESSAGES[code] : undefined) ??
-    FAILED_COMMAND_MESSAGES[code];
+  const own =
+    kind === "record_observation"
+      ? OBSERVATION_FAILED_MESSAGES[code]
+      : kind === "record_loading"
+        ? LOADING_FAILED_MESSAGES[code]
+        : undefined;
+  const message = own ?? FAILED_COMMAND_MESSAGES[code];
   return message
     ? message({ ...vars, code })
     : "See the transaction on the explorer for the program's message.";
@@ -81,6 +105,8 @@ export interface RelayCopyVars {
   ownerName?: string;
   /** The command's kind, for the rows one kind words differently. */
   kind?: string;
+  /** The lender of the loan in an ACCEPTANCE_MISSING or LOAN_NOT_ACTIVE detail. */
+  lender?: string;
 }
 
 /** These make the app GET the command and map its status; they show no copy. */
@@ -120,6 +146,10 @@ export function transactionTooLargeCopy(detail: string | null | undefined): stri
 /** Copy for a relay error (nothing was sent), or null when the code has none (re-fetch, sign in). */
 export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars): string | null {
   if (REFETCH_CODES.has(code) || code === "NOT_AUTHENTICATED") return null;
+  // The initiator rule is checked at create; at sign it is the not-a-member refusal.
+  if (v.kind === "record_loading" && code === "NOT_AUTHORISED" && phase === "create") {
+    return `${v.org} is neither the owner nor the terminal of this loading. Nothing was sent.`;
+  }
   if (v.kind === "record_observation") {
     if (code === "NOT_AUTHORISED") {
       return `${v.org} can't record observations. Only a custodian, a transporter, a terminal or an inspector can. Nothing was sent.`;
@@ -154,6 +184,12 @@ export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars
       return transactionTooLargeCopy(v.detail);
     case "NOT_FOUND":
       return "Thetis can't find this command, or it is not one of yours.";
+    case "ACCEPTANCE_MISSING":
+      return `Not every lender with a lock on this lot has accepted this loading. ${askToAccept(v.lender)} Nothing was sent.`;
+    case "LOAN_NOT_ACTIVE":
+      return `${inRecovery(v.lender)} Nothing was sent.`;
+    case "TOO_MANY_LOANS":
+      return "More than four loans hold locks on this lot, and one loading takes at most four. Nothing was sent.";
     case "TOO_MANY_OPEN_COMMANDS":
       return "You have five texts open that nobody finished. Finish one or wait for it to expire, then try again. Nothing was sent.";
   }

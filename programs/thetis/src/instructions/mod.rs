@@ -12,6 +12,7 @@ pub mod redeem;
 pub mod release;
 pub mod setup;
 pub mod shipment;
+pub mod shortfall;
 pub mod simulation;
 pub mod split;
 pub mod transfer;

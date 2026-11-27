@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 
 use crate::state::{
-    DocumentKind, HandoverStage, LotState, ObservationKind, PaymentPurpose, Role, ShipmentStatus,
+    DocumentKind, HandoverStage, LotState, ObservationKind, PaymentPurpose, Restriction, Role,
+    ShipmentStatus,
 };
 
 #[event]
@@ -385,5 +386,28 @@ pub struct LoanHandedOff {
     pub principal: u64,
     pub booked_interest: u64,
     pub external_handoff: bool,
+    pub revision: u64,
+}
+
+#[event]
+pub struct ShortfallAttested {
+    pub incident: Pubkey,
+    pub lot: Pubkey,
+    pub batch: Option<Pubkey>,
+    pub inspector: Pubkey,
+    pub expected_kg: u64,
+    pub observed_kg: u64,
+    pub tolerance_bps: u16,
+    pub within_tolerance: bool,
+    pub restriction: Restriction,
+    pub lot_revision: u64,
+}
+
+#[event]
+pub struct RestrictionSet {
+    pub lot: Pubkey,
+    pub from: Restriction,
+    pub to: Restriction,
+    pub reason_digest: [u8; 32],
     pub revision: u64,
 }

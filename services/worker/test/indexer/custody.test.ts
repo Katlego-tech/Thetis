@@ -252,20 +252,29 @@ describe("Phase 3 custody, the shipment part", () => {
     );
   });
 
-  it("1. handles every instruction and event of the IDL it is built on", () => {
-    // The IDL at main has 37 instructions and 38 events, and this slice handles every one
-    // (live-custody.md, T063d.4 pre-check fold 5; attest_shortfall and set_restriction come next).
+  it("1. handles every instruction and event of the IDL it is built on, but shortfalls and restrictions", () => {
+    // The IDL at main has 39 instructions and 40 events; this slice handles all but
+    // attest_shortfall and set_restriction and their two events, which T063d.5 indexes
+    // (live-custody.md, T063d.4 pre-check fold 5).
     const idl = JSON.parse(readFileSync(IDL, "utf8")) as {
       instructions: { name: string }[];
       events: { name: string }[];
     };
-    expect(idl.instructions).toHaveLength(37);
-    expect(idl.events).toHaveLength(38);
+    expect(idl.instructions).toHaveLength(39);
+    expect(idl.events).toHaveLength(40);
+    const unhandledInstructions = ["AttestShortfall", "SetRestriction"];
+    const unhandledEvents = ["ShortfallAttested", "RestrictionSet"];
     const instructions = idl.instructions.map((entry) => pascal(entry.name));
-    expect([...HANDLED_INSTRUCTIONS].sort()).toEqual([...instructions].sort());
+    for (const name of unhandledInstructions) expect(instructions).toContain(name);
+    expect([...HANDLED_INSTRUCTIONS].sort()).toEqual(
+      instructions.filter((name) => !unhandledInstructions.includes(name)).sort(),
+    );
     expect(HANDLED_INSTRUCTIONS).toHaveLength(37);
     const eventNames = idl.events.map((entry) => entry.name);
-    expect([...HANDLED_EVENTS].sort()).toEqual([...eventNames].sort());
+    for (const name of unhandledEvents) expect(eventNames).toContain(name);
+    expect([...HANDLED_EVENTS].sort()).toEqual(
+      eventNames.filter((name) => !unhandledEvents.includes(name)).sort(),
+    );
     expect(HANDLED_EVENTS).toHaveLength(38);
   });
 
