@@ -1,10 +1,10 @@
 "use client";
 
-import type { Session } from "@supabase/supabase-js";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { accessAuth } from "./access-auth";
+import { useAccessSession } from "./use-access-session";
 
 export function TestBanner() {
   return (
@@ -17,42 +17,9 @@ export function TestBanner() {
 
 export function TopBar() {
   const router = useRouter();
-  const [session, setSession] = useState<Session | null>(null);
+  const session = useAccessSession();
+  const [signedOut, setSignedOut] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
-
-  useEffect(() => {
-    const auth = accessAuth();
-    if (!auth) return;
-
-    let active = true;
-    let receivedAuthEvent = false;
-
-    try {
-      const sessionLookup = auth.getSession();
-      const {
-        data: { subscription },
-      } = auth.onAuthStateChange((_event, newSession) => {
-        receivedAuthEvent = true;
-        if (active) setSession(newSession);
-      });
-
-      void sessionLookup.then(
-        ({ data, error }) => {
-          if (active && !receivedAuthEvent) setSession(error ? null : data.session);
-        },
-        () => {
-          if (active && !receivedAuthEvent) setSession(null);
-        },
-      );
-
-      return () => {
-        active = false;
-        subscription.unsubscribe();
-      };
-    } catch {
-      setSession(null);
-    }
-  }, []);
 
   async function signOut() {
     setSigningOut(true);
@@ -61,7 +28,7 @@ export function TopBar() {
     } catch {
       // Return to the sign-in screen even if the service is unreachable.
     } finally {
-      setSession(null);
+      setSignedOut(true);
       setSigningOut(false);
       router.replace("/login");
     }
@@ -69,13 +36,16 @@ export function TopBar() {
 
   return (
     <header className="access-topbar">
-      {session ? (
+      {session && !signedOut ? (
         <>
           <Link className="access-wordmark" href="/account">
             THETIS
           </Link>
           <div className="access-who">
             <span className="access-email">{session.user.email}</span>
+            <Link className="access-sign-out" href="/">
+              Work queue
+            </Link>
             <button
               className="access-sign-out"
               type="button"
