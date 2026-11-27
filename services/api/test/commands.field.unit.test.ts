@@ -3,7 +3,13 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { KIND_SPECS, validateArgs } from "../src/commands/plan.ts";
-import { intakeDigest, issueLotMessage, normaliseTicket } from "../src/commands/texts.ts";
+import {
+  custodyHandoverMessage,
+  handoverStage,
+  intakeDigest,
+  issueLotMessage,
+  normaliseTicket,
+} from "../src/commands/texts.ts";
 
 const PROGRAM = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -168,6 +174,80 @@ describe("issue_lot kind spec (field-app.md §6.3)", () => {
   ])("refuses %s = %j as VALIDATION", (key, value) => {
     expect(() => validateArgs("issue_lot", { ...args, [key]: value })).toThrow(
       expect.objectContaining({ code: "VALIDATION", detail: `args.${key}` }),
+    );
+  });
+});
+
+describe("custodyHandoverMessage", () => {
+  it("reproduces program-custody.md's handover vector (480 bytes, e81d1fa1…)", () => {
+    const text = custodyHandoverMessage(
+      PROGRAM,
+      hexBytes("00112233445566778899aabbccddeeff"),
+      "CR-0001",
+      new Uint8Array(16).fill(0x22),
+      1,
+      1,
+      5_000_000n,
+      "Kopano Stockyard Custody",
+      "Mosela Haulage",
+      "Departure",
+      new Uint8Array(32).fill(0x44),
+      0n,
+      1_795_098_725n,
+    );
+    expect(text.length).toBe(480);
+    expect(sha256(text)).toBe("e81d1fa1436bfe8fffc851a44068124ba956f00faf175a5226c513e51d36e0d9");
+  });
+
+  it("derives the stage as the program does, and the stage the program refuses otherwise", () => {
+    const carrier = "carrier";
+    const destination = "destination";
+    const base = { carrier, destinationCustodian: destination };
+    expect(
+      handoverStage({ ...base, batchStage: "AtSource", to: carrier, toIsTransporter: true }),
+    ).toBe("Departure");
+    expect(
+      handoverStage({ ...base, batchStage: "AtSource", to: "other", toIsTransporter: true }),
+    ).toBe("Departure");
+    expect(
+      handoverStage({ ...base, batchStage: "InTransit", to: destination, toIsTransporter: false }),
+    ).toBe("Arrival");
+    expect(
+      handoverStage({ ...base, batchStage: "InTransit", to: "other", toIsTransporter: true }),
+    ).toBe("Transfer");
+    expect(
+      handoverStage({ ...base, batchStage: "InTransit", to: "other", toIsTransporter: false }),
+    ).toBe("Transfer");
+    expect(
+      handoverStage({ ...base, batchStage: "Arrived", to: destination, toIsTransporter: false }),
+    ).toBe("Arrival");
+  });
+});
+
+describe("handover kind spec (field-app.md §6.3)", () => {
+  it("is holder then next_holder, both CARRY texts, next_holder not pre-checked, a 570 s window", () => {
+    const spec = KIND_SPECS.handover;
+    expect(spec.mode).toBe("both");
+    expect(spec.event).toBe("CustodyHandedOver");
+    expect(spec.textWindowSecs).toBe(570n);
+    expect(spec.args).toStrictEqual(["batch", "to"]);
+    expect(spec.signers).toStrictEqual([
+      { role: "holder", method: "text", scope: "CARRY", preCheckAuthority: true },
+      { role: "next_holder", method: "text", scope: "CARRY", preCheckAuthority: false },
+    ]);
+  });
+
+  it("validates batch as an address and to as a uuid", () => {
+    const args = {
+      batch: "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3",
+      to: "6f1c4a52-0d3e-4c4b-9b7e-2a1f0c9d8e7a",
+    };
+    expect(validateArgs("handover", args)).toStrictEqual(args);
+    expect(() => validateArgs("handover", { ...args, to: "x" })).toThrow(
+      expect.objectContaining({ code: "VALIDATION", detail: "args.to" }),
+    );
+    expect(() => validateArgs("handover", { ...args, batch: "x" })).toThrow(
+      expect.objectContaining({ code: "VALIDATION", detail: "args.batch" }),
     );
   });
 });

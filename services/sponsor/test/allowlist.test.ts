@@ -71,6 +71,7 @@ const SPONSORED_NAMES = [
   "withdraw",
   "borrow",
   "issue_lot",
+  "handover",
 ];
 const TEXT_SIGNED = new Set([
   "pledge",
@@ -79,6 +80,7 @@ const TEXT_SIGNED = new Set([
   "sell_pledged",
   "borrow",
   "issue_lot",
+  "handover",
 ]);
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 const SYSTEM = "11111111111111111111111111111111" as Address;
