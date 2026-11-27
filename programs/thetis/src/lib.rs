@@ -24,11 +24,12 @@ use instructions::redeem::{self, *};
 use instructions::release::{self, *};
 use instructions::setup::{self, *};
 use instructions::shipment::{self, *};
+use instructions::shortfall::{self, *};
 use instructions::simulation::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
 use instructions::valuation::{self, *};
-use state::{DocumentKind, ObservationKind, PaymentPurpose, Role, SettlementMode};
+use state::{DocumentKind, ObservationKind, PaymentPurpose, Restriction, Role, SettlementMode};
 
 declare_id!("jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3");
 
@@ -430,5 +431,39 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         loading::record_loading(ctx, expected_revision, valid_until)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the arguments are the signed shortfall contract"
+    )]
+    pub fn attest_shortfall(
+        ctx: Context<AttestShortfall>,
+        incident_id: [u8; 16],
+        observed_kg: u64,
+        tolerance_bps: u16,
+        method_code: String,
+        evidence_digest: [u8; 32],
+        observed_at: i64,
+        valid_until: i64,
+    ) -> Result<()> {
+        shortfall::attest_shortfall(
+            ctx,
+            incident_id,
+            observed_kg,
+            tolerance_bps,
+            method_code,
+            evidence_digest,
+            observed_at,
+            valid_until,
+        )
+    }
+
+    pub fn set_restriction(
+        ctx: Context<SetRestriction>,
+        restriction: Restriction,
+        reason_digest: [u8; 32],
+    ) -> Result<()> {
+        shortfall::set_restriction(ctx, restriction, reason_digest)
     }
 }

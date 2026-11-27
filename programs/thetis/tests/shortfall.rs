@@ -16,7 +16,7 @@ use anchor_lang::{
     __private::base64::{engine::general_purpose::STANDARD, Engine},
     error::ErrorCode as AnchorError,
     prelude::Pubkey,
-    AccountSerialize, AnchorDeserialize, Event,
+    AccountSerialize, Event,
 };
 use anchor_spl::associated_token::{
     get_associated_token_address_with_program_id,
@@ -54,7 +54,6 @@ const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 /// The simulation pool's SPL Token mint, written by the harness at a fixed synthetic address.
 const POOL_MINT: Pubkey = Pubkey::new_from_array([0x4d; 32]);
 
-const HOUR: i64 = 3_600;
 const DAY: i64 = 86_400;
 const YEAR: i64 = 31_536_000;
 const LOT_VALIDITY: i64 = 30 * DAY;
@@ -83,12 +82,10 @@ const CHILD_LOT_ID: &str = "CR-0002";
 const INTAKE_DIGEST: [u8; 32] = [0x0a; 32];
 const LOT_KG: u64 = 5_000_000;
 const THREE_THOUSAND_T: u64 = 3_000_000;
-const TWO_THOUSAND_T: u64 = 2_000_000;
 const DEPARTURE_SHA: [u8; 32] = [0xdd; 32];
 const COLLECTION_TICKET: [u8; 32] = [0xc7; 32];
-/// The bill-of-lading digests: the vectors' 32 × 0xaa, and a replacement document.
+/// The bill-of-lading digest: the vectors' 32 × 0xaa.
 const LOADING_DOCUMENT: [u8; 32] = [0xaa; 32];
-const OTHER_DOCUMENT: [u8; 32] = [0xab; 32];
 
 const USD: [u8; 3] = *b"USD";
 const CENTS: u8 = 2;
@@ -101,18 +98,14 @@ const TERMS_DIGEST: [u8; 32] = [0x7d; 32];
 const SOURCE_DIGEST: [u8; 32] = [0x5e; 32];
 const EVIDENCE_DIGEST: [u8; 32] = [0xe1; 32];
 const FACILITY_ONE: [u8; 16] = [0x11; 16];
-const FACILITY_TWO: [u8; 16] = [0x12; 16];
-/// USD600,000, USD400,000 and USD200,000 in cents.
+/// USD600,000 in cents.
 const SIX_HUNDRED_K: u64 = 60_000_000;
-const FOUR_HUNDRED_K: u64 = 40_000_000;
-const TWO_HUNDRED_K: u64 = 20_000_000;
 
 const OWNER_ID: u8 = 1;
 const CUSTODIAN_ID: u8 = 2;
 const TRANSPORTER_ID: u8 = 3;
 const BUYER_ID: u8 = 4;
 const TERMINAL_ID: u8 = 5;
-const LENDER_TWO_ID: u8 = 6;
 const LENDER_ID: u8 = 7;
 const INSPECTOR_ID: u8 = 9;
 const OTHER_TERMINAL_ID: u8 = 10;
@@ -123,7 +116,6 @@ const TRANSPORTER_NAME: &str = "Mosela Haulage";
 const BUYER_NAME: &str = "Buyer Smelter Co";
 const TERMINAL_NAME: &str = "Port Terminal T1";
 const LENDER_NAME: &str = "Lender One Bank";
-const LENDER_TWO_NAME: &str = "Lender Two Bank";
 const INSPECTOR_NAME: &str = "Inspector Test Org";
 
 /// §6.2's synthetic shortfall inputs: incident id 16 × 0x88, method `WEIGH`, evidence
@@ -143,9 +135,6 @@ const REASON_TWO: [u8; 32] = [0x5b; 32];
 const LOADING_INTENT_SPACE: usize = 283;
 const ACCEPTANCE_SPACE: usize = 213;
 const INCIDENT_SPACE: usize = 227;
-
-/// The one-year accrual denominator of program-lending.md (bps × seconds): 10,000 × 31,536,000.
-const ACCRUAL_DENOMINATOR: u128 = 315_360_000_000;
 
 // ------------------------------------------------------------------ helpers ----
 
@@ -207,15 +196,6 @@ fn acceptance_key(intent: Pubkey, loan: Pubkey) -> Pubkey {
 fn assert_events(tx: &TransactionMetadata, expected: Vec<Vec<u8>>) {
     let expected: Vec<String> = expected.iter().map(|data| STANDARD.encode(data)).collect();
     assert_eq!(event_data(tx).collect::<Vec<_>>(), expected);
-}
-
-/// The first event of `tx` named `E`, decoded.
-fn first_event<E: Event + AnchorDeserialize>(tx: &TransactionMetadata) -> E {
-    event_data(tx)
-        .map(|data| STANDARD.decode(data).unwrap())
-        .find(|bytes| bytes.starts_with(E::DISCRIMINATOR))
-        .map(|bytes| E::deserialize(&mut &bytes[E::DISCRIMINATOR.len()..]).unwrap())
-        .expect("event present")
 }
 
 /// One manifest leaf (§6.3 "Merkle manifest").
@@ -332,7 +312,7 @@ struct RecordArgs {
 /// A protocol (fiat unless a test asks for the simulation pool) with the demo cast plus
 /// `Inspector Test Org`; a source site of Kopano Stockyard Custody and the
 /// terminal site PORT-T1 of Port Terminal T1 in the chrome class; CR-0001 (5,000 t, grade A)
-/// issued at the source to Khunou Ore Exports; Lender One Bank and Lender Two Bank.
+/// issued at the source to Khunou Ore Exports; Lender One Bank.
 struct World {
     f: Fixture,
     now: i64,
@@ -345,11 +325,9 @@ struct World {
     terminal: Pubkey,
     other_terminal: Pubkey,
     lender_one: Lender,
-    lender_two: Lender,
     class_policy: Pubkey,
     source: Pubkey,
     terminal_class: Pubkey,
-    other_terminal_class: Pubkey,
     /// The lot the loading helpers act on, its id and its family root when it is a child.
     lot: Pubkey,
     lot_id: String,
@@ -387,7 +365,6 @@ impl World {
         let transporter = accredit(&mut f, TRANSPORTER_ID, Role::Transporter, TRANSPORTER_NAME);
         let buyer = accredit(&mut f, BUYER_ID, Role::Buyer, BUYER_NAME);
         let terminal = accredit(&mut f, TERMINAL_ID, Role::Terminal, TERMINAL_NAME);
-        let lender_two_org = accredit(&mut f, LENDER_TWO_ID, Role::Lender, LENDER_TWO_NAME);
         let lender_org = accredit(&mut f, LENDER_ID, Role::Lender, LENDER_NAME);
         let inspector = accredit(&mut f, INSPECTOR_ID, Role::Inspector, INSPECTOR_NAME);
         let other_terminal = f.add_org(OTHER_TERMINAL_ID, Role::Terminal);
@@ -425,7 +402,6 @@ impl World {
             (transporter, Driver, scope::CARRY),
             (buyer, Buyer, scope::TRANSFER | scope::BUY | scope::SHIP),
             (lender_org, Lender, scope::LEND | scope::POOL),
-            (lender_two_org, Lender2, scope::LEND),
             (inspector, Inspector, scope::INSPECT),
         ] {
             let delegate = f.delegate(OrgAdmin, org, f.key(wallet), scopes, expires_at);
@@ -457,17 +433,9 @@ impl World {
                 facility_id: FACILITY_ONE,
                 facility: facility(lender_org, &FACILITY_ONE),
             },
-            lender_two: Lender {
-                actor: Lender2,
-                org: lender_two_org,
-                name: LENDER_TWO_NAME,
-                facility_id: FACILITY_TWO,
-                facility: facility(lender_two_org, &FACILITY_TWO),
-            },
             class_policy,
             source,
             terminal_class,
-            other_terminal_class,
             lot,
             lot_id: LOT_ID.into(),
             root: None,
@@ -500,11 +468,6 @@ impl World {
 
     fn authority_of(&self, actor: Actor) -> Pubkey {
         self.f.authority(self.f.key(actor))
-    }
-
-    fn advance_to(&mut self, unix_timestamp: i64) {
-        self.now = unix_timestamp;
-        self.f.set_time(unix_timestamp);
     }
 
     fn position_key(lot: Pubkey, org: Pubkey) -> Pubkey {
@@ -2085,7 +2048,10 @@ impl World {
             bump: bump_of(&[b"incident", self.f.protocol.as_ref(), &args.incident_id]),
         };
         assert_same(&self.f.read::<Incident>(incident), &expected);
-        assert_eq!(self.f.owner_and_data_len(incident), Some((ID, INCIDENT_SPACE)));
+        assert_eq!(
+            self.f.owner_and_data_len(incident),
+            Some((ID, INCIDENT_SPACE))
+        );
         self.assert_unchanged(&untouched);
         assert_events(
             &tx,
@@ -2173,8 +2139,14 @@ impl World {
 
     /// Collects the whole of CR-0001 at the source: the lot is `Redeemed`.
     fn redeem_whole_lot(&mut self) {
-        let collect =
-            self.redeem_instructions(self.lot, None, LOT_KG, Custodian, self.custodian, self.source);
+        let collect = self.redeem_instructions(
+            self.lot,
+            None,
+            LOT_KG,
+            Custodian,
+            self.custodian,
+            self.source,
+        );
         self.f.sponsored_ok(&collect);
         assert_eq!(self.lot_state().state, LotState::Redeemed);
     }
@@ -2596,7 +2568,9 @@ fn frozen_lot_blocks_prepare_and_loading() {
 
 #[test]
 fn shortfall_message_known_answer() {
-    let program: Pubkey = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3".parse().unwrap();
+    let program: Pubkey = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3"
+        .parse()
+        .unwrap();
     let instance: [u8; 16] = core::array::from_fn(|i| u8::try_from(i * 0x11).unwrap());
     let observed_at = 1_795_098_425;
     let valid_until = 1_795_098_725;
@@ -2645,12 +2619,10 @@ fn shortfall_message_known_answer() {
         "24792d8e4b075bd9bad82ff37e698621ea8a996488009ff17f14e3fe9370c847"
     );
     let whole_lot = text(None);
-    let expected = String::from_utf8(with_batch)
-        .unwrap()
-        .replace(
-            "Batch: 1 of 1\nLoad: 3333333333333333333333333333333333333333333333333333333333333333",
-            "Batch: whole lot\nLoad: none",
-        );
+    let expected = String::from_utf8(with_batch).unwrap().replace(
+        "Batch: 1 of 1\nLoad: 3333333333333333333333333333333333333333333333333333333333333333",
+        "Batch: whole lot\nLoad: none",
+    );
     assert_eq!(String::from_utf8(whole_lot.clone()).unwrap(), expected);
     assert_eq!(whole_lot.len(), 535);
     assert_eq!(
@@ -2753,6 +2725,7 @@ fn attest_shortfall_size_fits_v0_widest() {
     // The executed demo shape (batch present, in transit), then the widest values over the same
     // accounts, serialised only (§11.1).
     let mut w = World::new();
+    let lot = w.lot;
     let (_, batch) = w.prepare_to(w.terminal_class);
     w.hand_over(batch, w.transporter);
     let demo = w.shortfall_args(Some(batch));
@@ -2769,7 +2742,7 @@ fn attest_shortfall_size_fits_v0_widest() {
     ];
     // The relay appends the Incident PDA before it attests (§4.6, §11.1 item 3).
     let mut addresses = readonly.clone();
-    addresses.extend([w.lot, demo_incident, widest_incident]);
+    addresses.extend([lot, demo_incident, widest_incident]);
     let table = w.f.create_lookup_table(addresses);
     let inline = vec![w.f.payer(), ID, ED25519, COMPUTE_BUDGET];
     assert_eq!(readonly.len() + 2, 8);
@@ -2780,7 +2753,7 @@ fn attest_shortfall_size_fits_v0_widest() {
         &table,
         instructions,
         inline.clone(),
-        vec![w.lot, demo_incident],
+        vec![lot, demo_incident],
         readonly.clone(),
     );
     assert!(demo_size <= PACKET_DATA_SIZE);
@@ -2834,7 +2807,7 @@ fn attest_shortfall_size_fits_v0_widest() {
         &table,
         instructions.clone(),
         inline.clone(),
-        vec![w.lot, widest_incident],
+        vec![lot, widest_incident],
         readonly.clone(),
     );
     println!("attest_shortfall v0 widest: {widest_size} bytes");
@@ -2857,11 +2830,11 @@ fn attest_shortfall_size_fits_v0_widest() {
         &table,
         whole_instructions,
         inline.clone(),
-        vec![w.lot, widest_incident],
+        vec![lot, widest_incident],
         whole_readonly,
     );
     println!("attest_shortfall v0 widest, whole lot: {whole_size} bytes");
-    assert!(whole_size < widest_size);
+    assert_eq!(whole_size, 1_132);
 
     // The relay's shape (services/api compile.ts): the protocol stays static. With the
     // Incident appended to the table first (§4.6) it fits; left static as compile.ts leaves a
@@ -2872,7 +2845,7 @@ fn attest_shortfall_size_fits_v0_widest() {
         .filter(|key| *key != w.f.protocol)
         .collect();
     let mut relay_addresses = relay_readonly.clone();
-    relay_addresses.extend([w.lot, widest_incident]);
+    relay_addresses.extend([lot, widest_incident]);
     let relay_table = w.f.create_lookup_table(relay_addresses);
     let mut relay_inline = inline.clone();
     relay_inline.push(w.f.protocol);
@@ -2881,14 +2854,14 @@ fn attest_shortfall_size_fits_v0_widest() {
         &relay_table,
         instructions.clone(),
         relay_inline.clone(),
-        vec![w.lot, widest_incident],
+        vec![lot, widest_incident],
         relay_readonly.clone(),
     );
     println!("attest_shortfall v0 widest, relay shape with the incident in the table: {relay_size} bytes");
     assert_eq!(relay_size, 1_223);
     assert!(relay_size <= PACKET_DATA_SIZE);
     let mut static_addresses = relay_readonly.clone();
-    static_addresses.push(w.lot);
+    static_addresses.push(lot);
     let static_table = w.f.create_lookup_table(static_addresses);
     relay_inline.push(widest_incident);
     let (_, static_size) = v0(
@@ -2896,10 +2869,12 @@ fn attest_shortfall_size_fits_v0_widest() {
         &static_table,
         instructions,
         relay_inline,
-        vec![w.lot],
+        vec![lot],
         relay_readonly,
     );
-    println!("attest_shortfall v0 widest, relay shape with the incident static: {static_size} bytes");
+    println!(
+        "attest_shortfall v0 widest, relay shape with the incident static: {static_size} bytes"
+    );
     assert_eq!(static_size, 1_254);
     assert!(static_size > PACKET_DATA_SIZE);
 }
