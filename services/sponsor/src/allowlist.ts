@@ -200,15 +200,13 @@ export function checkSponsorTransaction(wireBase64: string, context: SponsorCont
   };
   const instructions = message.instructions;
   const programs = instructions.map((instruction) => program(instruction.programAddressIndex));
-  // The sponsor may only appear where a rule below names it.
-  const sponsorIndex = 0;
 
   if (programs.length === 1 && programs[0] === LOOKUP_TABLE) {
     const [instruction] = instructions;
     const data = instruction?.data ?? new Uint8Array();
     const indices = instruction?.accountIndices ?? [];
-    const kind =
-      data[0] === undefined ? -1 : new DataView(data.buffer, data.byteOffset).getUint32(0, true);
+    if (data.length < 4) refuse("the lookup-table instruction has no 4-byte tag");
+    const kind = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, true);
     if (kind === 0) {
       // CreateLookupTable: [table, authority, payer, system]
       if (at(indices, 1) !== context.sponsor || at(indices, 2) !== context.sponsor) {
@@ -235,7 +233,10 @@ export function checkSponsorTransaction(wireBase64: string, context: SponsorCont
   const limitData = first.data ?? new Uint8Array();
   if (limitData.length !== 5 || limitData[0] !== 2)
     refuse("the compute-budget instruction is not SetComputeUnitLimit");
-  if (new DataView(limitData.buffer, limitData.byteOffset).getUint32(1, true) > MAX_COMPUTE_UNITS) {
+  if (
+    new DataView(limitData.buffer, limitData.byteOffset, limitData.byteLength).getUint32(1, true) >
+    MAX_COMPUTE_UNITS
+  ) {
     refuse("the compute limit is above 400,000");
   }
   if ((first.accountIndices ?? []).length !== 0) refuse("the compute limit names accounts");
@@ -260,8 +261,9 @@ export function checkSponsorTransaction(wireBase64: string, context: SponsorCont
     refuse("the protocol account is not a static account");
   }
   if (accounts[protocolIndex] !== context.protocol) refuse("the protocol is not this instance");
+  // The sponsor may only appear where a rule names it, compared by address.
   indices.forEach((index, slot) => {
-    if (index === sponsorIndex && !shape.sponsorSlots.includes(slot)) {
+    if (accounts[index] === context.sponsor && !shape.sponsorSlots.includes(slot)) {
       refuse(`the sponsor appears in ${shape.name} at a slot not named sponsor or payer`);
     }
   });

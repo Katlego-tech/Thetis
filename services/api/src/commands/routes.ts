@@ -1,6 +1,6 @@
 // /v1/commands (live-lending.md §6.5.2). The access routes' bearer auth runs first in ../routes.ts.
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { rpcChain } from "./chain.ts";
+import { ChainUnavailableError, rpcChain } from "./chain.ts";
 import { ConfigError, DEVNET_GENESIS_HASH, readConfig } from "./config.ts";
 import {
   type Caller,
@@ -19,7 +19,8 @@ export type CommandDependencies = Relay;
 
 let configured: Promise<CommandDependencies> | undefined;
 
-/** Read once; a refused value logs CONFIG_INVALID and the routes stay unavailable until restart. */
+/** Read once; a refused value logs CONFIG_INVALID and the routes stay unavailable until restart.
+ * A read that failed in transit (the genesis-hash RPC) is not kept: the next request retries. */
 export function defaultDependencies(): Promise<CommandDependencies> {
   configured ??= (async () => {
     let variable = "THETIS_RPC_URL";
@@ -45,7 +46,12 @@ export function defaultDependencies(): Promise<CommandDependencies> {
         now: () => Date.now(),
       };
     } catch (error) {
-      if (error instanceof ConfigError) variable = error.variable;
+      if (!(error instanceof ConfigError)) {
+        configured = undefined;
+        if (error instanceof ChainUnavailableError) throw new RelayError("CHAIN_UNAVAILABLE");
+        throw error;
+      }
+      variable = error.variable;
       console.error(JSON.stringify({ level: "error", code: "CONFIG_INVALID", variable }));
       throw new RelayError("COMMANDS_UNAVAILABLE");
     }

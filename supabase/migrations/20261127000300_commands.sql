@@ -65,6 +65,35 @@ create table public.commands (
 create index commands_open on public.commands (protocol, status) where status in
   ('awaiting_signatures', 'submitted', 'outcome_unknown');
 create index commands_parties on public.commands using gin (parties);
+create index commands_open_by_user on public.commands (created_by) where status in
+  ('awaiting_signatures', 'submitted', 'outcome_unknown');
+
+-- At most 5 open commands per user (live-lending.md fold 10). A transaction advisory lock on the
+-- creating user serialises the count, so concurrent creates or renews cannot pass the cap.
+create function private.cap_open_commands()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if new.status not in ('awaiting_signatures', 'submitted', 'outcome_unknown') then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and old.status in ('awaiting_signatures', 'submitted', 'outcome_unknown') then
+    return new;
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('commands_open:' || new.created_by::text, 0));
+  if (select pg_catalog.count(*) from public.commands
+      where created_by = new.created_by and id <> new.id
+        and status in ('awaiting_signatures', 'submitted', 'outcome_unknown')) >= 5 then
+    raise exception using errcode = 'P0001', message = 'TOO_MANY_OPEN_COMMANDS';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function private.cap_open_commands() from public, anon, authenticated, service_role;
+create trigger commands_open_cap before insert or update of status on public.commands
+  for each row execute function private.cap_open_commands();
 
 create table public.relay_lookup_tables (
   network text not null check (network = 'devnet'),

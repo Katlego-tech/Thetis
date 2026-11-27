@@ -36,7 +36,11 @@ function sponsorKeys() {
     }
     const keyPair = await createKeyPairFromBytes(Uint8Array.from(bytes));
     return { keyPair, address: await getAddressFromPublicKey(keyPair.publicKey) };
-  })();
+  })().catch((error: unknown) => {
+    // A failed read is not kept: the next invocation reads the secret again.
+    keys = undefined;
+    throw error;
+  });
   return keys;
 }
 

@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(15);
+select plan(18);
 
 insert into auth.users (id, email, email_confirmed_at, aud, role) values
   ('13000000-0000-4000-8000-000000000001', 'lender-one-member@example.test', now(), 'authenticated', 'authenticated'),
@@ -83,6 +83,27 @@ select lives_ok(
     array['11000000-0000-4000-8000-000000000005']::uuid[],
     '5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW', 'confirmed')$$,
   '2. a confirmed command with its signature and commitment is stored'
+);
+
+-- At most 5 open commands per user (fold 10): 1 above, 4 more, then a sixth is refused.
+select lives_ok(
+  $$select pg_temp.command(('14000000-0000-4000-8000-00000000001' || n)::uuid, 'awaiting_signatures', 0,
+      array['11000000-0000-4000-8000-000000000005']::uuid[], null, null)
+    from pg_catalog.generate_series(0, 3) as n$$,
+  '6. a user stores five open commands'
+);
+select throws_ok(
+  $$select pg_temp.command('14000000-0000-4000-8000-000000000020', 'awaiting_signatures', 0,
+    array['11000000-0000-4000-8000-000000000005']::uuid[], null, null)$$,
+  'P0001', 'TOO_MANY_OPEN_COMMANDS', '6. a sixth open command is refused'
+);
+update public.commands set status = 'expired' where id = '14000000-0000-4000-8000-000000000010';
+select pg_temp.command('14000000-0000-4000-8000-000000000021', 'awaiting_signatures', 0,
+  array['11000000-0000-4000-8000-000000000005']::uuid[], null, null);
+select throws_ok(
+  $$update public.commands set status = 'awaiting_signatures'
+    where id = '14000000-0000-4000-8000-000000000010'$$,
+  'P0001', 'TOO_MANY_OPEN_COMMANDS', '6. a renew past the cap is refused'
 );
 
 insert into public.relay_lookup_tables (network, program_id, protocol, address, authority) values

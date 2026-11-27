@@ -294,10 +294,7 @@ describe("sponsor allowlist", () => {
 
   it("refuses a protocol through the table, foreign lookup-table authorities, another table, an Ed25519 instruction with accounts, a compute price, a trailing instruction and short lookup-table data", () => {
     // The protocol slot must be a static account, never a table entry.
-    refused(
-      wire([limit(), thetis("close_loan")], { tables: { [table]: [protocol] } }),
-      /protocol/,
-    );
+    refused(wire([limit(), thetis("close_loan")], { tables: { [table]: [protocol] } }), /protocol/);
     const sponsorSigner = createNoopSigner(sponsor);
     const other = createNoopSigner(lender);
     for (const [authority, payer] of [
@@ -317,7 +314,12 @@ describe("sponsor allowlist", () => {
       );
       refused(
         wire([
-          getExtendLookupTableInstruction({ address: table, authority, payer, addresses: [filler] }),
+          getExtendLookupTableInstruction({
+            address: table,
+            authority,
+            payer,
+            addresses: [filler],
+          }),
         ]),
         /authority and payer/,
       );

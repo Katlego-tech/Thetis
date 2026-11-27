@@ -147,6 +147,10 @@ export const RELAY_ERRORS = {
   TOKEN_ACCOUNT_MISSING: [409, "The wallet has no token account for the pool's test token."],
   ROLE_INVALID: [422, "That role is not a signer of this command."],
   TRANSACTION_MISMATCH: [422, "The signed transaction is not the one Thetis issued."],
+  TOO_MANY_OPEN_COMMANDS: [
+    429,
+    "You have five open commands. Finish or let one end before starting another.",
+  ],
   COMMANDS_UNAVAILABLE: [503, "Signing is not configured on this server."],
   CHAIN_UNAVAILABLE: [503, "Thetis could not reach devnet. Nothing was changed."],
   SPONSOR_UNAVAILABLE: [503, "The fee sponsor did not answer. Nothing was sent."],

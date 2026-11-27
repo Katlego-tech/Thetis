@@ -116,6 +116,12 @@ async function reread(context: Caller, id: string): Promise<CommandRow> {
   return data as CommandRow;
 }
 
+/** The open-command cap (fold 10) is the database's; any other write error is INTERNAL. */
+function databaseError(error: { message: string }): RelayError {
+  if (error.message === "TOO_MANY_OPEN_COMMANDS") return new RelayError("TOO_MANY_OPEN_COMMANDS");
+  return new RelayError("INTERNAL", error.message);
+}
+
 /** Compare-and-set: null when another writer changed the row first. */
 async function update(
   context: Caller,
@@ -128,7 +134,7 @@ async function update(
     .eq("id", row.id)
     .eq("revision", row.revision)
     .select("*");
-  if (error) throw new RelayError("INTERNAL", error.message);
+  if (error) throw databaseError(error);
   return (data?.[0] as CommandRow | undefined) ?? null;
 }
 
@@ -337,7 +343,8 @@ export async function createCommand(
     })
     .select("*")
     .single();
-  if (error || !data) throw new RelayError("INTERNAL", error?.message);
+  if (error) throw databaseError(error);
+  if (!data) throw new RelayError("INTERNAL", "the command was not stored");
   return view(data as CommandRow);
 }
 
@@ -524,6 +531,8 @@ async function notLanded(relay: Relay, context: Caller, row: CommandRow): Promis
       transaction_base64: null,
       transaction_signature: null,
       last_valid_block_height: null,
+      // §5 caps sends for text kinds only; each new signed transaction counts afresh (fold 11).
+      sends: 0,
     });
   }
   const chainTime = await relay.chain.chainTime();
@@ -667,24 +676,31 @@ async function compileCommand(
   }
   instructions.push(thetis);
   // Table keys: every account except signers, the invoked programs and the protocol, which
-  // stays static so the sponsor can check it.
-  const keys = thetis.accounts
-    ?.filter((meta) => meta.role < 2 && meta.address !== relay.protocol)
-    .map((meta) => meta.address) as Address[];
+  // stays static so the sponsor can check it; and only accounts that exist on chain now, so an
+  // account the instruction creates stays static and unsigned requests can't fill the table
+  // (fold 9).
   const signerKeys = new Set(Object.values(wallets));
+  const candidates = [
+    ...new Set(
+      (thetis.accounts ?? [])
+        .filter((meta) => meta.role < 2)
+        .map((meta) => meta.address)
+        .filter(
+          (key) =>
+            key !== relay.protocol &&
+            !signerKeys.has(key) &&
+            key !== sponsor &&
+            key !== relay.programId &&
+            key !== COMPUTE_BUDGET &&
+            key !== ED25519,
+        ),
+    ),
+  ];
+  const onChain = await relay.chain.accounts(candidates);
+  const existing = candidates.filter((_, index) => onChain[index]?.exists === true);
   let table: Awaited<ReturnType<typeof ensureTableKeys>>;
   try {
-    table = await ensureTableKeys(
-      { ...relay, service: context.service },
-      keys.filter(
-        (key) =>
-          !signerKeys.has(key) &&
-          key !== sponsor &&
-          key !== relay.programId &&
-          key !== COMPUTE_BUDGET &&
-          key !== ED25519,
-      ),
-    );
+    table = await ensureTableKeys({ ...relay, service: context.service }, existing);
   } catch (error) {
     if (error instanceof LookupTableFullError) throw new RelayError("LOOKUP_TABLE_FULL");
     if (error instanceof SponsorUnavailableError)

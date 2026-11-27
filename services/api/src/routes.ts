@@ -8,6 +8,7 @@ import {
   defaultDependencies,
   isCommandPath,
 } from "./commands/routes.ts";
+import { SponsorUnavailableError } from "./commands/sponsor.ts";
 import { RELAY_ERRORS, RelayError } from "./commands/views.ts";
 import { decodeBase58, verifyEd25519 } from "./ed25519.ts";
 import type { AccessClients } from "./supabase.ts";
@@ -421,6 +422,9 @@ export async function route(
       detail = error.detail;
     } else if (error instanceof ChainUnavailableError) {
       code = "CHAIN_UNAVAILABLE";
+    } else if (error instanceof SponsorUnavailableError) {
+      code = "SPONSOR_UNAVAILABLE";
+      detail = error.detail;
     }
     if (code === "INTERNAL" || code === "VOICE_UNAVAILABLE") {
       console.error(code, { requestId: requestContext.requestId });

@@ -29,10 +29,14 @@ export function keyFileSponsor(
     | Promise<{ keyPair: Awaited<ReturnType<typeof createKeyPairFromBytes>>; address: Address }>
     | undefined;
   function load() {
+    // A failed read is not kept: the next call reads the key file again.
     keys ??= (async () => {
       const keyPair = await createKeyPairFromBytes(readKeyFile(path));
       return { keyPair, address: await getAddressFromPublicKey(keyPair.publicKey) };
-    })();
+    })().catch((error: unknown) => {
+      keys = undefined;
+      throw new SponsorUnavailableError("the sponsor key could not be read", error);
+    });
     return keys;
   }
   return {
@@ -78,11 +82,17 @@ export function lambdaSponsor(functionName: string): SponsorPort {
   let address: Promise<Address> | undefined;
   return {
     address() {
-      address ??= invoke({ op: "address" }).then((answer) => {
-        if (typeof answer.address !== "string")
-          throw new SponsorUnavailableError("no sponsor address");
-        return answer.address as Address;
-      });
+      // A failed answer is not kept: the next call asks the sponsor again.
+      address ??= invoke({ op: "address" })
+        .then((answer) => {
+          if (typeof answer.address !== "string")
+            throw new SponsorUnavailableError("no sponsor address");
+          return answer.address as Address;
+        })
+        .catch((error: unknown) => {
+          address = undefined;
+          throw error;
+        });
       return address;
     },
     async sign(transactionBase64, lookupTable) {

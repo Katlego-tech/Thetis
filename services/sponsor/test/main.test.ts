@@ -29,7 +29,10 @@ afterEach(() => {
 
 describe("sponsor key", () => {
   it("a failed Secrets Manager read is read again on the next invocation, then kept", async () => {
-    vi.stubEnv("SPONSOR_KEY_SECRET_ARN", "arn:aws:secretsmanager:af-south-1:000000000000:secret:test");
+    vi.stubEnv(
+      "SPONSOR_KEY_SECRET_ARN",
+      "arn:aws:secretsmanager:af-south-1:000000000000:secret:test",
+    );
     const seed = new Uint8Array(randomBytes(32));
     const key = await createKeyPairSignerFromPrivateKeyBytes(seed, true);
     state.answers = ["fail", JSON.stringify([...seed, ...getAddressEncoder().encode(key.address)])];
