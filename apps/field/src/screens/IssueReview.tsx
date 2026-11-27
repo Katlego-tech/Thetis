@@ -498,11 +498,13 @@ export function IssueReview(props: { draftId: string }) {
   return (
     <Frame organisation={org} onBack={app.back} footer={footer ?? undefined}>
       <Head title={`Issue lot ${draft.lotId}`}>
-        <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-          <RegistryMark
-            mark={view ? markFor(view.status, view.confirmedCommitment) : "Not on chain"}
-          />
-        </View>
+        {settled ? null : (
+          <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+            <RegistryMark
+              mark={view ? markFor(view.status, view.confirmedCommitment) : "Not on chain"}
+            />
+          </View>
+        )}
         <Cert label={app.protocol.instanceLabel} />
       </Head>
 
@@ -528,41 +530,6 @@ export function IssueReview(props: { draftId: string }) {
 
       {!settled ? (
         <>
-          <Rows
-            rows={[
-              {
-                label: "Quantity",
-                value: quantity,
-                sub: typeof kg === "bigint" ? `${formatKg(kg)}, weighbridge net mass` : null,
-              },
-              { label: "Owner", value: draft.ownerName ?? "" },
-              { label: "Custodian", value: chain?.displayName ?? org },
-              {
-                label: "Site",
-                value: draft.siteCode ?? "",
-                sub: `${draft.classLabel ?? ""}, grade ${draft.grade ?? ""}`,
-              },
-              { label: "Intake", value: ticket ?? "", sub: digest.slice(0, 8) },
-              {
-                label: "Files",
-                value: (
-                  <View style={{ alignItems: "flex-end" }}>
-                    {files.map((f) => (
-                      <Txt key={f.localId} variant="caption" tone="ink2">
-                        {`${f.purpose === "weighbridge" ? "Weighbridge" : f.purpose === "assay" ? "Assay" : "Origin"} ${f.sha256?.slice(0, 8) ?? ""}`}
-                      </Txt>
-                    ))}
-                  </View>
-                ),
-              },
-            ]}
-          />
-          <Section title="What this signature confirms">
-            <Txt style={{ fontSize: 14 }}>
-              {`${chain?.displayName ?? org} holds ${quantity} of ${classCode} ${draft.grade ?? ""} at ${draft.siteCode ?? ""} for ${draft.ownerName ?? ""}, and asks Thetis to issue receipts for it. It does not prove the ore's origin or grade.`}
-            </Txt>
-          </Section>
-
           {duplicateLine ? <ErrorBlock>{duplicateLine}</ErrorBlock> : null}
 
           {problem?.kind === "offline_before" ? (
@@ -641,6 +608,40 @@ export function IssueReview(props: { draftId: string }) {
           ) : null}
           {!app.wallet && awaiting ? <Note>Connect a wallet first.</Note> : null}
 
+          <Rows
+            rows={[
+              {
+                label: "Quantity",
+                value: quantity,
+                sub: typeof kg === "bigint" ? `${formatKg(kg)}, weighbridge net mass` : null,
+              },
+              { label: "Owner", value: draft.ownerName ?? "" },
+              { label: "Custodian", value: chain?.displayName ?? org },
+              {
+                label: "Site",
+                value: draft.siteCode ?? "",
+                sub: `${draft.classLabel ?? ""}, grade ${draft.grade ?? ""}`,
+              },
+              { label: "Intake", value: ticket ?? "", sub: digest.slice(0, 8) },
+              {
+                label: "Files",
+                value: (
+                  <View style={{ alignItems: "flex-end" }}>
+                    {files.map((f) => (
+                      <Txt key={f.localId} variant="caption" tone="ink2">
+                        {`${f.purpose === "weighbridge" ? "Weighbridge" : f.purpose === "assay" ? "Assay" : "Origin"} ${f.sha256?.slice(0, 8) ?? ""}`}
+                      </Txt>
+                    ))}
+                  </View>
+                ),
+              },
+            ]}
+          />
+          <Section title="What this signature confirms">
+            <Txt style={{ fontSize: 14 }}>
+              {`${chain?.displayName ?? org} holds ${quantity} of ${classCode} ${draft.grade ?? ""} at ${draft.siteCode ?? ""} for ${draft.ownerName ?? ""}, and asks Thetis to issue receipts for it. It does not prove the ore's origin or grade.`}
+            </Txt>
+          </Section>
           {!otherInstance ? (
             <SignedText
               text={phase.kind === "preparing" ? null : decoded}

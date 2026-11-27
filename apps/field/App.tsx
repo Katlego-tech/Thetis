@@ -7,7 +7,7 @@ import type { Session } from "@supabase/supabase-js";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AppState, BackHandler } from "react-native";
+import { AppState, BackHandler, useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { createApiClient } from "./src/api/client";
 import { commandsApi } from "./src/api/commands";
@@ -43,10 +43,12 @@ export default function App() {
     JetBrainsMono_500Medium,
   });
   const config = useMemo(() => readConfig(), []);
+  // The banner behind the status bar inverts in dark mode, so the status bar icons do too.
+  const scheme = useColorScheme();
   if (!fontsLoaded) return null;
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar style={scheme === "dark" ? "dark" : "light"} />
       {config.ok ? <Configured config={config.config} /> : <ConfigError errors={config.errors} />}
     </SafeAreaProvider>
   );

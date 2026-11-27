@@ -4,7 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, View } from "react-native";
 import { Head, Section, Skeleton } from "../components/Blocks";
-import { Button } from "../components/Button";
+import { Button, TextLink } from "../components/Button";
 import { Field, SelectField } from "../components/Field";
 import { FileRow } from "../components/FileRow";
 import { Frame } from "../components/Frame";
@@ -361,6 +361,9 @@ export function Intake(props: { draftId: string }) {
               <Txt variant="small" tone="ink2" live>
                 {reason}
               </Txt>
+            ) : null}
+            {reason === "Connect a wallet first." ? (
+              <TextLink label="Wallet" onPress={() => app.navigate({ name: "wallet" })} />
             ) : null}
           </>
         )
