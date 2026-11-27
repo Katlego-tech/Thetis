@@ -15,6 +15,7 @@ use instructions::documents::{self, *};
 use instructions::facility::{self, *};
 use instructions::handover::{self, *};
 use instructions::issue::{self, *};
+use instructions::loading::{self, *};
 use instructions::observation::{self, *};
 use instructions::payment::{self, *};
 use instructions::pledge::{self, *};
@@ -399,5 +400,35 @@ pub mod thetis {
             expected_observation,
             valid_until,
         )
+    }
+
+    pub fn create_loading_intent(
+        ctx: Context<CreateLoadingIntent>,
+        nonce: u64,
+        document_sha256: [u8; 32],
+        expires_at: i64,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        loading::create_loading_intent(
+            ctx,
+            nonce,
+            document_sha256,
+            expires_at,
+            expected_revision,
+            valid_until,
+        )
+    }
+
+    pub fn accept_loading(ctx: Context<AcceptLoading>, expected_revision: u64) -> Result<()> {
+        loading::accept_loading(ctx, expected_revision)
+    }
+
+    pub fn record_loading<'info>(
+        ctx: Context<'info, RecordLoading<'info>>,
+        expected_revision: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        loading::record_loading(ctx, expected_revision, valid_until)
     }
 }

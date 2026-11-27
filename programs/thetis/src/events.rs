@@ -334,3 +334,56 @@ pub struct ObservationRecorded {
     pub observed_at: i64,
     pub index: u32,
 }
+
+#[event]
+pub struct LoadingIntentCreated {
+    pub intent: Pubkey,
+    pub lot: Pubkey,
+    pub position: Pubkey,
+    pub owner: Pubkey,
+    pub terminal: Pubkey,
+    pub quantity_kg: u64,
+    pub locked_kg: u64,
+    pub document_sha256: [u8; 32],
+    pub expires_at: i64,
+    pub position_revision: u64,
+}
+
+#[event]
+pub struct LoadingAccepted {
+    pub acceptance: Pubkey,
+    pub intent: Pubkey,
+    pub loan: Pubkey,
+    pub lender: Pubkey,
+    pub lock_quantity_kg: u64,
+    pub loan_revision: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub version: u32,
+}
+
+#[event]
+pub struct LoadingRecorded {
+    pub intent: Pubkey,
+    pub lot: Pubkey,
+    pub position: Pubkey,
+    pub owner: Pubkey,
+    pub terminal: Pubkey,
+    pub quantity_kg: u64,
+    pub document_sha256: [u8; 32],
+    pub loans_accepted: u8,
+    pub lot_loaded: bool,
+    pub lot_revision: u64,
+    pub position_revision: u64,
+}
+
+#[event]
+pub struct LoanHandedOff {
+    pub loan: Pubkey,
+    pub intent: Pubkey,
+    pub released_kg: u64,
+    pub principal: u64,
+    pub booked_interest: u64,
+    pub external_handoff: bool,
+    pub revision: u64,
+}

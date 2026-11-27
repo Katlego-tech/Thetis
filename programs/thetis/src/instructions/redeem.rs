@@ -215,17 +215,21 @@ pub fn redeem(
     let lot_redeemed = lot.supply_kg == 0;
     if lot_redeemed {
         lot.state = LotState::Redeemed;
-        if let Some(root) = accounts.root.as_mut() {
-            root.live_children = root
-                .live_children
-                .checked_sub(1)
-                .ok_or(ThetisError::ArithmeticOverflow)?;
-        }
     }
-    let root = accounts.root.as_ref().unwrap_or(lot);
-    if root.supply_kg == 0 && root.live_children == 0 {
-        intake.retired = true;
-    }
+    let (root_live_children, retire) = receipts::family_after(
+        lot.supply_kg,
+        lot.live_children,
+        accounts
+            .root
+            .as_ref()
+            .map(|root| (root.supply_kg, root.live_children)),
+    )?;
+    receipts::apply_family(
+        accounts.root.as_deref_mut().map(|root| &mut **root),
+        intake,
+        root_live_children,
+        retire,
+    );
 
     receipts::check_vault_balance(&accounts.vault, position.quantity_kg)?;
     accounts.mint.reload()?;
