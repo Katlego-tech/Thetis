@@ -16,7 +16,8 @@ export type CommandKind =
   | "deposit"
   | "withdraw"
   | "borrow"
-  | "repay_simulated";
+  | "repay_simulated"
+  | "issue_lot";
 export type CommandStatus =
   | "awaiting_signatures"
   | "submitted"
@@ -24,7 +25,14 @@ export type CommandStatus =
   | "failed"
   | "outcome_unknown"
   | "expired";
-export type SignerRole = "borrower" | "lender" | "seller" | "buyer" | "depositor" | "payer";
+export type SignerRole =
+  | "borrower"
+  | "lender"
+  | "seller"
+  | "buyer"
+  | "depositor"
+  | "payer"
+  | "custodian";
 
 export interface CommandView {
   id: string;

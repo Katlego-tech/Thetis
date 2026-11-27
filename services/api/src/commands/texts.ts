@@ -310,3 +310,57 @@ export function paymentId(lenderOrgId: string, bankReference: string): Uint8Arra
 export function correctionPaymentId(lenderOrgId: string, correctionReference: string): Uint8Array {
   return sha256(`thetis-correction-v1\n${lenderOrgId}\n${correctionReference}`);
 }
+
+// ---------------------------------------------------------------- custody texts (field-app.md §6.3, §6.4)
+
+/** field-app.md §6.4: printable ASCII only, ASCII spaces removed, letters uppercased, 1 to 64
+ * characters after normalising; null otherwise. The phone's `normaliseTicket` is the same rule. */
+export function normaliseTicket(raw: string): string | null {
+  if (!/^[\x20-\x7e]*$/.test(raw)) return null;
+  const ticket = raw.replaceAll(" ", "").toUpperCase();
+  return ticket.length >= 1 && ticket.length <= 64 ? ticket : null;
+}
+
+/** The `intake_digest` argument of issue_lot: SHA-256 of `thetis-intake-v1\n<site>\n<ticket>`,
+ * 64 lowercase hex (field-app.md §6.4). `ticket` is already normalised. */
+export function intakeDigest(siteCode: string, ticket: string): string {
+  return createHash("sha256")
+    .update(`thetis-intake-v1\n${siteCode}\n${ticket}`, "utf8")
+    .digest("hex");
+}
+
+/** program-lots.md §6.2's `issue_message`, byte for byte. `origin` is null when the class does not
+ * require one ("not required"). Imported by scripts/demo-reset.ts (demo.md §5.1 L4). */
+export function issueLotMessage(
+  programId: string,
+  instanceId: Uint8Array,
+  lotId: string,
+  classCode: string,
+  classVersion: number,
+  grade: string,
+  quantityKg: bigint,
+  owner: string,
+  custodian: string,
+  siteCode: string,
+  intake: Uint8Array,
+  origin: { sha256: Uint8Array; version: number } | null,
+  validUntil: bigint,
+): Uint8Array {
+  return envelope(
+    programId,
+    hex(instanceId),
+    "Issue lot",
+    [
+      ["Lot", lotId],
+      ["Class", `${classCode} v${classVersion}`],
+      ["Grade", grade],
+      ["Quantity", formatTonnes(quantityKg)],
+      ["Owner", owner],
+      ["Custodian", custodian],
+      ["Site", siteCode],
+      ["Intake", hex(intake)],
+      ["Origin document", origin ? `${hex(origin.sha256)} v${origin.version}` : "not required"],
+    ],
+    validUntil,
+  );
+}

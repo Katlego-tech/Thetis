@@ -1,5 +1,6 @@
 // The field kinds' texts, digests and specs (field-app.md §6.3, §6.4 and the T067r folds).
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { KIND_SPECS, validateArgs } from "../src/commands/plan.ts";
 import { intakeDigest, issueLotMessage, normaliseTicket } from "../src/commands/texts.ts";
@@ -98,9 +99,10 @@ describe("issueLotMessage", () => {
 
   it("is the text the phone expects (apps/field expectedIssueText and checkSignedText)", async () => {
     // A computed path: Vitest resolves the field app's modules; the API's tsc does not check them.
-    const field = "../../../apps/field/src/";
-    const intake = await import(`${field}intake.ts`);
-    const check = await import(`${field}text.ts`);
+    const field = (name: string) =>
+      fileURLToPath(new URL(`../../../apps/field/src/${name}`, import.meta.url));
+    const intake = await import(field("intake.ts"));
+    const check = await import(field("text.ts"));
     const draft = {
       lotId: DEMO.lotId,
       grade: DEMO.grade,
