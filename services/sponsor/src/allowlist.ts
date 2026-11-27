@@ -163,6 +163,22 @@ const SPONSORED: readonly {
     protocol: 1,
     sponsorSlots: [0],
   },
+  // The loading kinds (field-app.md T067r.3 fold 49). record_loading's triples follow its 17
+  // accounts; the sponsor may not appear among them (the slot rule below covers every index).
+  {
+    name: "create_loading_intent",
+    discriminator: [138, 182, 30, 209, 196, 170, 77, 2],
+    accounts: 11,
+    protocol: 1,
+    sponsorSlots: [0],
+  },
+  {
+    name: "record_loading",
+    discriminator: [165, 64, 173, 141, 18, 237, 27, 142],
+    accounts: 17,
+    protocol: 1,
+    sponsorSlots: [0],
+  },
 ];
 
 export const SPONSORED_INSTRUCTIONS = SPONSORED;

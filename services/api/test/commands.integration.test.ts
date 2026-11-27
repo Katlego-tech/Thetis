@@ -3001,7 +3001,7 @@ describe("record_observation on the real program", () => {
 
 const khunouOwner = (): Actor => ({ org: "khunou", wallet: wallets.khunouLoading });
 const portTerminal = (): Actor => ({ org: "portT1", wallet: wallets.portT1 });
-const loadingSigners = { owner: khunouOwner(), terminal: portTerminal() };
+const loadingSigners = () => ({ owner: khunouOwner(), terminal: portTerminal() });
 
 /** CR-0001 at Port Terminal T1: optionally pledged to Lender One as `pledges` loans (kg each),
  * then shipped from Kopano's site, handed to Mosela at Departure and to the terminal at Arrival,
@@ -3039,6 +3039,27 @@ async function lotAtTerminal(w: World, pledges: string[] = []) {
     "CustodyHandedOver",
   );
   const lot = decodeLot(w.svm.getAccount(w.lot) as never).data;
+  if (facility) {
+    // The lender's valuation for the terminal's site: an advance and liquidate read the lot's class.
+    confirmed(
+      await run(
+        w,
+        "lenderOne",
+        "set_valuation",
+        {
+          facility,
+          custodianClass: lot.custodianClass,
+          grade: GRADE,
+          valuePerKgMinor: "20",
+          haircutBps: "0",
+          validForDays: "30",
+          sourceNote: "Synthetic test price per kg, not a market quote",
+        },
+        { lender: lenderOne() },
+      ),
+      "ValuationSet",
+    );
+  }
   const [position] = await findPositionPda({ lot: w.lot, owner: w.orgs.khunou });
   return { facility, loans, terminalClass: lot.custodianClass, position };
 }
@@ -3281,7 +3302,7 @@ describe("the loading on the real program", () => {
       "LoadingRecorded",
     );
     const ordered = [...loans].sort(byRawKey);
-    const handOffs = (view.outcome?.data ?? {}).loanHandOffs as { loan: string }[];
+    const handOffs = view.outcome?.data?.loanHandOffs as { loan: string }[];
     expect(view.outcome?.data).toMatchObject({ loansAccepted: 2, lotLoaded: true });
     expect(handOffs.map((h) => h.loan)).toStrictEqual(ordered);
     expect(handOffs.find((h) => h.loan === first)).toMatchObject({
@@ -3310,7 +3331,7 @@ describe("the loading on the real program", () => {
     await lotAtTerminal(w, ["5000000"]);
     const { intent } = await createIntent(w);
     const before = w.chain.sent.length;
-    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners);
+    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners());
     expect(view.fields).toContainEqual({ label: "Loan acceptances", value: "0" });
     failedWith(view, "AcceptanceMissing");
     expect(w.chain.sent.length).toBe(before + 1);
@@ -3319,28 +3340,9 @@ describe("the loading on the real program", () => {
 
   it("a lot whose loan went into Recovery after the lender accepted fails on chain as LoanNotActive", async () => {
     const w = await world();
-    const { loans, facility, terminalClass } = await lotAtTerminal(w, ["5000000"]);
+    const { loans } = await lotAtTerminal(w, ["5000000"]);
     const [loan] = loans as [Address];
     await advance(w, loan);
-    // The lender's valuation for the terminal's site, which liquidate reads (the lot's class).
-    confirmed(
-      await run(
-        w,
-        "lenderOne",
-        "set_valuation",
-        {
-          facility: facility ?? "",
-          custodianClass: terminalClass,
-          grade: GRADE,
-          valuePerKgMinor: "20",
-          haircutBps: "0",
-          validForDays: "30",
-          sourceNote: "Synthetic test price per kg, not a market quote",
-        },
-        { lender: lenderOne() },
-      ),
-      "ValuationSet",
-    );
     const { intent } = await createIntent(w);
     await acceptLoading(w, loan, intent);
     const clock = w.svm.getClock();
@@ -3351,7 +3353,7 @@ describe("the loading on the real program", () => {
       "Liquidated",
     );
     expect(loanAccount(w, loan).status).toBe(1); // Recovery
-    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners);
+    const view = await run(w, "portT1", "record_loading", { intent }, loadingSigners());
     expect(view.fields).toContainEqual({ label: "Loan acceptances", value: "1" });
     failedWith(view, "LoanNotActive");
     expect(decodeLot(w.svm.getAccount(w.lot) as never).data.supplyKg).toBe(LOT_KG);

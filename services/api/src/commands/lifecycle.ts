@@ -599,6 +599,30 @@ function thetisEventLines(logs: string[], programId: string): string[] {
   return lines;
 }
 
+function parseEvent(line: string): { name: string; data: Record<string, unknown> } | null {
+  const bytes = new Uint8Array(getBase64Encoder().encode(line));
+  const name = ThetisEvent[identifyThetisEvent(bytes)] as string;
+  const parse = (
+    contracts as unknown as Record<string, (b: Uint8Array) => Record<string, unknown>>
+  )[`parse${name}Event`];
+  return parse ? { name, data: eventData(name, parse(bytes)) } : null;
+}
+
+/** The outcome's data: exactly the kind's one event, or for a kind with a trailing event
+ * (field-app.md T067r.3 fold 42) the event, then one trailing event per item of the plan's `k`,
+ * gathered under `loanHandOffs`. Anything else is unreadable (null). */
+function outcomeData(row: CommandRow, lines: string[]): Record<string, unknown> | null {
+  const spec = KIND_SPECS[row.kind];
+  const trailing = spec.trailingEvent ? Number(row.plan.k ?? Number.NaN) : 0;
+  if (!Number.isInteger(trailing) || lines.length !== 1 + trailing) return null;
+  const [head, ...rest] = lines.map(parseEvent);
+  if (!head || head.name !== spec.event) return null;
+  if (!spec.trailingEvent) return head.data;
+  if (head.data.loansAccepted !== trailing) return null;
+  if (rest.some((event) => !event || event.name !== spec.trailingEvent)) return null;
+  return { ...head.data, loanHandOffs: rest.map((event) => event?.data) };
+}
+
 /** §4.4.3: the decoded event of the confirmed transaction; then a finalized commitment. */
 async function afterConfirmed(relay: Relay, context: Caller, row: CommandRow): Promise<CommandRow> {
   let current = row;
@@ -608,21 +632,18 @@ async function afterConfirmed(relay: Relay, context: Caller, row: CommandRow): P
     try {
       const found = await relay.chain.transaction(signature);
       const lines = found ? thetisEventLines(found.logs, relay.programId) : [];
-      const expected = KIND_SPECS[current.kind].event;
-      if (found && lines.length === 1 && lines[0]) {
-        const bytes = new Uint8Array(getBase64Encoder().encode(lines[0]));
-        const name = ThetisEvent[identifyThetisEvent(bytes)] as string;
-        const parse = (
-          contracts as unknown as Record<string, (b: Uint8Array) => Record<string, unknown>>
-        )[`parse${name}Event`];
-        if (name === expected && parse) {
-          patch = {
-            outcome: { event: name, slot: String(found.slot), data: eventData(name, parse(bytes)) },
-            confirmed_slot: String(found.slot),
-            error_code: null,
-            error_detail: null,
-          };
-        }
+      const data = found ? outcomeData(current, lines) : null;
+      if (found && data) {
+        patch = {
+          outcome: {
+            event: KIND_SPECS[current.kind].event,
+            slot: String(found.slot),
+            data,
+          },
+          confirmed_slot: String(found.slot),
+          error_code: null,
+          error_detail: null,
+        };
       }
     } catch (error) {
       if (!(error instanceof ChainUnavailableError)) throw error;

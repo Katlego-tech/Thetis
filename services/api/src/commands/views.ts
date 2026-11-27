@@ -19,7 +19,9 @@ export type CommandKind =
   | "repay_simulated"
   | "issue_lot"
   | "handover"
-  | "record_observation";
+  | "record_observation"
+  | "create_loading_intent"
+  | "record_loading";
 export type CommandStatus =
   | "awaiting_signatures"
   | "submitted"
@@ -37,7 +39,9 @@ export type SignerRole =
   | "custodian"
   | "holder"
   | "next_holder"
-  | "observer";
+  | "observer"
+  | "owner"
+  | "terminal";
 
 export interface CommandView {
   id: string;
