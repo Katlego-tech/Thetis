@@ -170,6 +170,59 @@ Filled in from `seed-log.json` after the run:
 | accredit_organisation lender-two | [`3QVomAKvDARkQJcx…`](https://explorer.solana.com/tx/3QVomAKvDARkQJcx1uddPKBzDZRjYPkCPkkYo8HqKam7pGYQZeRG9mezi1ubndquYDGBEWKRYGH3zg8WA8rsP3QR?cluster=devnet) |
 | accredit_organisation buyer-smelter | [`3DEUaHL73iRaQPSz…`](https://explorer.solana.com/tx/3DEUaHL73iRaQPSzpgEPcqyVcz2CczXSGJMPA8skbXue6UkCigWBENgbmy1PQcBDtZwGoszQHkNST19cKCjcYRxe?cluster=devnet) |
 
+### Demo reset
+
+Every rehearsal runs on a fresh protocol instance with the same synthetic cast, and the local Supabase is reset to the
+same users, so each run starts from the same state. Devnet only; the local Supabase only.
+
+```bash
+pnpm demo:reset --scenario phone --run next           # dry run: prints the plan and its cost, sends nothing
+pnpm demo:reset --scenario phone --run next --yes     # sends the plan, then resets the local Supabase
+pnpm demo:check --run fiat-demo-run-01                # after the services are up and the wallets linked
+```
+
+Two scenarios:
+
+- `phone` (`fiat-demo-run-NN`), the demo itself, 18 transactions:
+  - `initialize_protocol` (`FiatAttestationTest`), `register_class CHROME v1`, and `accredit_organisation` for the
+    seven seed organisations;
+  - the custodian classes `KOPANO-YARD-1` (10,000 t) and `PORT-T1` (5,000 t);
+  - one Authority for each of the seven owner-supplied wallets. Each gets every scope its role allows, except that the
+    lenders get `LEND` only, and each expires 30 days after the run started.
+  The refused driver's wallet gets no Authority, and no lot exists: CR-0001 is issued live on the phone.
+- `lender` (`fiat-lend-run-NN`) adds 4 transactions, for checking the web lender flow without the phones:
+  - an ISSUE-only Authority for a seed-held Kopano key (`kopano-seed-issuer.json`, created when missing);
+  - an address lookup table (created, then extended);
+  - `issue_lot CR-0001`: 5,000 t at `KOPANO-YARD-1`, owned by Khunou.
+  This scenario needs the relay's `issueLotMessage` (T067r). Until that is merged, it refuses before anything is sent.
+
+`--run next` takes the smallest free `NN`. A rerun of the same `NN` sends only what is missing. Every transaction is
+logged in `runs/<instance id>.json` in the keys directory, `pending` before it is sent and `confirmed` after. The env
+lines the API, worker and web app take for the run are in `runs/<instance id>.env`, which holds nothing secret. The
+phones need no change.
+
+The owner's public keys and the users' `.test` emails go in `demo-cast.json` in the keys directory. When the file is
+missing, the command prints a blank template and stops. After the chain stage, the command wipes the local database
+(`supabase db reset --local`) unless it already holds this run's cast. It then creates the six users, confirmed and
+with no password, and their memberships. Sign-in codes arrive in Mailpit. Wallets are linked again on each device
+after every reset.
+
+Every run is refused before anything is sent or wiped when:
+- a cluster other than devnet is named;
+- the keys directory is inside the repository, an operator key is missing, or the cast is invalid. A cast is invalid
+  when a wallet is an operator key or is listed twice, an email is not a `.test` address, or the six users are wrong;
+- a seed organisation is not marked synthetic;
+- Supabase is not the local stack;
+- the instance holds other values, or the run is used up: its CR-0001 exists (phone), or Khunou's position in
+  CR-0001 has moved (lender);
+- the refused driver's wallet holds an Authority.
+
+With `--yes`, the command is also refused when the API (port 3200) or the web app (3100) is running, when the worker
+polled in the last 120 s, or when the deployer holds less than the plan's cost plus 0.1 SOL.
+
+Cost: about 0.053 SOL per `phone` run and 0.07 SOL per `lender` run, almost all of it rent. The dry run prints the
+exact figure.
+
 ## Built before vs. during the event
 
 Everything in this repository today was built **before** the Dev3Pack build window (27–29

@@ -109,7 +109,8 @@ export const SEED = {
 export type InstanceName = "fiat-attestation" | "token-simulation";
 
 export type InstanceSpec = {
-  readonly instanceId: InstanceName;
+  /** 16 ASCII bytes: this script's two names, or a demo run's id (scripts/demo-reset.ts). */
+  readonly instanceId: string;
   readonly settlementMode: "FiatAttestationTest" | "DevnetTokenSimulation";
 };
 
@@ -150,6 +151,7 @@ const ROLE_BY_KIND: Record<string, RoleName> = {
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const SEED_SQL = join(REPO_ROOT, "supabase", "seed.sql");
+export const SEED_SQL_PATH = SEED_SQL;
 
 // ---------------------------------------------------------------------------------------------
 // Pure parts (no network, no files except where a path is passed in)
@@ -162,6 +164,8 @@ export type SeedOrganisation = {
   kind: string;
   role: RoleName;
   orgId: Uint8Array;
+  /** The row's `synthetic` value; false when the insert has no such column. */
+  synthetic: boolean;
 };
 
 // Decoded enums arrive as their numeric value although the generated type says the name; accept both.
@@ -211,16 +215,29 @@ function readArguments(argv: readonly string[]): InstanceSpec {
   return instance ?? DEFAULT_INSTANCE;
 }
 
-/** Refuses any cluster or URL override that is not devnet, and any argument it does not know. */
-export function assertDevnetOnly(argv: readonly string[], env: NodeJS.ProcessEnv): void {
+/** Refuses any cluster or URL environment variable that is not devnet. */
+export function assertDevnetEnv(env: NodeJS.ProcessEnv): void {
   for (const name of URL_ENV) {
     const value = env[name];
     if (value !== undefined && value !== "" && !DEVNET_VALUES.has(value)) {
       throw new SeedError(`refusing: ${name}=${value} is not devnet. This script only runs on devnet.`);
     }
   }
+}
+
+/** Refuses any cluster or URL override that is not devnet, and any argument it does not know. */
+export function assertDevnetOnly(argv: readonly string[], env: NodeJS.ProcessEnv): void {
+  assertDevnetEnv(env);
   readArguments(argv);
 }
+
+/** The values a --url style flag may take. */
+export function isDevnetValue(value: string): boolean {
+  return DEVNET_VALUES.has(value);
+}
+
+/** The flags that name a cluster or URL. */
+export const CLUSTER_FLAGS: readonly string[] = URL_FLAGS;
 
 /** The instance the arguments select: fiat-attestation unless --instance names another. */
 export function parseInstance(argv: readonly string[]): InstanceSpec {
@@ -364,6 +381,7 @@ export function parseSeedOrganisations(sql: string): SeedOrganisation[] {
     return index;
   };
   const [idAt, slugAt, nameAt, kindAt] = [column("id"), column("slug"), column("name"), column("kind")];
+  const syntheticAt = columns.indexOf("synthetic");
   const rows = parseSqlTuples(match[2] as string);
   if (rows.length === 0) throw new SeedError("seed.sql: organisations insert has no rows");
   return rows.map((row) => {
@@ -382,7 +400,8 @@ export function parseSeedOrganisations(sql: string): SeedOrganisation[] {
     if (!/^[a-z0-9-]+$/.test(slug)) throw new SeedError(`seed.sql: unsafe slug ${slug}`);
     const role = ROLE_BY_KIND[kind];
     if (role === undefined) throw new SeedError(`seed.sql: no on-chain role for kind ${kind}`);
-    return { id, slug, name, kind, role, orgId: uuidToBytes(id) };
+    const synthetic = syntheticAt === -1 ? false : row[syntheticAt] === true;
+    return { id, slug, name, kind, role, orgId: uuidToBytes(id), synthetic };
   });
 }
 
@@ -392,6 +411,7 @@ export type KeyRole =
   | "accreditor"
   | "sim-mint"
   | "sim-mint-authority"
+  | "kopano-seed-issuer"
   | `org-${string}`;
 
 export function keyFileName(role: KeyRole): string {
@@ -765,7 +785,7 @@ export function explorerUrl(signature: string): string {
 // Key files (Solana CLI format: a JSON array of 64 bytes, seed then public key)
 // ---------------------------------------------------------------------------------------------
 
-function readKeyFile(path: string): Promise<TransactionSigner> {
+export function readKeyFile(path: string): Promise<TransactionSigner> {
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (
     !Array.isArray(parsed) ||
