@@ -15,6 +15,7 @@ import {
   tableSignerAddresses,
   validateArgs,
 } from "../src/commands/plan.ts";
+import { expectPriced, issued } from "./compute-price.ts";
 
 const SYSTEM = "11111111111111111111111111111111" as Address;
 const newKey = async () => (await generateKeyPairSigner()).address;
@@ -60,6 +61,7 @@ async function acceptance(options: { acceptanceExists: boolean }) {
     lender,
     keys,
     bytes: measureCommand(instructions, sponsor, keys),
+    wire: issued(instructions, sponsor, keys).wire,
   };
 }
 
@@ -135,9 +137,11 @@ describe("accept_loading transaction (folds 52, 55, 57)", () => {
     expect(first.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
     expect(again.bytes).toBeLessThan(first.bytes);
     expect([first.bytes, again.bytes]).toStrictEqual([MEASURED_FIRST, MEASURED_AGAIN]);
+    expectPriced(expect, first.wire, "first acceptance");
+    expectPriced(expect, again.wire, "again");
   });
 });
 
 /** Measured through compile.ts (fold 55): a first acceptance and a re-acceptance. */
-const MEASURED_FIRST = 443;
-const MEASURED_AGAIN = 412;
+const MEASURED_FIRST = 455;
+const MEASURED_AGAIN = 424;

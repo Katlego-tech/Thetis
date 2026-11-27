@@ -21,6 +21,7 @@ import {
   validateArgs,
 } from "../src/commands/plan.ts";
 import { formatSast, loadingIntentMessage, recordLoadingMessage } from "../src/commands/texts.ts";
+import { expectPriced, expectUnpriced, issued } from "./compute-price.ts";
 
 const PROGRAM = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
 const INSTANCE_HEX = "00112233445566778899aabbccddeeff";
@@ -316,6 +317,7 @@ async function intentSize(values: {
     keys,
     candidates,
     bytes: measureCommand(commandInstructions(thetis, ed25519), sponsor, keys),
+    wire: issued(commandInstructions(thetis, ed25519), sponsor, keys).wire,
   };
 }
 
@@ -404,6 +406,7 @@ async function recordSize(values: {
     instructions,
     sponsor,
     bytes: measureCommand(instructions, sponsor, keys),
+    wire: issued(instructions, sponsor, keys).wire,
   };
 }
 
@@ -480,10 +483,12 @@ describe("create_loading_intent transaction (fold 49, fold 50)", () => {
   it("measures the demo intent at 1,028 and the widest at 1,179 (program-custody.md §11.2), both under 1,232", async () => {
     const demo = await intentSize(DEMO_INTENT);
     expect(demo.text.length).toBe(480);
-    expect(demo.bytes).toBe(1_028);
+    expect(demo.bytes).toBe(1_040);
+    expectPriced(expect, demo.wire, "demo intent");
     const widest = await intentSize(WIDEST_INTENT);
     expect(widest.text.length).toBe(631);
-    expect(widest.bytes).toBe(1_179);
+    expect(widest.bytes).toBe(1_191);
+    expectPriced(expect, widest.wire, "widest intent");
     expect(widest.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
   });
 });
@@ -515,16 +520,20 @@ describe("record_loading transaction (folds 43, 49, 50)", () => {
   it("measures the demo loading at 1,060 and every k at the widest fields, the widest k = 4 child at 1,230", async () => {
     const demo = await recordSize(DEMO_RECORD);
     expect(demo.text.length).toBe(464);
-    expect(demo.bytes).toBe(1_060);
+    expect(demo.bytes).toBe(1_072);
+    expectPriced(expect, demo.wire, "demo loading");
     const widths: number[] = [];
     for (const k of [0, 1, 2, 3, 4]) {
       const sized = await recordSize({ ...WIDEST_RECORD, k });
       widths.push(sized.bytes);
       expect(sized.bytes, `k = ${k}`).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+      // k = 3 and 4 at the widest fields fit only without the price (28 Nov decision).
+      (k <= 2 ? expectPriced : expectUnpriced)(expect, sized.wire, `k = ${k}`);
     }
     // Each triple adds three accounts, each one instruction index and one table index; the text
     // is the same width for every k (program-custody.md §11.2's 27 Nov note: 1,230 at k = 4).
-    expect(widths).toStrictEqual([1_206, 1_212, 1_218, 1_224, 1_230]);
+    // k = 0 to 2 carry the 12-byte price; k = 3 and 4 do not.
+    expect(widths).toStrictEqual([1_218, 1_224, 1_230, 1_224, 1_230]);
   });
 
   it("the k = 4 widest is 2 bytes under the limit only with every triple key in the table: one left static is over 1,232 (fold 26's guard refuses it)", async () => {

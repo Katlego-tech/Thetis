@@ -20,6 +20,7 @@ import {
   validateArgs,
 } from "../src/commands/plan.ts";
 import { formatSast, observationMessage } from "../src/commands/texts.ts";
+import { expectPriced, issued } from "./compute-price.ts";
 
 const PROGRAM = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -242,6 +243,7 @@ async function observationSize(values: {
     keys,
     candidates,
     bytes: measureCommand(commandInstructions(thetis, ed25519), sponsor, keys),
+    wire: issued(commandInstructions(thetis, ed25519), sponsor, keys).wire,
   };
 }
 
@@ -281,7 +283,8 @@ describe("record_observation transaction (field-app.md T067r.2 folds)", () => {
       validUntil: 1_795_098_725n,
     });
     expect(demo.text.length).toBe(513);
-    expect(demo.bytes).toBe(1_027);
+    expect(demo.bytes).toBe(1_039);
+    expectPriced(expect, demo.wire, "demo observation");
     const widest = await observationSize({
       lotId: "L".repeat(16),
       holder: "N".repeat(48),
@@ -294,7 +297,8 @@ describe("record_observation transaction (field-app.md T067r.2 folds)", () => {
       validUntil: I64_MAX,
     });
     expect(widest.text.length).toBe(629);
-    expect(widest.bytes).toBe(1_151);
+    expect(widest.bytes).toBe(1_163);
+    expectPriced(expect, widest.wire, "widest observation");
     expect(widest.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
   });
 });

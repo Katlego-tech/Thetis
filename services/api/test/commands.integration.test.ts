@@ -1258,7 +1258,8 @@ describe("relay commands on the real program", () => {
     expect(refused.outcome).toBeNull();
     expect(refused.transaction?.signature).toBeTruthy();
     expect(await w.chain.status(refused.transaction?.signature ?? "")).toMatchObject({
-      failed: { InstructionError: [2, { Custom: expect.any(Number) }] },
+      // [limit, price, Ed25519, pledge]: the relay's compute price puts pledge at index 3 (28 Nov).
+      failed: { InstructionError: [3, { Custom: expect.any(Number) }] },
     });
   }, 120_000);
 
