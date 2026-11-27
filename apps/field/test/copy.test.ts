@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   FAILED_COMMAND_MESSAGES,
   failedCommandCopy,
+  HANDOVER_FAILED_MESSAGES,
   LATER_FAILED_CODES,
   LOADING_FAILED_MESSAGES,
   OBSERVATION_FAILED_MESSAGES,
@@ -189,5 +190,203 @@ describe("record_loading copy (field-app.md T067r.3 fold 47: a loan in Recovery)
         kind: "record_loading",
       }),
     ).toBe("Thetis could not prepare this text (NOT_AUTHORISED). Nothing was sent. Try again.");
+  });
+});
+
+describe("handover and loading copy (field-app.md §6.7, the rows added for custody)", () => {
+  const upperSnake = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+  const vars = {
+    org: "Kopano Stockyard Custody",
+    owner: "Khunou Ore Exports",
+    to: "Mosela Haulage",
+    holder: "Kopano Stockyard Custody",
+  };
+  const shared = (code: string) => FAILED_COMMAND_MESSAGES[code]?.({ ...vars, code });
+
+  it("LATER_FAILED_CODES is exactly Anchor3012: the codes that are not program errors besides Anchor0", () => {
+    expect([...LATER_FAILED_CODES]).toStrictEqual(["Anchor3012"]);
+  });
+
+  it("the shared table has the custody and loading keys", () => {
+    for (const key of [
+      "RecipientNotApproved",
+      "StaleRevision",
+      "Anchor3012",
+      "ManifestMismatch",
+      "StageOutOfOrder",
+      "ShipmentNotOpen",
+      "ShipmentIncomplete",
+      "DepartureDocumentInvalid",
+      "Restricted",
+      "AcceptanceMissing",
+      "AcceptanceStale",
+      "LoadingExpired",
+      "LoadingNotOpen",
+      "LotNotStored",
+    ]) {
+      expect(FAILED_COMMAND_MESSAGES, key).toHaveProperty(key);
+    }
+  });
+
+  it("every new shared key, except Anchor0 and Anchor3012, is exported by @thetis/contracts", () => {
+    const keys = Object.keys(FAILED_COMMAND_MESSAGES).filter(
+      (key) => key !== "Anchor0" && !LATER_FAILED_CODES.has(key),
+    );
+    for (const key of [
+      "RecipientNotApproved",
+      "StaleRevision",
+      "ManifestMismatch",
+      "StageOutOfOrder",
+      "ShipmentNotOpen",
+      "ShipmentIncomplete",
+      "DepartureDocumentInvalid",
+      "Restricted",
+      "AcceptanceMissing",
+      "AcceptanceStale",
+      "LoadingExpired",
+      "LoadingNotOpen",
+      "LotNotStored",
+    ]) {
+      expect(keys, key).toContain(key);
+      expect(contracts, key).toHaveProperty(`THETIS_ERROR__${upperSnake(key)}`);
+    }
+    expect(contracts).not.toHaveProperty("THETIS_ERROR__ANCHOR3012");
+  });
+
+  it("every handover key, except Anchor0 and Anchor3012, is exported by @thetis/contracts", () => {
+    const keys = Object.keys(HANDOVER_FAILED_MESSAGES);
+    expect([...keys].sort()).toStrictEqual(["Anchor0", "Anchor3012", "StaleRevision"]);
+    for (const key of keys.filter((k) => k !== "Anchor0" && k !== "Anchor3012")) {
+      expect(contracts, key).toHaveProperty(`THETIS_ERROR__${upperSnake(key)}`);
+    }
+  });
+
+  it("the shared rows, verbatim", () => {
+    expect(shared("RecipientNotApproved")).toBe(
+      "Mosela Haulage is not the next holder this batch allows.",
+    );
+    expect(shared("StaleRevision")).toBe(
+      "Another change reached this record first. Start again from the current state.",
+    );
+    expect(shared("Anchor3012")).toBe(
+      "An authority or record this action needs does not exist on this Thetis instance.",
+    );
+    for (const code of [
+      "ManifestMismatch",
+      "StageOutOfOrder",
+      "ShipmentNotOpen",
+      "ShipmentIncomplete",
+      "DepartureDocumentInvalid",
+      "Restricted",
+    ]) {
+      expect(shared(code), code).toBe(`This batch can't be handed over now (${code}).`);
+    }
+    for (const code of [
+      "AcceptanceMissing",
+      "AcceptanceStale",
+      "LoadingExpired",
+      "LoadingNotOpen",
+      "LotNotStored",
+    ]) {
+      expect(shared(code), code).toBe(`This loading can't be recorded now (${code}).`);
+    }
+  });
+
+  it("a failed handover: another handover landed first, whatever the code the chain used", () => {
+    const line =
+      "Another handover of this batch was recorded first. Nothing was recorded for this one. Open the batch again to see who holds it.";
+    expect(failedCommandCopy("StaleRevision", vars, "handover")).toBe(line);
+    expect(failedCommandCopy("Anchor0", vars, "handover")).toBe(line);
+    expect(HANDOVER_FAILED_MESSAGES.StaleRevision?.({ ...vars, code: "StaleRevision" })).toBe(line);
+    expect(HANDOVER_FAILED_MESSAGES.Anchor0?.({ ...vars, code: "Anchor0" })).toBe(line);
+  });
+
+  it("a failed handover: wrong driver refused names who still holds the batch", () => {
+    expect(failedCommandCopy("Anchor3012", vars, "handover")).toBe(
+      "An authority or record this action needs does not exist on this Thetis instance. Kopano Stockyard Custody still holds the batch.",
+    );
+    expect(failedCommandCopy("Anchor3012", { ...vars, holder: "Mosela Haulage" }, "handover")).toBe(
+      "An authority or record this action needs does not exist on this Thetis instance. Mosela Haulage still holds the batch.",
+    );
+  });
+
+  it("a failed handover falls back to the shared rows for every other code", () => {
+    expect(failedCommandCopy("DepartureDocumentInvalid", vars, "handover")).toBe(
+      "This batch can't be handed over now (DepartureDocumentInvalid).",
+    );
+    expect(failedCommandCopy("RecipientNotApproved", vars, "handover")).toBe(
+      "Mosela Haulage is not the next holder this batch allows.",
+    );
+    expect(failedCommandCopy("ShipmentNotOpen", vars, "handover")).toBe(
+      "This batch can't be handed over now (ShipmentNotOpen).",
+    );
+    expect(failedCommandCopy("WrongSigner", vars, "handover")).toBe(
+      "A signer's authority does not allow this action.",
+    );
+    expect(failedCommandCopy("Paused", vars, "handover")).toBe(
+      "This action is paused on this Thetis instance.",
+    );
+    expect(failedCommandCopy("TransactionError", vars, "handover")).toBe(
+      "See the transaction on the explorer for the program's message.",
+    );
+  });
+
+  it("the handover rows are for handovers only: other kinds keep the shared and own rows", () => {
+    expect(failedCommandCopy("Anchor0", vars, "issue_lot")).toBe(
+      "Thetis already has this intake or this lot ID. A second lot for the same intake is refused.",
+    );
+    expect(failedCommandCopy("Anchor0", vars)).toBe(
+      "Thetis already has this intake or this lot ID. A second lot for the same intake is refused.",
+    );
+    expect(failedCommandCopy("StaleRevision", vars, "issue_lot")).toBe(
+      "Another change reached this record first. Start again from the current state.",
+    );
+    expect(failedCommandCopy("StaleRevision", vars, "record_observation")).toBe(
+      "Another observation of this batch was recorded first. Prepare the text again.",
+    );
+    expect(failedCommandCopy("Anchor3012", vars, "record_observation")).toBe(
+      "An authority or record this action needs does not exist on this Thetis instance.",
+    );
+    expect(failedCommandCopy("Anchor3012", vars)).toBe(
+      "An authority or record this action needs does not exist on this Thetis instance.",
+    );
+  });
+
+  it("a failed loading: the rows for the chain's loading refusals", () => {
+    for (const code of ["AcceptanceStale", "LoadingExpired", "LoadingNotOpen", "LotNotStored"]) {
+      expect(failedCommandCopy(code, vars, "record_loading"), code).toBe(
+        `This loading can't be recorded now (${code}).`,
+      );
+    }
+    expect(failedCommandCopy("AcceptanceMissing", vars, "record_loading")).toContain(
+      "Ask each lender with a lock on this lot to accept the loading in Thetis.",
+    );
+    expect(failedCommandCopy("AcceptanceMissing", vars, "issue_lot")).toBe(
+      "This loading can't be recorded now (AcceptanceMissing).",
+    );
+  });
+
+  it("no en or em dash in any row of any failed-command table, and at most one middle dot", () => {
+    const full = {
+      ...vars,
+      site: "KOPANO-YARD-1",
+      quantity: "5,000.000 t",
+      lender: "Lender One Bank",
+    };
+    const tables = [
+      FAILED_COMMAND_MESSAGES,
+      HANDOVER_FAILED_MESSAGES,
+      OBSERVATION_FAILED_MESSAGES,
+      LOADING_FAILED_MESSAGES,
+    ];
+    for (const table of tables) {
+      for (const [code, message] of Object.entries(table)) {
+        const text = message({ ...full, code });
+        expect(text.includes("\u2013"), code).toBe(false);
+        expect(text.includes("\u2014"), code).toBe(false);
+        expect(text.split("\u00b7").length - 1, code).toBeLessThanOrEqual(1);
+        expect(text, code).not.toMatch(/undefined|null/);
+      }
+    }
   });
 });

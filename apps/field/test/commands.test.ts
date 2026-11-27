@@ -6,9 +6,15 @@ import {
   ApiUnreachable,
   createApiClient,
 } from "../src/api/client";
-import { type CommandStatus, commandsApi, parseCommandView } from "../src/api/commands";
+import {
+  type CommandStatus,
+  type CommandView,
+  commandsApi,
+  parseCommandView,
+} from "../src/api/commands";
 import { REFETCH_CODES, relayErrorCopy } from "../src/copy";
 import { outcomeView } from "../src/outcome";
+import { handoverView, loadingView, observationView } from "./custody-fixtures";
 import { commandView } from "./fixtures";
 
 const STATUSES: CommandStatus[] = [
@@ -338,5 +344,88 @@ describe("a text too long for one transaction (field-app.md PR #69 review folds)
     expect(shown.primary).toBe("edit");
     expect(shown.issued).toBe(false);
     expect(shown.transaction).toBeNull();
+  });
+});
+
+describe("a custody outcome is the event of its kind (field-app.md §6.5.4)", () => {
+  const CASES: [string, (status: CommandStatus) => CommandView, string][] = [
+    ["handover", (status) => handoverView(status), "CustodyHandedOver"],
+    ["record_observation", (status) => observationView(status), "ObservationRecorded"],
+    ["record_loading", (status) => loadingView(status), "LoadingRecorded"],
+  ];
+  const roundTrip = (view: CommandView): unknown => JSON.parse(JSON.stringify(view));
+
+  it.each(CASES)("%s: a confirmed view carries %s", (_kind, build, event) => {
+    const view = build("confirmed");
+    expect(view.outcome?.event).toBe(event);
+    expect(parseCommandView(roundTrip(view))).toStrictEqual(view);
+  });
+
+  it.each(CASES)("%s: every status parses", (_kind, build) => {
+    for (const status of STATUSES) {
+      const view = build(status);
+      expect(parseCommandView(roundTrip(view)), status).toStrictEqual(view);
+    }
+  });
+
+  it("refuses a confirmed handover whose outcome event is not CustodyHandedOver", () => {
+    const view = handoverView("confirmed");
+    if (!view.outcome) throw new Error("fixture");
+    for (const event of ["LotIssued", "ObservationRecorded", "LoadingRecorded", "LotRedeemed"]) {
+      expect(
+        () => parseCommandView({ ...view, outcome: { ...view.outcome, event } }),
+        event,
+      ).toThrow(/outcome/);
+    }
+  });
+
+  it("refuses a confirmed record_observation whose outcome event is not ObservationRecorded", () => {
+    const view = observationView("confirmed");
+    if (!view.outcome) throw new Error("fixture");
+    for (const event of ["LotIssued", "CustodyHandedOver", "LoadingRecorded", "Observed"]) {
+      expect(
+        () => parseCommandView({ ...view, outcome: { ...view.outcome, event } }),
+        event,
+      ).toThrow(/outcome/);
+    }
+  });
+
+  it("refuses a confirmed record_loading whose outcome event is not LoadingRecorded", () => {
+    const view = loadingView("confirmed");
+    if (!view.outcome) throw new Error("fixture");
+    for (const event of [
+      "LotIssued",
+      "CustodyHandedOver",
+      "ObservationRecorded",
+      "LoanHandedOff",
+    ]) {
+      expect(
+        () => parseCommandView({ ...view, outcome: { ...view.outcome, event } }),
+        event,
+      ).toThrow(/outcome/);
+    }
+  });
+
+  it("refuses a LotIssued outcome on a custody kind and a custody event on issue_lot", () => {
+    const issue = commandView("confirmed");
+    if (!issue.outcome) throw new Error("fixture");
+    expect(() =>
+      parseCommandView({ ...issue, outcome: { ...issue.outcome, event: "CustodyHandedOver" } }),
+    ).toThrow(/outcome/);
+  });
+
+  it.each(CASES)("%s: accepts a confirmed view with the outcome still unread", (_kind, build) => {
+    const view = build("confirmed");
+    const unread = { ...view, outcome: null };
+    expect(parseCommandView(roundTrip(unread))).toStrictEqual(unread);
+  });
+
+  it("keeps the loading outcome's hand-offs as sent", () => {
+    const data = {
+      lotLoaded: true,
+      loanHandOffs: [{ externalHandoff: true }, { externalHandoff: false }],
+    };
+    const view = loadingView("confirmed", { data });
+    expect(parseCommandView(roundTrip(view)).outcome?.data).toStrictEqual(data);
   });
 });
