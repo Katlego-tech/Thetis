@@ -15,6 +15,7 @@ use instructions::documents::{self, *};
 use instructions::facility::{self, *};
 use instructions::handover::{self, *};
 use instructions::issue::{self, *};
+use instructions::observation::{self, *};
 use instructions::payment::{self, *};
 use instructions::pledge::{self, *};
 use instructions::recovery::{self, *};
@@ -26,7 +27,7 @@ use instructions::simulation::{self, *};
 use instructions::split::{self, *};
 use instructions::transfer::{self, *};
 use instructions::valuation::{self, *};
-use state::{DocumentKind, PaymentPurpose, Role, SettlementMode};
+use state::{DocumentKind, ObservationKind, PaymentPurpose, Role, SettlementMode};
 
 declare_id!("jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3");
 
@@ -378,5 +379,25 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         handover::handover(ctx, manifest_digest, expected_sequence, valid_until)
+    }
+
+    pub fn record_observation(
+        ctx: Context<RecordObservation>,
+        kind: ObservationKind,
+        location_code: String,
+        evidence_digest: [u8; 32],
+        observed_at: i64,
+        expected_observation: u32,
+        valid_until: i64,
+    ) -> Result<()> {
+        observation::record_observation(
+            ctx,
+            kind,
+            location_code,
+            evidence_digest,
+            observed_at,
+            expected_observation,
+            valid_until,
+        )
     }
 }

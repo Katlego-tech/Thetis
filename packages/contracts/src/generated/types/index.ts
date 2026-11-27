@@ -13,6 +13,7 @@ export * from './intentStatus.ts';
 export * from './loanStatus.ts';
 export * from './lockControl.ts';
 export * from './lotState.ts';
+export * from './observationKind.ts';
 export * from './paymentPurpose.ts';
 export * from './paymentStatus.ts';
 export * from './quantityUnit.ts';
