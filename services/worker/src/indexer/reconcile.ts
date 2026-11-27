@@ -54,6 +54,8 @@ const SCANNED_KINDS: readonly Kind[] = [
   "PaymentAttestation",
   "ReleaseIntent",
   "SimulationPool",
+  "Shipment",
+  "ManifestBatch",
 ];
 
 /** A PoolShare's size: discriminator, pool, organisation, shares, lent_minor, bump. */
@@ -276,6 +278,16 @@ export async function reconcile(
         return account.data.revision === BigInt(row.event_revision as string);
       case "Valuation":
         return account.data.version === row.event_version;
+      case "Shipment":
+        return (
+          account.data.revision === BigInt(row.event_revision as string) &&
+          account.data.registeredCount === row.event_registered
+        );
+      case "ManifestBatch":
+        return (
+          account.data.sequence === BigInt(row.event_sequence as string) &&
+          account.data.observationCount === row.event_observations
+        );
       default:
         return true;
     }
