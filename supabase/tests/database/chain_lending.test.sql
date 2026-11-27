@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(73);
+select plan(78);
 
 -- A clean slate inside this transaction (rolled back at the end).
 delete from public.chain_pool_shares;
@@ -315,7 +315,8 @@ select set_config('t.b8', pg_temp.batch(700, 800,
     pg_temp.ev(8, 0, 800, 'OpenPool', 'PoolOpened', 'pool',
       jsonb_build_object('pool', pg_temp.a('pool'), 'created', pg_temp.a('pool'))),
     pg_temp.ev(8, 1, 800, 'Deposit', 'Deposited', 'pool',
-      jsonb_build_object('pool', pg_temp.a('pool'), 'pool_revision', '1'))),
+      jsonb_build_object('pool', pg_temp.a('pool'), 'pool_revision', '1',
+        'org_id', pg_temp.org('lender-one')))),
   jsonb_build_array(
     pg_temp.up('chain_pools', pg_temp.a('pool'), 800, 8, jsonb_build_object(
       'mint', pg_temp.a('poolMint'), 'vault', pg_temp.a('poolVault'), 'currency', 'USD',
@@ -429,6 +430,8 @@ select set_eq($$select created from public.chain_events where scope = 'facility'
   '2. lender-one reads its facility''s events and not Lender Two''s');
 select set_eq($$select address from public.chain_pool_shares$$, array[pg_temp.a('share1')],
   '2. lender-one reads its own pool share');
+select set_eq($$select event from public.chain_events where scope = 'pool'$$,
+  array['PoolOpened', 'Deposited'], '2. lender-one reads the pool''s opening and its own deposit');
 
 select pg_temp.as_user(2); -- lender-two
 select set_eq($$select address from public.chain_facilities$$, array[pg_temp.a('fac2')],
@@ -444,6 +447,8 @@ select is_empty($$select 1 from public.chain_valuations union all select 1 from 
 select set_eq($$select created from public.chain_events where scope = 'facility'$$, array[pg_temp.a('fac2')],
   '2. lender-two reads only its own facility event');
 select is((select count(*)::int from public.chain_pools), 1, '2. members read the pool');
+select set_eq($$select event from public.chain_events where scope = 'pool'$$, array['PoolOpened'],
+  '2. lender-two reads PoolOpened and not Lender One''s Deposited');
 
 select pg_temp.as_user(3); -- khunou, the borrower
 select set_eq($$select address from public.chain_facilities$$, array[pg_temp.a('fac1'), pg_temp.a('fac2')],
@@ -456,6 +461,8 @@ select is((select count(*)::int from public.chain_release_intents), 1, '2. khuno
 select is((select count(*)::int from public.chain_events where scope = 'facility'), 7,
   '2. khunou reads every facility event of both facilities');
 select is_empty($$select 1 from public.chain_pool_shares$$, '2. khunou reads no pool share');
+select is_empty($$select 1 from public.chain_events where event = 'Deposited'$$,
+  '2. khunou, a member of another organisation, reads no Deposited row');
 
 select pg_temp.as_user(4); -- buyer-smelter
 select set_eq($$select address from public.chain_release_intents$$, array[pg_temp.a('intent1')],
@@ -491,7 +498,8 @@ select throws_ok(
 select throws_ok(
   $$select public.indexer_apply(pg_temp.batch(800, 900, jsonb_build_array(pg_temp.tx(9, 900, 1)),
     jsonb_build_array(pg_temp.ev(9, 0, 900, 'Withdraw', 'Withdrawn', 'pool', jsonb_build_object(
-      'pool', pg_temp.a('pool'), 'pool_revision', '1'))), '[]'::jsonb))$$,
+      'pool', pg_temp.a('pool'), 'pool_revision', '1', 'org_id', pg_temp.org('lender-one')))),
+    '[]'::jsonb))$$,
   'P0001', 'REVISION_SEQUENCE', '3. a repeated (pool, pool_revision) is REVISION_SEQUENCE');
 select throws_ok(
   $$select public.indexer_apply(pg_temp.batch(800, 900, jsonb_build_array(pg_temp.tx(9, 900, 1)),
@@ -525,6 +533,17 @@ select throws_ok(
       - array['facility', 'loan', 'loan_revision', 'pool', 'pool_revision', 'valuation',
         'valuation_version', 'created']), '[]'::jsonb))$$,
   'P0001', 'ROW_INVALID', '4. an event row without the eight new keys is ROW_INVALID');
+select throws_ok(
+  $$select public.indexer_apply(pg_temp.batch(800, 900, jsonb_build_array(pg_temp.tx(9, 900, 1)),
+    jsonb_build_array(pg_temp.ev(9, 0, 900, 'Deposit', 'Deposited', 'pool', jsonb_build_object(
+      'pool', pg_temp.a('pool'), 'pool_revision', '2'))), '[]'::jsonb))$$,
+  'P0001', 'ROW_INVALID', '4. a Deposited without the depositor''s org_id is ROW_INVALID');
+select throws_ok(
+  $$select public.indexer_apply(pg_temp.batch(800, 900, jsonb_build_array(pg_temp.tx(9, 900, 1)),
+    jsonb_build_array(pg_temp.ev(9, 0, 900, 'OpenPool', 'PoolOpened', 'pool', jsonb_build_object(
+      'pool', pg_temp.a('poolVault'), 'created', pg_temp.a('poolVault'), 'org_id', pg_temp.org('lender-one')))),
+    '[]'::jsonb))$$,
+  'P0001', 'ROW_INVALID', '4. a PoolOpened with an org_id is ROW_INVALID');
 reset role;
 
 -- 5. event_revision and event_version come from indexer_apply even at a lower slot, and

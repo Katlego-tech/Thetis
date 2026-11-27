@@ -1,6 +1,7 @@
 // Phase 2: lending events and accounts into the read model (live-lending.md §4.1, §9.1).
 // Every history here is synthetic (fixtures/synthetic.ts, "The lending fixtures").
 
+import type { Address } from "@solana/kit";
 import {
   getAdvanceRecordedEventDecoder,
   getAdvanceRecordedEventEncoder,
@@ -9,28 +10,39 @@ import {
   getPaymentConfirmedEventEncoder,
   getPaymentCorrectedEventDecoder,
   getPaymentCorrectedEventEncoder,
+  getPoolShareDecoder,
+  getPoolShareEncoder,
+  getPrepareShipmentInstruction,
   getRepaidEventDecoder,
   getRepaidEventEncoder,
+  getSimulationPoolDecoder,
+  getSimulationPoolEncoder,
+  getValuationDecoder,
+  getValuationEncoder,
   PaymentPurpose,
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import type { memoryStore, ReadModelStore, Stream } from "../../src/indexer/store.ts";
-import { counts, eventKeys, expectHalt, harness, rows } from "../fixtures/harness.ts";
+import { counts, eventKeys, expectHalt, harness, RECONCILE_MS, rows } from "../fixtures/harness.ts";
 import {
   bytesOf,
   editEvent,
+  type FakeChain,
   type FakeTransaction,
   type History,
   LENDING_STEPS,
   type LendingScenario,
   type LendingStep,
+  lastSlot,
   lendingHistory,
   PROGRAM,
   poolHistory,
   seedOrganisations,
   slotOf,
   syntheticSignature,
+  syntheticSigner,
   thetis,
+  thetisTransaction,
   transactionOf,
 } from "../fixtures/synthetic.ts";
 
@@ -139,6 +151,70 @@ async function poolHarness(history: History, scenario: LendingScenario) {
       throw new Error(`not live after ${max} polls`);
     },
   };
+}
+
+/** The last state of an account in a history, decoded. */
+function lastState<T>(
+  history: History,
+  address: string,
+  decoder: { decode: (bytes: Uint8Array) => T },
+): T {
+  const data = history
+    .flatMap((entry) => (entry.accounts[address] ? [entry.accounts[address]] : []))
+    .at(-1)?.data;
+  if (!data) throw new Error(`no state for ${address}`);
+  return decoder.decode(data);
+}
+
+/**
+ * Moves an account on chain with no transaction, 500 slots after the last entry: the indexer then
+ * reads the moved state for the account's last event, and only the event column tells them apart.
+ */
+function moveWithoutEvent<T extends object>(
+  history: History,
+  address: string,
+  decoder: { decode: (bytes: Uint8Array) => T },
+  encoder: { encode: (value: never) => ArrayLike<number> },
+  edit: (value: T) => T,
+): T {
+  const before = lastState(history, address, decoder);
+  history.push({
+    slot: lastSlot(history) + 500,
+    blockTime: null,
+    transactions: [],
+    accounts: { [address]: thetis(bytesOf(encoder, edit(before))) },
+  });
+  return before;
+}
+
+/** Polls at most five times, until a poll halts. */
+async function pollToHalt(poll: () => Promise<string>): Promise<string> {
+  let result = "ok";
+  for (let i = 0; i < 5 && result !== "halted"; i += 1) result = await poll();
+  return result;
+}
+
+type ShareScan = Parameters<FakeChain["getProgramAccounts"]>;
+
+/** Wraps the chain's pool-share scans (dataSize 89) only; every other call is unchanged. */
+function wrapShareScans(
+  chain: FakeChain,
+  wrap: (
+    original: (...args: ShareScan) => ReturnType<FakeChain["getProgramAccounts"]>,
+    ...args: ShareScan
+  ) => ReturnType<FakeChain["getProgramAccounts"]>,
+) {
+  const original = chain.getProgramAccounts.bind(chain);
+  chain.getProgramAccounts = (filter, signal) =>
+    filter.dataSize === 89 ? wrap(original, filter, signal) : original(filter, signal);
+}
+
+/** How many pool-share scans the chain has answered. */
+function shareScans(chain: FakeChain): number {
+  return chain.calls.filter(
+    ({ method, args }) =>
+      method === "getProgramAccounts" && (args[0] as { dataSize: number | null }).dataSize === 89,
+  ).length;
 }
 
 async function expectPoolHalt(
@@ -724,5 +800,210 @@ describe("Phase 2 lending", () => {
       signature: repay.signature,
       mentions: ["simulated Repay names no pool share"],
     });
+  });
+
+  it("halts with EVENT_GAP at reconcile when a valuation version or a pool revision differs from its event column", async () => {
+    // The valuation's account moves one version with no ValuationSet the indexer could see.
+    const valued = await lendingHistory();
+    const valuation = moveWithoutEvent(
+      valued.history,
+      valued.valuation,
+      getValuationDecoder(),
+      getValuationEncoder(),
+      (value) => ({ ...value, version: value.version + 1 }),
+    );
+    const first = await harness(valued.history);
+    await expectHalt(first, await pollToHalt(first.poll), "EVENT_GAP", {
+      step: "reconcile",
+      signature: null,
+      mentions: [valued.valuation],
+    });
+    const stored = row(first.store, "chain_valuations", valued.valuation);
+    expect(stored).toMatchObject({
+      version: valuation.version + 1,
+      event_version: valuation.version,
+    });
+    expect(stored?.commitment).not.toBe("finalized");
+
+    // The pool's account moves one revision with no pool event.
+    const moved = await poolHistory();
+    const address = moved.pool as string;
+    const pool = moveWithoutEvent(
+      moved.history,
+      address,
+      getSimulationPoolDecoder(),
+      getSimulationPoolEncoder(),
+      (value) => ({ ...value, revision: value.revision + 1n }),
+    );
+    const second = await poolHarness(moved.history, moved);
+    await expectPoolHalt(second, await pollToHalt(second.h.poll), "EVENT_GAP", {
+      step: "reconcile",
+      signature: null,
+      mentions: [address],
+    });
+    const poolRow = row(second.h.store, "chain_pools", address);
+    expect(poolRow).toMatchObject({
+      revision: String(pool.revision + 1n),
+      event_revision: String(pool.revision),
+    });
+    expect(poolRow?.commitment).not.toBe("finalized");
+  });
+
+  it("halts with EVENT_GAP at fetch when an own-instance pool action reads a pool share of a pool the stream does not have", async () => {
+    const scenario = await poolHistory();
+    const share = scenario.share as string;
+    const unknown = (await syntheticSigner(98)).address as string;
+    // Every state of the share names the unknown pool, so the Deposit that creates it reads it.
+    const decoder = getPoolShareDecoder();
+    for (const entry of scenario.history) {
+      const state = entry.accounts[share];
+      if (!state) continue;
+      entry.accounts[share] = thetis(
+        bytesOf(getPoolShareEncoder(), { ...decoder.decode(state.data), pool: unknown as Address }),
+      );
+    }
+    const pool = await poolHarness(scenario.history, scenario);
+    await expectPoolHalt(pool, await pool.h.poll(), "EVENT_GAP", {
+      step: "fetch",
+      signature: null,
+      mentions: [`SimulationPool ${unknown}`],
+    });
+    expect((await pool.checkpoint())?.indexedThroughSlot).toBe(
+      slotNumber(scenario, "deposit") - 1000,
+    );
+    expect(rows(pool.h.store, "chain_pool_shares")).toEqual([]);
+  });
+
+  it("reconcile skips while a pool-share scan answers above the cursor", async () => {
+    const scenario = await poolHistory();
+    const pool = await poolHarness(scenario.history, scenario);
+    wrapShareScans(pool.h.chain, async (original, ...args) => {
+      const answer = await original(...args);
+      return { ...answer, slot: answer.slot + 1000 };
+    });
+    const live = await pool.untilLive();
+    pool.h.advance(RECONCILE_MS + 1);
+    await pool.untilLive();
+    expect(live.indexedThroughSlot).toBe(lastSlot(scenario.history));
+    for (const table of ["chain_pools", "chain_pool_shares", "chain_loans", "chain_facilities"]) {
+      for (const entry of rows(pool.h.store, table)) {
+        expect(entry.commitment, table).toBe("confirmed");
+      }
+    }
+    expect(pool.h.lines.filter((line) => line.code === "RECONCILE_RETRY")).toEqual([]);
+  });
+
+  it("reconcile reads a pool share against its own pool's scan, not the protocol scan", async () => {
+    // The pool-share scan answers at a slot before the Deposit, so it returns no share; the share
+    // row is newer than that scan, so it is neither vanished nor compared.
+    const scenario = await poolHistory();
+    const pool = await poolHarness(scenario.history, scenario);
+    const head = lastSlot(scenario.history);
+    const before = slotNumber(scenario, "deposit") - 1;
+    wrapShareScans(pool.h.chain, async (original, ...args) => {
+      pool.h.chain.setFinalizedSlot(before);
+      try {
+        return await original(...args);
+      } finally {
+        pool.h.chain.setFinalizedSlot(head);
+      }
+    });
+    await pool.untilLive();
+    expect(row(pool.h.store, "chain_pools", scenario.pool as string)).toMatchObject({
+      commitment: "finalized",
+      slot: head,
+    });
+    expect(row(pool.h.store, "chain_pool_shares", scenario.share as string)).toMatchObject({
+      commitment: "confirmed",
+      slot: slotNumber(scenario, "withdraw"),
+    });
+    expect((await pool.checkpoint())?.status).toBe("live");
+  });
+
+  it("reconcile halts with ACCOUNT_VANISHED on a pool share whose pool the protocol scan no longer returns", async () => {
+    const scenario = await poolHistory();
+    const address = scenario.pool as string;
+    const share = scenario.share as string;
+    const pool = await poolHarness(scenario.history, scenario);
+    await pool.untilLive();
+    const scansBefore = shareScans(pool.h.chain);
+
+    // The pool account is gone on chain, so no pool-share scan reads its share.
+    const head = lastSlot(scenario.history) + 500;
+    pool.h.chain.setHistory([
+      ...scenario.history,
+      { slot: head, blockTime: null, transactions: [], accounts: { [address]: null } },
+    ]);
+    pool.h.chain.setConfirmedSlot(head);
+    pool.h.chain.setFinalizedSlot(head);
+    pool.h.advance(RECONCILE_MS + 1);
+    await expectPoolHalt(pool, await pool.h.poll(), "ACCOUNT_VANISHED", {
+      step: "reconcile",
+      signature: null,
+      mentions: [address, share],
+    });
+    expect(shareScans(pool.h.chain)).toBe(scansBefore);
+  });
+
+  it("Deposited and Withdrawn rows carry the depositor's org_id, and PoolOpened none", async () => {
+    const scenario = await poolHistory();
+    const pool = await poolHarness(scenario.history, scenario);
+    await pool.untilLive();
+    const lenderOne = await orgId("lender-one");
+    const byEvent = (name: string) => events(pool.h.store).filter((entry) => entry.event === name);
+    expect(byEvent("Deposited")).toEqual([
+      expect.objectContaining({ scope: "pool", org_id: lenderOne }),
+    ]);
+    expect(byEvent("Withdrawn")).toEqual([
+      expect.objectContaining({ scope: "pool", org_id: lenderOne }),
+    ]);
+    expect(byEvent("PoolOpened")).toEqual([
+      expect.objectContaining({ scope: "pool", org_id: null }),
+    ]);
+    for (const entry of events(pool.h.store).filter((event) => event.scope === "facility")) {
+      expect(entry.org_id, String(entry.event)).toBeNull();
+    }
+  });
+
+  // T063d.2 retargets this case to the handover discriminator once Phase 3's shipment
+  // instructions are handled (live-custody.md §9.3).
+  it("halts with UNKNOWN_INSTRUCTION on its own instance's PrepareShipment, a Phase 3 instruction not yet handled", async () => {
+    const scenario = await lendingHistory();
+    const sponsor = await syntheticSigner(97);
+    const other = async (n: number) => (await syntheticSigner(n)).address;
+    const prepare = thetisTransaction({
+      signature: syntheticSignature(218),
+      feePayer: sponsor.address,
+      name: "PrepareShipment",
+      events: [],
+      instruction: getPrepareShipmentInstruction({
+        sponsor,
+        protocol: scenario.protocol as Address,
+        ownerOrg: scenario.org("khunou") as Address,
+        ownerAuthority: await other(96),
+        lot: scenario.lot as Address,
+        position: scenario.positions.khunou as Address,
+        sourceClass: scenario.custodianClass as Address,
+        destinationClass: await other(95),
+        destinationOrg: await other(94),
+        departureDocument: await other(93),
+        departureIssuer: await other(92),
+        shipment: await other(91),
+        shipmentId: new Uint8Array(16).fill(0x51),
+        batchCount: 1,
+        manifestRoot: new Uint8Array(32).fill(0x52),
+        expectedRevision: 1n,
+        validUntil: 1_800_000_000n,
+      }),
+    });
+    const slot = lastSlot(scenario.history) + 1000;
+    scenario.history.push({ slot, blockTime: null, transactions: [prepare], accounts: {} });
+    const h = await harness(scenario.history);
+    await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
+      step: "decode",
+      signature: prepare.signature,
+      mentions: ["PrepareShipment", "not handled"],
+    });
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });
 });
