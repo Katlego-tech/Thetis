@@ -982,4 +982,3 @@ async function tableAddress(context: Caller, row: CommandRow): Promise<Address> 
   if (error || !data) throw new RelayError("INTERNAL", "no lookup table for this instance");
   return data.address as Address;
 }
-
