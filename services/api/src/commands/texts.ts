@@ -415,3 +415,42 @@ export function custodyHandoverMessage(
     validUntil,
   );
 }
+
+export type ObservationKindName = "Checkpoint" | "Border";
+
+/** program-custody.md §6.2's `observation_message`, byte for byte. */
+export function observationMessage(
+  programId: string,
+  instanceId: Uint8Array,
+  lotId: string,
+  shipmentId: Uint8Array,
+  batchNumber: number,
+  batchCount: number,
+  holder: string,
+  observer: string,
+  kind: ObservationKindName,
+  locationCode: string,
+  evidenceDigest: Uint8Array,
+  observedAt: bigint,
+  expectedObservation: number,
+  validUntil: bigint,
+): Uint8Array {
+  return envelope(
+    programId,
+    hex(instanceId),
+    "Record observation",
+    [
+      ["Lot", lotId],
+      ["Shipment", hex(shipmentId)],
+      ["Batch", `${batchNumber} of ${batchCount}`],
+      ["Holder", holder],
+      ["Observer", observer],
+      ["Kind", kind],
+      ["Location", locationCode],
+      ["Evidence", hex(evidenceDigest)],
+      ["Observed at", formatSast(observedAt)],
+      ["Observation", String(expectedObservation)],
+    ],
+    validUntil,
+  );
+}
