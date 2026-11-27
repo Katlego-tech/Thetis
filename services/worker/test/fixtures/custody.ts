@@ -7,16 +7,25 @@
 // release.rs, pledge.rs, documents.rs); the manifest root is program-custody.md §6.3's tree.
 
 import { createHash } from "node:crypto";
-import { type Address, getAddressEncoder, getProgramDerivedAddress, none, some } from "@solana/kit";
+import {
+  AccountRole,
+  type Address,
+  getAddressEncoder,
+  getProgramDerivedAddress,
+  none,
+  some,
+} from "@solana/kit";
 import {
   BatchStage,
   DocumentKind,
+  findAcceptancePda,
   findAuthorityPda,
   findBatchPda,
   findFacilityPda,
   findHandoverPda,
   findIntakePda,
   findIntentPda,
+  findLoadingIntentPda,
   findLoanPda,
   findLockPda,
   findMintAuthorityPda,
@@ -26,12 +35,14 @@ import {
   findProtocolPda,
   findShipmentPda,
   findVaultAuthorityPda,
+  getAcceptLoadingInstruction,
   getAccreditCustodianClassInstruction,
   getAccreditOrganisationInstruction,
   getAdvanceRecordedEventEncoder,
   getAttestDocumentInstruction,
   getBatchRegisteredEventEncoder,
   getCancelShipmentInstruction,
+  getCreateLoadingIntentInstruction,
   getCreateReleaseIntentInstruction,
   getCustodianClassAccreditedEventEncoder,
   getCustodianClassEncoder,
@@ -40,11 +51,17 @@ import {
   getDocumentAttestedEventEncoder,
   getFacilityEncoder,
   getFacilityOpenedEventEncoder,
+  getHandoffAcceptanceEncoder,
   getHandoverInstruction,
   getHandoverRecordEncoder,
   getIntakeIdentityEncoder,
   getIssueLotInstruction,
+  getLoadingAcceptedEventEncoder,
+  getLoadingIntentCreatedEventEncoder,
+  getLoadingIntentEncoder,
+  getLoadingRecordedEventEncoder,
   getLoanEncoder,
+  getLoanHandedOffEventEncoder,
   getLockAllocationEncoder,
   getLotEncoder,
   getLotIssuedEventEncoder,
@@ -59,6 +76,7 @@ import {
   getPositionEncoder,
   getPrepareShipmentInstruction,
   getRecordAdvanceInstruction,
+  getRecordLoadingInstruction,
   getRecordObservationInstruction,
   getRegisterBatchInstruction,
   getReleaseIntentCreatedEventEncoder,
@@ -71,6 +89,7 @@ import {
   getValuationSetEventEncoder,
   HandoverStage,
   IntentStatus,
+  LoadingStatus,
   LoanStatus,
   LockControl,
   LotState,
@@ -108,6 +127,7 @@ const addressBytes = getAddressEncoder();
 const text = new TextEncoder();
 const ASSOCIATED_TOKEN = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const SYSVAR_INSTRUCTIONS = "Sysvar1nstructions1111111111111111111111111";
 
 // ------------------------------------------------------------------------------------------------
 // The manifest tree (program-custody.md §6.3, programs/thetis/src/manifest.rs)
@@ -202,12 +222,19 @@ export type CustodyStep =
   | "accreditHaulier"
   | "transferB2"
   | "arriveB2"
-  | "arriveB3";
+  | "arriveB3"
+  | "createLoadingIntent"
+  | "acceptLoading"
+  | "reacceptLoading"
+  | "recordLoading"
+  | "attestDeparture2"
+  | "prepareS3";
 
 /**
  * SYNTHETIC: one signature index per step (live-custody.md §9.1: k from 240; the route steps below
  * 240 because a synthetic signature index stops at 255, T063d.2 pre-check fold 6; 237 is
- * T063d.3's border observation, its pre-check fold 2).
+ * T063d.3's border observation, its pre-check fold 2; 224–229 the loading, T063d.4 pre-check folds 2
+ * and 3).
  */
 const STEP_SIGNATURE: Record<CustodyStep, number> = {
   accreditKopano: 240,
@@ -233,6 +260,13 @@ const STEP_SIGNATURE: Record<CustodyStep, number> = {
   observeB2: 237,
   arriveB2: 238,
   arriveB3: 239,
+  // The loading (T063d.4 pre-check fold 2): §9.1's 258–260 exceed 255.
+  createLoadingIntent: 224,
+  acceptLoading: 225,
+  recordLoading: 226,
+  reacceptLoading: 227,
+  attestDeparture2: 228,
+  prepareS3: 229,
 };
 
 export type CustodyScenario = {
@@ -247,7 +281,8 @@ export type CustodyScenario = {
   loan: string;
   intents: string[];
   document: string;
-  shipments: { s1: string; s2: string };
+  /** S3 (PORT-T1 → KOPANO-YARD-1) in the `loading: "ship"` variant only. */
+  shipments: { s1: string; s2: string; s3?: string };
   /** B3 is S2's second batch, in the partial-arrival variant only. */
   batches: { b1: string; b2: string; b3?: string };
   /** The HandoverRecord each handover step creates. */
@@ -256,6 +291,11 @@ export type CustodyScenario = {
   haulier?: string;
   /** The prepared_at of S1 and S2 (unix seconds). */
   preparedAt: { s1: bigint; s2: bigint };
+  intake: string;
+  lock: string;
+  /** The loading intent (nonce 1) and the Lender One acceptance, in the loading variants only. */
+  loadingIntent?: string;
+  acceptance?: string;
   firstSignature: string;
 };
 
@@ -280,6 +320,15 @@ export type CustodyOptions = {
   transfer?: boolean;
   /** S2 carries two batches (3,000,000 and 2,000,000 kg); with `route`, both depart and arrive. */
   partial?: boolean;
+  /**
+   * With `route`, after the arrival (live-custody.md §9.1 loadingHistory, T063d.4 pre-check folds):
+   * "record" creates the loading intent, Lender One accepts it, and the loading is recorded; "ship"
+   * creates the intent, then Port Terminal T1 attests a second Departure document and S3 leaves
+   * PORT-T1 for KOPANO-YARD-1.
+   */
+  loading?: "record" | "ship";
+  /** With `loading: "record"`: Lender One accepts again (version 2) before the loading. */
+  reaccept?: boolean;
 };
 
 /**
@@ -382,11 +431,40 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     ],
   });
 
+  // Port Terminal T1's Departure document for S3 (T063d.4 pre-check fold 3): version 2 of the lot's.
+  const document2Version = 2;
+  const [document2, document2Bump] = await getProgramDerivedAddress({
+    programAddress: PROGRAM as Address,
+    seeds: [
+      text.encode("document"),
+      addressBytes.encode(protocol),
+      new Uint8Array([DocumentKind.Departure]),
+      addressBytes.encode(lot as Address),
+      new Uint8Array([document2Version, 0, 0, 0]),
+    ],
+  });
+  const [loadingIntent, loadingIntentBump] = await findLoadingIntentPda({ position, nonce: 1n });
+  const [acceptance, acceptanceBump] = await findAcceptancePda({ intent: loadingIntent, loan });
+
   // The two shipments, carried by Mosela Haulage (live-custody.md §9.1): one batch each, or, in
   // the partial variant, two for S2 (T063d.2 pre-check fold 4: program-custody.md §6.3's M2 split).
+  type Route = {
+    source: string;
+    sourceCustodian: string;
+    destination: string;
+    destinationCustodian: string;
+    document: string;
+  };
   const shipmentInput = async (
     id: number,
     parts: { load: number; manifest: number; quantityKg: bigint }[],
+    route: Route = {
+      source: kopanoClass,
+      sourceCustodian: kopano,
+      destination: portClass,
+      destinationCustodian: port,
+      document,
+    },
   ) => {
     const shipmentId = fill(16, id);
     const [address, bump] = await findShipmentPda({ protocol, shipmentId });
@@ -412,7 +490,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         };
       }),
     );
-    return { address, bump, shipmentId, root: manifestRoot(leaves), batches };
+    return { address, bump, shipmentId, root: manifestRoot(leaves), batches, route };
   };
   const s1 = await shipmentInput(0x22, [{ load: 0x33, manifest: 0x44, quantityKg: LOT_KG }]);
   const s2 = await shipmentInput(
@@ -424,6 +502,14 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         ]
       : [{ load: 0x55, manifest: 0x66, quantityKg: LOT_KG }],
   );
+  // S3 takes the loaded-for-nothing lot back from PORT-T1 (T063d.4 pre-check fold 3).
+  const s3 = await shipmentInput(0x24, [{ load: 0x58, manifest: 0x68, quantityKg: LOT_KG }], {
+    source: portClass,
+    sourceCustodian: port,
+    destination: kopanoClass,
+    destinationCustodian: kopano,
+    document: document2,
+  });
   const haulierOrgId = Uint8Array.from(Buffer.from(HAULIER_ORG_ID.replaceAll("-", ""), "hex"));
   const [haulier, haulierBump] = await findOrganisationPda({ protocol, orgId: haulierOrgId });
   const haulierName = await findOrganisationNamePda(protocol, HAULIER_NAME);
@@ -439,13 +525,18 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
   // ---- the chain state the steps change ----
   const state = {
     kopanoOccupied: 0n,
+    kopanoReserved: 0n,
     portReserved: 0n,
     portOccupied: 0n,
     lotRevision: 0n,
     lotState: LotState.Stored as LotState,
     lotClass: kopanoClass as string,
     positionRevision: 0n,
+    lotSupply: LOT_KG,
+    positionKg: LOT_KG,
     lockedKg: 0n,
+    lockKg: LOT_KG,
+    intakeRetired: false,
     loanCount: 0,
     issuedAt: 0n,
     valuationSetAt: 0n,
@@ -455,7 +546,23 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
       accrualRemainder: 0n,
       accruedAt: 0n,
       revision: 0n,
+      status: LoanStatus.Active as LoanStatus,
     },
+    loading: {
+      expiresAt: 0n,
+      positionRevision: 0n,
+      lockedKg: 0n,
+      status: LoadingStatus.Open as LoadingStatus,
+      executedAt: null as bigint | null,
+    },
+    acceptance: {
+      version: 0,
+      loanRevision: 0n,
+      principal: 0n,
+      bookedInterest: 0n,
+      acceptedAt: 0n,
+    },
+    document2ValidUntil: 0n,
     intents: [] as {
       address: string;
       bump: number;
@@ -503,7 +610,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           siteCode: KOPANO_SITE,
           approvedCapacityKg: KOPANO_CAPACITY_KG,
           occupiedKg: state.kopanoOccupied,
-          reservedInboundKg: 0n,
+          reservedInboundKg: state.kopanoReserved,
           bump: kopanoClassBump,
         }),
       ),
@@ -533,7 +640,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           parent: none(),
           root: lot,
           mint,
-          supplyKg: LOT_KG,
+          supplyKg: state.lotSupply,
           state: state.lotState,
           restriction: Restriction.Normal,
           expiresAt: state.issuedAt + SEED.lotValiditySecs,
@@ -548,7 +655,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           protocol,
           lot,
           owner: khunou,
-          quantityKg: LOT_KG,
+          quantityKg: state.positionKg,
           lockedKg: state.lockedKg,
           reservedKg: 0n,
           revision: state.positionRevision,
@@ -598,7 +705,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           lot,
           position,
           index: 0,
-          status: LoanStatus.Active,
+          status: state.loan.status,
           rateBps: 1200,
           termsVersion: 1,
           principal: state.loan.principal,
@@ -616,7 +723,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           protocol,
           loan,
           position,
-          quantityKg: LOT_KG,
+          quantityKg: state.lockKg,
           control: LockControl.Pledged,
           bump: lockBump,
         }),
@@ -665,15 +772,15 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           lot,
           position,
           owner: khunou,
-          source: kopanoClass,
-          sourceCustodian: kopano,
-          destination: portClass,
-          destinationCustodian: port,
+          source: input.route.source as Address,
+          sourceCustodian: input.route.sourceCustodian as Address,
+          destination: input.route.destination as Address,
+          destinationCustodian: input.route.destinationCustodian as Address,
           committedKg: LOT_KG,
           lockedKg: LOT_KG,
           batchCount: input.batches.length,
           manifestRoot: input.root,
-          departureDocument: document,
+          departureDocument: input.route.document as Address,
           registeredCount: current.registered,
           registeredKg: current.registeredKg,
           departedCount: current.departed,
@@ -724,6 +831,68 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           bump: haulierBump,
         }),
       ),
+    intake: () =>
+      thetis(
+        bytesOf(getIntakeIdentityEncoder(), {
+          protocol,
+          custodian: kopano,
+          intakeDigest,
+          lot,
+          retired: state.intakeRetired,
+          bump: intakeBump,
+        }),
+      ),
+    document2: () =>
+      thetis(
+        bytesOf(getDocumentAttestationEncoder(), {
+          protocol,
+          kind: DocumentKind.Departure,
+          subject: Uint8Array.from(addressBytes.encode(lot as Address)),
+          version: document2Version,
+          issuer: port,
+          sha256: fill(32, 0xde),
+          validUntil: state.document2ValidUntil,
+          revokedAt: none(),
+          bump: document2Bump,
+        }),
+      ),
+    loadingIntent: () =>
+      thetis(
+        bytesOf(getLoadingIntentEncoder(), {
+          protocol,
+          lot,
+          position,
+          owner: khunou,
+          terminal: port,
+          custodianClass: portClass,
+          nonce: 1n,
+          quantityKg: LOT_KG,
+          lockedKg: state.loading.lockedKg,
+          documentSha256: fill(32, 0xaa),
+          positionRevision: state.loading.positionRevision,
+          expiresAt: state.loading.expiresAt,
+          status: state.loading.status,
+          executedAt: state.loading.executedAt === null ? none() : some(state.loading.executedAt),
+          bump: loadingIntentBump,
+        }),
+      ),
+    acceptance: () =>
+      thetis(
+        bytesOf(getHandoffAcceptanceEncoder(), {
+          protocol,
+          intent: loadingIntent,
+          loan,
+          lock,
+          lender: lenderOrg,
+          lockQuantityKg: LOT_KG,
+          loanRevision: state.acceptance.loanRevision,
+          principal: state.acceptance.principal,
+          bookedInterest: state.acceptance.bookedInterest,
+          acceptedAt: state.acceptance.acceptedAt,
+          version: state.acceptance.version,
+          bump: acceptanceBump,
+        }),
+      ),
   };
 
   const tx = (
@@ -747,7 +916,9 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     state.lotRevision += 1n;
     state.positionRevision += 1n;
     state.lotState = LotState.Prepared;
-    state.portReserved += LOT_KG;
+    const toPort = input.route.destination === portClass;
+    if (toPort) state.portReserved += LOT_KG;
+    else state.kopanoReserved += LOT_KG;
     state.shipments.set(input.address, {
       status: ShipmentStatus.Prepared,
       preparedAt: now,
@@ -770,11 +941,11 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           ownerAuthority,
           lot: lot as Address,
           position,
-          sourceClass: kopanoClass,
-          destinationClass: portClass,
-          destinationOrg: port as Address,
-          departureDocument: document,
-          departureIssuer: kopano as Address,
+          sourceClass: input.route.source as Address,
+          destinationClass: input.route.destination as Address,
+          destinationOrg: input.route.destinationCustodian as Address,
+          departureDocument: input.route.document as Address,
+          departureIssuer: input.route.sourceCustodian as Address,
           shipment: input.address,
           shipmentId: input.shipmentId,
           batchCount: input.batches.length,
@@ -786,13 +957,13 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           shipment: input.address,
           lot,
           owner: khunou,
-          source: kopanoClass,
-          destination: portClass,
+          source: input.route.source,
+          destination: input.route.destination,
           committedKg: LOT_KG,
           lockedKg: LOT_KG,
           batchCount: input.batches.length,
           manifestRoot: input.root,
-          departureDocument: document,
+          departureDocument: input.route.document,
           lotRevision: state.lotRevision,
           positionRevision: state.positionRevision,
         }),
@@ -802,7 +973,7 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         [input.address]: enc.shipment(input),
         [lot]: enc.lot(),
         [position]: enc.position(),
-        [portClass]: enc.portClass(),
+        ...(toPort ? { [portClass]: enc.portClass() } : { [kopanoClass]: enc.kopanoClass() }),
       },
     };
   };
@@ -1059,6 +1230,17 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
         : options.transfer
           ? (["departB2", "accreditHaulier", "transferB2", "arriveB2"] as const)
           : (["departB2", "observeB2", "arriveB2"] as const)
+      : []),
+    ...(options.route && options.loading === "record"
+      ? ([
+          "createLoadingIntent",
+          "acceptLoading",
+          ...(options.reaccept ? (["reacceptLoading"] as const) : []),
+          "recordLoading",
+        ] as const)
+      : []),
+    ...(options.route && options.loading === "ship"
+      ? (["createLoadingIntent", "attestDeparture2", "prepareS3"] as const)
       : []),
   ];
   const handovers: CustodyScenario["handovers"] = {};
@@ -1485,6 +1667,231 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
           },
         };
         break;
+      case "createLoadingIntent": {
+        // loading.rs create_loading_intent, step 7: the intent snapshots the whole position and
+        // bumps its revision (live-custody.md §9.1 loadingHistory, 258 → 224).
+        const expectedRevision = state.positionRevision;
+        state.positionRevision += 1n;
+        state.loading.positionRevision = state.positionRevision;
+        state.loading.lockedKg = state.lockedKg;
+        state.loading.expiresAt = now + 86_400n;
+        const documentSha256 = fill(32, 0xaa);
+        made = {
+          tx: tx(
+            signature,
+            "CreateLoadingIntent",
+            getCreateLoadingIntentInstruction({
+              sponsor,
+              protocol,
+              ownerOrg: khunou as Address,
+              ownerAuthority,
+              lot: lot as Address,
+              position,
+              custodianClass: portClass,
+              terminalOrg: port as Address,
+              intent: loadingIntent,
+              nonce: 1n,
+              documentSha256,
+              expiresAt: state.loading.expiresAt,
+              expectedRevision,
+              validUntil: now + 570n,
+            }),
+            bytesOf(getLoadingIntentCreatedEventEncoder(), {
+              intent: loadingIntent,
+              lot,
+              position,
+              owner: khunou,
+              terminal: port,
+              quantityKg: LOT_KG,
+              lockedKg: state.loading.lockedKg,
+              documentSha256,
+              expiresAt: state.loading.expiresAt,
+              positionRevision: state.loading.positionRevision,
+            }),
+            true,
+          ),
+          accounts: { [loadingIntent]: enc.loadingIntent(), [position]: enc.position() },
+        };
+        break;
+      }
+      case "acceptLoading":
+      case "reacceptLoading": {
+        // loading.rs accept_loading, step 6: Lender One's consent snapshots the loan and the lock.
+        const first = state.acceptance.version === 0;
+        state.acceptance.version += 1;
+        state.acceptance.loanRevision = state.loan.revision;
+        state.acceptance.principal = state.loan.principal;
+        state.acceptance.bookedInterest = state.loan.bookedInterest;
+        state.acceptance.acceptedAt = now;
+        made = {
+          tx: tx(
+            signature,
+            "AcceptLoading",
+            getAcceptLoadingInstruction({
+              lender: lenderWallet,
+              payer: sponsor,
+              protocol,
+              authority: lenderAuthority,
+              lenderOrg: lenderOrg as Address,
+              facility,
+              loan,
+              lock,
+              lot: lot as Address,
+              position,
+              intent: loadingIntent,
+              acceptance,
+              expectedRevision: state.loan.revision,
+            }),
+            bytesOf(getLoadingAcceptedEventEncoder(), {
+              acceptance,
+              intent: loadingIntent,
+              loan,
+              lender: lenderOrg,
+              lockQuantityKg: state.lockKg,
+              loanRevision: state.acceptance.loanRevision,
+              principal: state.acceptance.principal,
+              bookedInterest: state.acceptance.bookedInterest,
+              version: state.acceptance.version,
+            }),
+            first,
+          ),
+          accounts: { [acceptance]: enc.acceptance() },
+        };
+        break;
+      }
+      case "recordLoading": {
+        // loading.rs record_loading, steps 6, 7 and 9: the receipts burned, PORT-T1 freed, the
+        // intake retired (no children), the loan accrued and handed off with its debt.
+        const expectedRevision = state.positionRevision;
+        const { interest, remainder } = accrueSimple({
+          principal: state.loan.principal,
+          rateBps: 1200n,
+          elapsedSeconds: now - state.loan.accruedAt,
+          carriedRemainder: state.loan.accrualRemainder,
+        });
+        state.loan.bookedInterest += interest;
+        state.loan.accrualRemainder = remainder;
+        state.loan.accruedAt = now;
+        const externalHandoff = state.loan.principal > 0n || state.loan.bookedInterest > 0n;
+        if (externalHandoff) state.loan.status = LoanStatus.ExternalHandoff;
+        state.loan.revision += 1n;
+        const releasedKg = state.lockKg;
+        state.lockKg = 0n;
+        state.positionKg = 0n;
+        state.lockedKg = 0n;
+        state.positionRevision += 1n;
+        state.lotSupply = 0n;
+        state.lotRevision += 1n;
+        state.lotState = LotState.Loaded;
+        state.portOccupied -= LOT_KG;
+        state.intakeRetired = true;
+        state.loading.status = LoadingStatus.Executed;
+        state.loading.executedAt = now;
+        const instruction = getRecordLoadingInstruction({
+          sponsor,
+          protocol,
+          ownerOrg: khunou as Address,
+          ownerAuthority,
+          terminalOrg: port as Address,
+          terminalAuthority: await authorityOf(45),
+          custodianClass: portClass,
+          lot: lot as Address,
+          intake,
+          mint,
+          position,
+          vaultAuthority,
+          vault: vault as Address,
+          intent: loadingIntent,
+          instructions: SYSVAR_INSTRUCTIONS as Address,
+          tokenProgram: TOKEN_2022 as Address,
+          expectedRevision,
+          validUntil: now + 570n,
+        });
+        made = {
+          tx: thetisTransaction({
+            signature,
+            feePayer: sponsor.address,
+            name: "RecordLoading",
+            // The triple (acceptance, loan, lock) after the IDL accounts (program-custody.md §6.1).
+            instruction: {
+              ...instruction,
+              accounts: [
+                ...instruction.accounts,
+                { address: acceptance, role: AccountRole.READONLY },
+                { address: loan, role: AccountRole.WRITABLE },
+                { address: lock, role: AccountRole.WRITABLE },
+              ],
+            },
+            events: [
+              bytesOf(getLoadingRecordedEventEncoder(), {
+                intent: loadingIntent,
+                lot,
+                position,
+                owner: khunou,
+                terminal: port,
+                quantityKg: LOT_KG,
+                documentSha256: fill(32, 0xaa),
+                loansAccepted: 1,
+                lotLoaded: true,
+                lotRevision: state.lotRevision,
+                positionRevision: state.positionRevision,
+              }),
+              bytesOf(getLoanHandedOffEventEncoder(), {
+                loan,
+                intent: loadingIntent,
+                releasedKg,
+                principal: state.loan.principal,
+                bookedInterest: state.loan.bookedInterest,
+                externalHandoff,
+                revision: state.loan.revision,
+              }),
+            ],
+          }),
+          accounts: {
+            [lot]: enc.lot(),
+            [position]: enc.position(),
+            [loadingIntent]: enc.loadingIntent(),
+            [portClass]: enc.portClass(),
+            [intake]: enc.intake(),
+            [loan]: enc.loan(),
+            [lock]: enc.lock(),
+          },
+        };
+        break;
+      }
+      case "attestDeparture2":
+        state.document2ValidUntil = now + 30n * 86_400n;
+        made = {
+          tx: tx(
+            signature,
+            "AttestDocument",
+            getAttestDocumentInstruction({
+              protocol,
+              organisation: port as Address,
+              authority: await authorityOf(45),
+              document: document2,
+              wallet: await syntheticSigner(45),
+              payer: sponsor,
+              kind: DocumentKind.Departure,
+              subject: Uint8Array.from(addressBytes.encode(lot as Address)),
+              version: document2Version,
+              sha256: fill(32, 0xde),
+              validUntil: state.document2ValidUntil,
+            }),
+            bytesOf(getDocumentAttestedEventEncoder(), {
+              document: document2,
+              kind: DocumentKind.Departure,
+              subject: Uint8Array.from(addressBytes.encode(lot as Address)),
+              version: document2Version,
+            }),
+            true,
+          ),
+          accounts: { [document2]: enc.document2() },
+        };
+        break;
+      case "prepareS3":
+        made = prepare(s3, now, signature);
+        break;
       case "cancelS1": {
         const current = state.shipments.get(s1.address);
         if (!current) throw new Error("S1 is not prepared");
@@ -1542,7 +1949,11 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
     loan,
     intents: state.intents.map((intent) => intent.address),
     document,
-    shipments: { s1: s1.address, s2: s2.address },
+    shipments: {
+      s1: s1.address,
+      s2: s2.address,
+      ...(options.loading === "ship" ? { s3: s3.address } : {}),
+    },
     batches: {
       b1: s1.batches[0]?.address as string,
       b2: s2.batches[0]?.address as string,
@@ -1554,6 +1965,9 @@ export async function custodyHistory(options: CustodyOptions = {}): Promise<Cust
       s1: state.shipments.get(s1.address)?.preparedAt ?? 0n,
       s2: state.shipments.get(s2.address)?.preparedAt ?? 0n,
     },
+    intake,
+    lock,
+    ...(options.loading ? { loadingIntent, acceptance } : {}),
     firstSignature: f.seedSignatures.deploy,
   };
 }
@@ -1569,4 +1983,21 @@ export async function routeHistory(
   options: { transfer?: boolean; partial?: boolean } = {},
 ): Promise<CustodyScenario> {
   return custodyHistory({ ...options, route: true });
+}
+
+/**
+ * routeHistory() then the loading (live-custody.md §9.1 loadingHistory, T063d.4 pre-check folds 2
+ * and 3): Khunou's loading intent at PORT-T1 (224), Lender One's acceptance (225; `reaccept` adds
+ * version 2 at 227), and the loading by Khunou and Port Terminal T1 (226). `ship` replaces the
+ * acceptance and the loading with Port Terminal T1's Departure document v2 (228) and S3 to
+ * KOPANO-YARD-1 (229), which leaves the intent stale.
+ */
+export async function loadingHistory(
+  options: { reaccept?: boolean; ship?: boolean } = {},
+): Promise<CustodyScenario> {
+  return custodyHistory({
+    route: true,
+    loading: options.ship ? "ship" : "record",
+    ...(options.reaccept ? { reaccept: true } : {}),
+  });
 }

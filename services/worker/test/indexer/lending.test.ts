@@ -1,11 +1,11 @@
 // Phase 2: lending events and accounts into the read model (live-lending.md §4.1, §9.1).
 // Every history here is synthetic (fixtures/synthetic.ts, "The lending fixtures").
 
-import type { Address } from "@solana/kit";
+import { createHash } from "node:crypto";
+import { AccountRole, type Address } from "@solana/kit";
 import {
   getAdvanceRecordedEventDecoder,
   getAdvanceRecordedEventEncoder,
-  getCreateLoadingIntentInstruction,
   getLoanDecoder,
   getLoanEncoder,
   getPaymentConfirmedEventEncoder,
@@ -965,41 +965,35 @@ describe("Phase 2 lending", () => {
     }
   });
 
-  // T063d.4 replaces this case with the next unhandled Phase 3 instruction once create_loading_intent
-  // is handled (live-custody.md §9.3 and its T063d.3 pre-check fold 4).
-  it("halts with UNKNOWN_INSTRUCTION on its own instance's CreateLoadingIntent, a Phase 3 instruction not yet handled", async () => {
+  // T063d.5 replaces this case with set_restriction's or the next unhandled instruction once
+  // attest_shortfall is handled. Until the program builds it, attest_shortfall is not in the IDL, so its
+  // Anchor discriminator names no instruction (live-custody.md §9.3 and its T063d.4 pre-check fold 6).
+  it("halts with UNKNOWN_INSTRUCTION on its own instance's AttestShortfall, a Phase 3 instruction not yet handled", async () => {
     const scenario = await lendingHistory();
     const sponsor = await syntheticSigner(97);
-    const other = async (n: number) => (await syntheticSigner(n)).address;
-    const prepare = thetisTransaction({
+    const discriminator = createHash("sha256").update("global:attest_shortfall").digest();
+    const shortfall = thetisTransaction({
       signature: syntheticSignature(218),
       feePayer: sponsor.address,
-      name: "CreateLoadingIntent",
+      name: "AttestShortfall",
       events: [],
-      instruction: getCreateLoadingIntentInstruction({
-        sponsor,
-        protocol: scenario.protocol as Address,
-        ownerOrg: scenario.org("khunou") as Address,
-        ownerAuthority: await other(96),
-        lot: scenario.lot as Address,
-        position: await other(91),
-        custodianClass: await other(90),
-        terminalOrg: await other(94),
-        intent: await other(95),
-        nonce: 1n,
-        documentSha256: new Uint8Array(32).fill(0x52),
-        expiresAt: 1_800_000_000n,
-        expectedRevision: 0n,
-        validUntil: 1_800_000_000n,
-      }),
+      instruction: {
+        programAddress: PROGRAM as Address,
+        accounts: [
+          { address: sponsor.address, role: AccountRole.WRITABLE_SIGNER },
+          { address: scenario.protocol as Address, role: AccountRole.READONLY },
+          { address: scenario.lot as Address, role: AccountRole.WRITABLE },
+        ],
+        data: new Uint8Array([...discriminator.subarray(0, 8), ...new Uint8Array(8)]),
+      },
     });
     const slot = lastSlot(scenario.history) + 1000;
-    scenario.history.push({ slot, blockTime: null, transactions: [prepare], accounts: {} });
+    scenario.history.push({ slot, blockTime: null, transactions: [shortfall], accounts: {} });
     const h = await harness(scenario.history);
     await expectHalt(h, await h.poll(), "UNKNOWN_INSTRUCTION", {
       step: "decode",
-      signature: prepare.signature,
-      mentions: ["CreateLoadingIntent", "not handled"],
+      signature: shortfall.signature,
+      mentions: ["discriminator no instruction carries"],
     });
     expect((await h.checkpoint())?.indexedThroughSlot).toBe(slot - 1000);
   });
