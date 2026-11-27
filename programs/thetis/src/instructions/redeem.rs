@@ -116,15 +116,16 @@ pub fn redeem(
             && position.owner == owner_key
             && lot.mint == accounts.mint.key()
             && intake.key() == lot.intake
-            && intake.custodian == custodian_key
             && intake.lot == lot.root,
         ThetisError::WrongOrganisation
     );
+    // The intake is the issuing custodian's PDA; a lot collected at another custodian's site
+    // (after a shipment) still retires its own intake.
     let intake_address = Pubkey::create_program_address(
         &[
             b"intake",
             protocol_key.as_ref(),
-            custodian_key.as_ref(),
+            intake.custodian.as_ref(),
             &intake.intake_digest,
             &[intake.bump],
         ],

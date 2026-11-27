@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::state::{DocumentKind, PaymentPurpose, Role};
+use crate::state::{DocumentKind, HandoverStage, LotState, PaymentPurpose, Role, ShipmentStatus};
 
 #[event]
 pub struct ProtocolInitialized {
@@ -300,4 +300,21 @@ pub struct ShipmentCancelled {
     pub released_kg: u64,
     pub lot_revision: u64,
     pub revision: u64,
+}
+
+#[event]
+pub struct CustodyHandedOver {
+    pub handover: Pubkey,
+    pub batch: Pubkey,
+    pub shipment: Pubkey,
+    pub lot: Pubkey,
+    pub sequence: u64,
+    pub from: Pubkey,
+    pub to: Pubkey,
+    pub stage: HandoverStage,
+    pub quantity_kg: u64,
+    pub shipment_status: ShipmentStatus,
+    pub lot_state: LotState,
+    pub shipment_revision: u64,
+    pub lot_revision: u64,
 }

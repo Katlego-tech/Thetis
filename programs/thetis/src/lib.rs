@@ -13,6 +13,7 @@ pub mod validate;
 use instructions::advance::{self, *};
 use instructions::documents::{self, *};
 use instructions::facility::{self, *};
+use instructions::handover::{self, *};
 use instructions::issue::{self, *};
 use instructions::payment::{self, *};
 use instructions::pledge::{self, *};
@@ -368,5 +369,14 @@ pub mod thetis {
         valid_until: i64,
     ) -> Result<()> {
         shipment::cancel_shipment(ctx, expected_revision, valid_until)
+    }
+
+    pub fn handover(
+        ctx: Context<Handover>,
+        manifest_digest: [u8; 32],
+        expected_sequence: u64,
+        valid_until: i64,
+    ) -> Result<()> {
+        handover::handover(ctx, manifest_digest, expected_sequence, valid_until)
     }
 }

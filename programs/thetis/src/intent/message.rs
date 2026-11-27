@@ -2,7 +2,7 @@ use std::fmt::{Arguments, Write};
 
 use anchor_lang::solana_program::pubkey::Pubkey;
 
-use crate::state::MAX_DISPLAY_NAME;
+use crate::state::{HandoverStage, MAX_DISPLAY_NAME};
 
 pub fn format_tonnes(kg: u64) -> String {
     format!(
@@ -519,6 +519,52 @@ pub fn cancel_shipment_message(
              To: {destination}\n\
              Site: {site_code}\n\
              Revision: {expected_revision}"
+        ),
+        valid_until,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fields are the signed message contract"
+)]
+pub fn custody_handover_message(
+    program_id: &Pubkey,
+    instance_id: &[u8; 16],
+    lot_id: &str,
+    shipment_id: &[u8; 16],
+    batch_number: u8,
+    batch_count: u8,
+    quantity_kg: u64,
+    from: &str,
+    to: &str,
+    stage: HandoverStage,
+    manifest_digest: &[u8; 32],
+    expected_sequence: u64,
+    valid_until: i64,
+) -> Vec<u8> {
+    let shipment = hex(shipment_id);
+    let quantity = format_tonnes(quantity_kg);
+    let stage = match stage {
+        HandoverStage::Departure => "Departure",
+        HandoverStage::Transfer => "Transfer",
+        HandoverStage::Arrival => "Arrival",
+    };
+    let manifest = digest_hex(manifest_digest);
+    signed_message(
+        program_id,
+        instance_id,
+        "Hand over custody",
+        format_args!(
+            "Lot: {lot_id}\n\
+             Shipment: {shipment}\n\
+             Batch: {batch_number} of {batch_count}\n\
+             Quantity: {quantity}\n\
+             From: {from}\n\
+             To: {to}\n\
+             Stage: {stage}\n\
+             Manifest: {manifest}\n\
+             Sequence: {expected_sequence}"
         ),
         valid_until,
     )
