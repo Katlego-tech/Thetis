@@ -94,8 +94,12 @@ export function createCommand(
   return apiPost<CommandView>("/v1/commands", body, accessToken);
 }
 
-export function getCommand(id: string, accessToken: string): Promise<ApiResult<CommandView>> {
-  return apiGet<CommandView>(base(id), accessToken);
+export function getCommand(
+  id: string,
+  accessToken: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ApiResult<CommandView>> {
+  return apiGet<CommandView>(base(id), accessToken, options);
 }
 
 export function postCommandSignature(

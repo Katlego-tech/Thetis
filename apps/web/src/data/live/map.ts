@@ -703,13 +703,41 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
     return member ? { id: member.slug, name: member.name, role: member.kind } : null;
   }
 
+  /** A position's visible open locks, by lender name then loan, and its locked_kg beyond them. */
+  function locksOf(position: ChainPositionRow) {
+    const visibleLocks = data.locks
+      .filter((row) => {
+        const owner = loanByAddress.get(row.loan);
+        return (
+          row.position === position.address && owner !== undefined && owner.status !== "Closed"
+        );
+      })
+      .map((row) => {
+        const owner = loanByAddress.get(row.loan) as ChainLoanRow;
+        const facility = facilityByAddress.get(owner.facility) as ChainFacilityRow;
+        return {
+          loan: owner.address,
+          lender: organisation(facility.lender),
+          kg: parseU64(row.quantity_kg),
+        };
+      })
+      .toSorted(
+        (first, second) =>
+          compareText(first.lender.name, second.lender.name) ||
+          compareText(first.loan, second.loan),
+      );
+    const lockedKg = parseU64(position.locked_kg);
+    const visibleLockedKg = visibleLocks.reduce((sum, { kg }) => sum + kg, 0n);
+    const hiddenLockedKg = lockedKg > visibleLockedKg ? lockedKg - visibleLockedKg : 0n;
+    return { visibleLocks, hiddenLockedKg };
+  }
+
   /** live-lending.md §6.10.4: the loading intents of the viewer's positions, from chain rows and `now`. */
   function loadingView(
     lot: ChainLotRow,
     shown: ChainPositionRow,
     member: OrganisationRow,
     loans: LiveLoan[],
-    hiddenLockedKg: bigint,
   ): LiveLoading {
     const custodian = data.organisationByAddress.get(lot.custodian)?.row;
     const custodianClass = data.custodianClassByAddress.get(lot.custodian_class)?.row;
@@ -723,13 +751,28 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
         .filter((row) => row.lot === lot.address && row.lender_org_id === member.id)
         .map((row) => row.position),
     ]);
+    // An intent whose position is not one of this lot's is left out (T056x X1: a bad row fails
+    // soft, never the whole dossier).
     const intents = data.loadingIntents
-      .filter((row) => row.lot === lot.address && viewed.has(row.position))
+      .filter(
+        (row) =>
+          row.lot === lot.address &&
+          viewed.has(row.position) &&
+          positionByAddress.has(row.position),
+      )
       .toSorted((first, second) => {
         const delta = parseU64(second.position_revision) - parseU64(first.position_revision);
         return delta !== 0n ? (delta < 0n ? -1 : 1) : compareText(first.address, second.address);
       })
-      .map((row) => loadingIntentView(row, lot, positionByAddress, member, loans, hiddenLockedKg));
+      .map((row) =>
+        loadingIntentView(
+          row,
+          lot,
+          positionByAddress.get(row.position) as ChainPositionRow,
+          member,
+          loans,
+        ),
+      );
     return {
       terminal: custodian?.role === "Terminal" ? organisation(lot.custodian) : null,
       site: custodianClass?.site_code ?? "",
@@ -741,14 +784,12 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
   function loadingIntentView(
     row: ChainLoadingIntentRow,
     lot: ChainLotRow,
-    positionByAddress: Map<string, ChainPositionRow>,
+    position: ChainPositionRow,
     member: OrganisationRow,
     loans: LiveLoan[],
-    hiddenLockedKg: bigint,
   ): LiveLoadingIntent {
-    const position = positionByAddress.get(row.position);
-    if (!position)
-      throw new LiveDataError("BAD_ROW", "loadingIntents", `unresolved ${row.address}`);
+    // The locks of the intent's own position, not the shown one's (T056x X1).
+    const hiddenLockedKg = locksOf(position).hiddenLockedKg;
     const expiresAt = parseI64(row.expires_at, "loadingIntents.expires_at");
     const current = parseU64(row.position_revision) === parseU64(position.revision);
     const unexpiredIntent = expiresAt * 1000n > nowMs;
@@ -858,6 +899,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       rows,
       accepted: acceptedCount,
       required: requiredCount,
+      hiddenLockedKg,
       handOffs: recorded
         ? rows.flatMap(({ loan: address }) => {
             const loan = loans.find((candidate) => candidate.address === address);
@@ -981,27 +1023,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       };
     }
 
-    const visibleLocks = data.locks
-      .filter((row) => {
-        const owner = loanByAddress.get(row.loan);
-        return row.position === shown.address && owner !== undefined && owner.status !== "Closed";
-      })
-      .map((row) => {
-        const owner = loanByAddress.get(row.loan) as ChainLoanRow;
-        const facility = facilityByAddress.get(owner.facility) as ChainFacilityRow;
-        return {
-          loan: owner.address,
-          lender: organisation(facility.lender),
-          kg: parseU64(row.quantity_kg),
-        };
-      })
-      .toSorted(
-        (first, second) =>
-          compareText(first.lender.name, second.lender.name) ||
-          compareText(first.loan, second.loan),
-      );
-    const visibleLockedKg = visibleLocks.reduce((sum, { kg }) => sum + kg, 0n);
-    const hiddenLockedKg = lockedKg > visibleLockedKg ? lockedKg - visibleLockedKg : 0n;
+    const { visibleLocks, hiddenLockedKg } = locksOf(shown);
     const loanViews = data.loans
       .filter((loan) => loan.lot === lot.address)
       .toSorted(
@@ -1044,7 +1066,7 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
       classPolicy: lot.class_policy,
       grade: lot.grade,
       custodianClass: lot.custodian_class,
-      loading: loadingView(lot, shown, member, loanViews, hiddenLockedKg),
+      loading: loadingView(lot, shown, member, loanViews),
     };
 
     return {
@@ -1324,7 +1346,8 @@ export function liveReader(snapshot: LiveSnapshot, now: Date): LiveReader {
               ...common,
               id: `record-loading:${intent.address}`,
               action: "Record loading",
-              blocker: `Every lender has accepted. Record the loading with ${intent.terminal.name}.`,
+              // T064b.4 pre-check fold 12: with no lock there was nothing to accept.
+              blocker: `${intent.required === 0 ? "No loan holds a lock on this position, so no lender needs to accept." : "Every lender has accepted."} Record the loading with ${intent.terminal.name}.`,
               quantityKg: intent.quantityKg,
             },
             money: null,

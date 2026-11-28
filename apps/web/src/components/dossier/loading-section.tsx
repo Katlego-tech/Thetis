@@ -22,8 +22,9 @@ import {
 } from "./lending-copy";
 
 // The Financing tab's Loading section (live-lending.md §6.10, loading.html): the loading intents of
-// the shown position, each lender's acceptance and the owner's and lenders' actions. Every mark and
-// line comes from chain rows and the render clock; a command never marks anything done here.
+// the shown position (and, fold 10, of the viewer's other positions on the lot), each lender's
+// acceptance and the owner's and lenders' actions. Every mark and line comes from chain rows and
+// the render clock; a command never marks anything done here.
 
 const UPLOAD_HINT =
   "The bill of lading or loading record. PDF, JPEG or PNG, at most 20 MiB. Its SHA-256 goes into the signed text.";
@@ -188,7 +189,8 @@ function AcceptanceTable({
   context: string;
   actions: LendingActions | null;
 }) {
-  const hidden = lending.hiddenLockedKg > 0n;
+  // The intent's own position's hidden locks, not the shown position's (T056x X1).
+  const hidden = intent.hiddenLockedKg > 0n;
   if (intent.rows.length === 0 && !hidden) return null;
   const lends = intent.rows.some((row) => row.lender.id === context);
   const rows: Record<string, ReactNode>[] = intent.rows.map((row) => ({
@@ -210,7 +212,7 @@ function AcceptanceTable({
   if (hidden)
     rows.push({
       loan: "Other lenders",
-      locked: formatTonnes(lending.hiddenLockedKg),
+      locked: formatTonnes(intent.hiddenLockedKg),
       acceptance: "Not visible to you",
       registry: "",
       action: null,
@@ -300,47 +302,62 @@ export function LoadingSection({
     lending.shownPosition.owner.id === context &&
     lot.custody === "Stored" &&
     loading.positionQuantityKg > 0n;
-  const [newest, ...older] = loading.intents;
-  if (!newest && !mayCreate) return null;
+  // The newest intent of each position gets a full block (only it can be live); the shown
+  // position's come first, then each other position the viewer owns or lends on (T064b.4 pre-check
+  // fold 10), in the order of their newest intent (T056x X1).
+  const shownAddress = lending.shownPosition.address;
+  const groups = new Map<string, LiveLoadingIntent[]>([[shownAddress, []]]);
+  for (const intent of loading.intents) {
+    groups.set(intent.position, [...(groups.get(intent.position) ?? []), intent]);
+  }
+  if (loading.intents.length === 0 && !mayCreate) return null;
 
   return (
     <section aria-labelledby="financing-loading" className="flex flex-col gap-4">
       <h2 id="financing-loading">Loading</h2>
-      {!newest ? (
-        <>
-          <p className="text-(--ink-2)">
-            No loading intent for this position. The lot is stored at {terminal.name} (
-            {loading.site}), so your position can be loaded there.
-          </p>
-          {actions && (
-            <div className="act-row">
-              <CreateIntent
+      {[...groups].map(([position, [newest, ...older]]) => {
+        const shown = position === shownAddress;
+        if (!newest && !(shown && mayCreate)) return null;
+        return (
+          <div key={position} className="contents">
+            {!newest ? (
+              <>
+                <p className="text-(--ink-2)">
+                  No loading intent for this position. The lot is stored at {terminal.name} (
+                  {loading.site}), so your position can be loaded there.
+                </p>
+                {actions && (
+                  <div className="act-row">
+                    <CreateIntent
+                      lot={lot}
+                      lending={lending}
+                      context={context}
+                      actions={actions}
+                      replaces={null}
+                      primary
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <IntentBlock
+                intent={newest}
                 lot={lot}
                 lending={lending}
                 context={context}
                 actions={actions}
-                replaces={null}
-                primary
+                mayCreate={shown && mayCreate}
               />
-            </div>
-          )}
-        </>
-      ) : (
-        <IntentBlock
-          intent={newest}
-          lot={lot}
-          lending={lending}
-          context={context}
-          actions={actions}
-          mayCreate={mayCreate}
-        />
-      )}
-      {older.map((intent) => (
-        <div key={intent.address} className="work-panel gap-2">
-          <IntentHeading intent={intent} />
-          <p className="text-[13px]">{loadingTally(intent)}</p>
-        </div>
-      ))}
+            )}
+            {older.map((intent) => (
+              <div key={intent.address} className="work-panel gap-2">
+                <IntentHeading intent={intent} />
+                <p className="text-[13px]">{loadingTally(intent)}</p>
+              </div>
+            ))}
+          </div>
+        );
+      })}
     </section>
   );
 }

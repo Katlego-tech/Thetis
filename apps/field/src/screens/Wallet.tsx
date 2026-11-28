@@ -2,6 +2,7 @@ import { useState } from "react";
 import { View } from "react-native";
 import { ApiError } from "../api/client";
 import type { Challenge } from "../api/walletLinks";
+import { OrganisationSection, SignedInSection } from "../components/AccountSections";
 import { Cert, Head, Rows, Section } from "../components/Blocks";
 import { Button } from "../components/Button";
 import { Frame } from "../components/Frame";
@@ -10,7 +11,8 @@ import { ErrorBlock, Note } from "../components/Note";
 import { Picker } from "../components/Picker";
 import { SignedText } from "../components/SignedText";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useBusy, useRootChrome } from "../context";
+import { NAV_COPY } from "../copy";
 import { readSignerLinks } from "../data/reads";
 import { useSigning } from "../data/useSigning";
 import { formatClock, formatTimeOfDay, shortAddress, unixOf } from "../format";
@@ -204,6 +206,8 @@ export function Wallet() {
   const wallet = app.wallet;
   const connecting = step.kind === "connecting";
   const challengeStep = step.kind === "challenge" ? step : null;
+  useBusy(connecting || challengeStep?.note === "signing" || challengeStep?.note === "checking");
+  const chrome = useRootChrome();
   const expiresAt = challengeStep ? formatTimeOfDay(unixOf(challengeStep.challenge.expiresAt)) : "";
   const linkable = wallet && signing.link === "not_linked" && step.kind !== "linked";
 
@@ -263,7 +267,7 @@ export function Wallet() {
   return (
     <Frame
       organisation={org}
-      onBack={app.back}
+      {...chrome}
       footer={
         footer || wallet ? (
           <>
@@ -275,7 +279,11 @@ export function Wallet() {
         ) : undefined
       }
     >
-      <Head
+      <Head title={NAV_COPY.accountTitle}>
+        <Cert label={app.protocol.instanceLabel} />
+      </Head>
+
+      <Section
         title={
           challengeStep || step.kind === "preparing" || step.kind === "link_error"
             ? "Link this wallet"
@@ -284,145 +292,146 @@ export function Wallet() {
               : "Wallet"
         }
       >
-        <Cert label={app.protocol.instanceLabel} />
-      </Head>
-
-      {!wallet ? (
-        step.kind === "connecting" ? (
-          <Note>Approve the connection in your wallet.</Note>
-        ) : step.kind === "connect_refused" ? (
-          <ErrorBlock>Your wallet did not connect. Nothing was linked.</ErrorBlock>
-        ) : step.kind === "no_account" ? (
-          <ErrorBlock>{NO_ACCOUNT}</ErrorBlock>
+        {!wallet ? (
+          step.kind === "connecting" ? (
+            <Note>Approve the connection in your wallet.</Note>
+          ) : step.kind === "connect_refused" ? (
+            <ErrorBlock>Your wallet did not connect. Nothing was linked.</ErrorBlock>
+          ) : step.kind === "no_account" ? (
+            <ErrorBlock>{NO_ACCOUNT}</ErrorBlock>
+          ) : (
+            <Txt
+              style={{ fontSize: 14 }}
+            >{`Connect the wallet you sign with for ${org}. Thetis never sees its keys.`}</Txt>
+          )
         ) : (
-          <Txt
-            style={{ fontSize: 14 }}
-          >{`Connect the wallet you sign with for ${org}. Thetis never sees its keys.`}</Txt>
-        )
-      ) : (
-        <Rows
-          rows={[
-            {
-              label: "Connected",
-              value: shortAddress(wallet.address),
-              mono: true,
-              sub: "through Mobile Wallet Adapter",
-            },
-            ...(signing.link
-              ? [
-                  {
-                    label: "Link",
-                    value: signing.link === "linked" ? "Linked to you" : "Not linked",
-                  },
-                ]
-              : []),
-          ]}
-        />
-      )}
-
-      {wallet && !app.online ? (
-        <Note>
-          {signing.asOf
-            ? `Offline. The link and authority below are as this phone last read them, at ${formatClock(unixOf(signing.asOf))}. They can't be checked until you are back online.`
-            : "Offline. The link and authority can't be checked until you are back online."}
-        </Note>
-      ) : null}
-
-      {wallet && signing.link === "linked_elsewhere" && !challengeStep ? (
-        <ErrorBlock>{`This wallet is linked to another Thetis account in ${org}. Connect a different wallet.`}</ErrorBlock>
-      ) : null}
-      {wallet && signing.link === "linked_other_org" && !challengeStep ? (
-        <ErrorBlock>
-          {`You linked this wallet for ${otherOrgName}. A wallet has one active link, so connect a different wallet for ${org}.`}
-        </ErrorBlock>
-      ) : null}
-
-      {challengeStep || step.kind === "preparing" ? (
-        <>
-          <SignedText
-            text={challengeStep ? challengeStep.challenge.message : null}
-            byteLine={
-              challengeStep
-                ? `${new TextEncoder().encode(challengeStep.challenge.message).length} bytes, UTF-8. Expires at ${expiresAt}.`
-                : null
-            }
+          <Rows
+            rows={[
+              {
+                label: "Connected",
+                value: shortAddress(wallet.address),
+                mono: true,
+                sub: "through Mobile Wallet Adapter",
+              },
+              ...(signing.link
+                ? [
+                    {
+                      label: "Link",
+                      value: signing.link === "linked" ? "Linked to you" : "Not linked",
+                    },
+                  ]
+                : []),
+            ]}
           />
-          {challengeStep?.note === "signing" ? (
-            <Note>
-              Approve the signature in your wallet. Check that it shows the same text as this
-              screen.
-            </Note>
-          ) : challengeStep?.note === "refused" ? (
-            <ErrorBlock>{`Your wallet closed without signing. Nothing was linked. This message stays valid until ${expiresAt}.`}</ErrorBlock>
-          ) : (
-            <Txt variant="small" tone="ink2">
-              Signing proves this wallet is yours. The text cannot move anything or approve a
-              transaction, and your wallet should show it unchanged.
-            </Txt>
-          )}
-        </>
-      ) : null}
+        )}
 
-      {step.kind === "link_error" ? <ErrorBlock>{step.message}</ErrorBlock> : null}
+        {wallet && !app.online ? (
+          <Note>
+            {signing.asOf
+              ? `Offline. The link and authority below are as this phone last read them, at ${formatClock(unixOf(signing.asOf))}. They can't be checked until you are back online.`
+              : "Offline. The link and authority can't be checked until you are back online."}
+          </Note>
+        ) : null}
 
-      {step.kind === "linked" && wallet ? (
-        <Txt style={{ fontSize: 14 }}>
-          {`Wallet ${wallet.address} is linked to you for ${org}. Signing for ${org} also needs a Thetis authority on chain, which an admin delegates.`}
-        </Txt>
-      ) : null}
+        {wallet && signing.link === "linked_elsewhere" && !challengeStep ? (
+          <ErrorBlock>{`This wallet is linked to another Thetis account in ${org}. Connect a different wallet.`}</ErrorBlock>
+        ) : null}
+        {wallet && signing.link === "linked_other_org" && !challengeStep ? (
+          <ErrorBlock>
+            {`You linked this wallet for ${otherOrgName}. A wallet has one active link, so connect a different wallet for ${org}.`}
+          </ErrorBlock>
+        ) : null}
 
-      {wallet && (app.online || signing.asOf) && authority && !challengeStep ? (
-        <Section title="Thetis authority">
-          {authority.kind === "none" ? (
-            <Txt style={{ fontSize: 14 }}>
-              {`Thetis found no authority for this wallet in ${org}. Ask an admin of ${org} to check it. If this wallet already has an authority for another organisation, it can't get one for yours, and you need a different wallet.`}
-            </Txt>
-          ) : authority.kind === "other_org" ? (
-            <>
-              <Txt
-                style={{ fontSize: 14 }}
-              >{`Delegated for ${authority.otherOrg}, not ${org}`}</Txt>
-              <Txt variant="small" tone="ink2">
-                {`Ask an admin of ${org} to delegate a different wallet. Linking alone gives no signing authority.`}
-              </Txt>
-            </>
-          ) : (
-            <>
-              <Rows
-                rows={[
-                  {
-                    label: "Scopes",
-                    value: signing.authorityRow ? scopeLine(signing.authorityRow.scopes) : "",
-                    sub:
-                      authority.kind === "ok"
-                        ? `Expires ${authority.expires}`
-                        : authority.kind === "revoked"
-                          ? `Revoked ${authority.at}`
-                          : authority.kind === "expired"
-                            ? `Expired ${authority.at}`
-                            : "Does not include Issue",
-                  },
-                ]}
-              />
-              {authority.kind === "revoked" || authority.kind === "expired" ? (
-                <ErrorBlock>
-                  {`This wallet can no longer sign for ${org}. A revoked wallet can't be delegated again; ask your admin to delegate a new one.`}
-                </ErrorBlock>
-              ) : null}
-            </>
-          )}
-          {signing.asOf ? (
-            <Txt variant="small" tone="ink2">
-              {`As of ${formatClock(unixOf(signing.asOf))}, offline`}
-            </Txt>
-          ) : (
-            <Freshness
-              lastSuccessAt={app.protocol.lastSuccessAt}
-              halted={app.protocol.indexStatus === "halted"}
+        {challengeStep || step.kind === "preparing" ? (
+          <>
+            <SignedText
+              text={challengeStep ? challengeStep.challenge.message : null}
+              byteLine={
+                challengeStep
+                  ? `${new TextEncoder().encode(challengeStep.challenge.message).length} bytes, UTF-8. Expires at ${expiresAt}.`
+                  : null
+              }
             />
-          )}
-        </Section>
-      ) : null}
+            {challengeStep?.note === "signing" ? (
+              <Note>
+                Approve the signature in your wallet. Check that it shows the same text as this
+                screen.
+              </Note>
+            ) : challengeStep?.note === "refused" ? (
+              <ErrorBlock>{`Your wallet closed without signing. Nothing was linked. This message stays valid until ${expiresAt}.`}</ErrorBlock>
+            ) : (
+              <Txt variant="small" tone="ink2">
+                Signing proves this wallet is yours. The text cannot move anything or approve a
+                transaction, and your wallet should show it unchanged.
+              </Txt>
+            )}
+          </>
+        ) : null}
+
+        {step.kind === "link_error" ? <ErrorBlock>{step.message}</ErrorBlock> : null}
+
+        {step.kind === "linked" && wallet ? (
+          <Txt style={{ fontSize: 14 }}>
+            {`Wallet ${wallet.address} is linked to you for ${org}. Signing for ${org} also needs a Thetis authority on chain, which an admin delegates.`}
+          </Txt>
+        ) : null}
+
+        {wallet && (app.online || signing.asOf) && authority && !challengeStep ? (
+          <Section title="Thetis authority">
+            {authority.kind === "none" ? (
+              <Txt style={{ fontSize: 14 }}>
+                {`Thetis found no authority for this wallet in ${org}. Ask an admin of ${org} to check it. If this wallet already has an authority for another organisation, it can't get one for yours, and you need a different wallet.`}
+              </Txt>
+            ) : authority.kind === "other_org" ? (
+              <>
+                <Txt
+                  style={{ fontSize: 14 }}
+                >{`Delegated for ${authority.otherOrg}, not ${org}`}</Txt>
+                <Txt variant="small" tone="ink2">
+                  {`Ask an admin of ${org} to delegate a different wallet. Linking alone gives no signing authority.`}
+                </Txt>
+              </>
+            ) : (
+              <>
+                <Rows
+                  rows={[
+                    {
+                      label: "Scopes",
+                      value: signing.authorityRow ? scopeLine(signing.authorityRow.scopes) : "",
+                      sub:
+                        authority.kind === "ok"
+                          ? `Expires ${authority.expires}`
+                          : authority.kind === "revoked"
+                            ? `Revoked ${authority.at}`
+                            : authority.kind === "expired"
+                              ? `Expired ${authority.at}`
+                              : "Does not include Issue",
+                    },
+                  ]}
+                />
+                {authority.kind === "revoked" || authority.kind === "expired" ? (
+                  <ErrorBlock>
+                    {`This wallet can no longer sign for ${org}. A revoked wallet can't be delegated again; ask your admin to delegate a new one.`}
+                  </ErrorBlock>
+                ) : null}
+              </>
+            )}
+            {signing.asOf ? (
+              <Txt variant="small" tone="ink2">
+                {`As of ${formatClock(unixOf(signing.asOf))}, offline`}
+              </Txt>
+            ) : (
+              <Freshness
+                lastSuccessAt={app.protocol.lastSuccessAt}
+                halted={app.protocol.indexStatus === "halted"}
+              />
+            )}
+          </Section>
+        ) : null}
+      </Section>
+
+      <OrganisationSection />
+      <SignedInSection />
 
       <View />
       <Picker
