@@ -1,0 +1,32 @@
+{
+  "kind": "chromium_products_reference",
+  "source": {
+    "publisher": "U.S. Geological Survey, National Minerals Information Center",
+    "publication": "Mineral Industry Surveys, Chromium in February 2026",
+    "issue": "2026-02",
+    "url": "https://d9-wret.s3.us-west-2.amazonaws.com/assets/palladium/production/s3fs-public/media/files/mis-202602-chrom.pdf",
+    "location": "Page 2, text and figure 2",
+    "priceSource": "Argus Media, Argus Non-Ferrous Markets",
+    "sha256": "065dcfa4f2e0a6603a669311f8670e5599994d47412de6e395f4da325d2ee689",
+    "retrievedOn": "2026-11-28",
+    "note": "Issues from March 2026 on publish trade tables only, without prices."
+  },
+  "prices": [
+    {
+      "product": "Chromium metal, 99% chromium",
+      "measure": "Average assessed US price",
+      "period": "2026-02",
+      "amount": "5.68",
+      "currency": "USD",
+      "unit": "per pound"
+    },
+    {
+      "product": "High-carbon ferrochromium, minimum 62% chromium",
+      "measure": "Average assessed US price",
+      "period": "2026-02",
+      "amount": "1.76",
+      "currency": "USD",
+      "unit": "per pound of contained chromium"
+    }
+  ]
+}
