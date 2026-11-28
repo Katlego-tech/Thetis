@@ -24,9 +24,24 @@ describe("navigation reducer (navigation.md §4.3)", () => {
   it("starts on the Home tab with each tab at its root", () => {
     const state = initialNav();
     expect(state.tab).toBe("home");
-    expect(state.stacks).toEqual({ home: [{ name: "home" }], account: [{ name: "account" }] });
-    expect(tabRoots).toEqual({ home: { name: "home" }, account: { name: "account" } });
-    expect(tabLabels).toEqual({ home: "Home", account: "Account" });
+    expect(state.stacks).toEqual({
+      home: [{ name: "home" }],
+      batches: [{ name: "batches" }],
+      loadings: [{ name: "loadings" }],
+      account: [{ name: "account" }],
+    });
+    expect(tabRoots).toEqual({
+      home: { name: "home" },
+      batches: { name: "batches" },
+      loadings: { name: "loadings" },
+      account: { name: "account" },
+    });
+    expect(tabLabels).toEqual({
+      home: "Home",
+      batches: "Batches",
+      loadings: "Loadings",
+      account: "Account",
+    });
     expect(currentRoute(state)).toEqual({ name: "home" });
     expect(isTabRoot(state)).toBe(true);
   });
@@ -142,8 +157,40 @@ describe("navigation reducer (navigation.md §4.3)", () => {
     expect(state).toEqual(initialNav());
   });
 
-  it("gives every chain role Home and Account, in that order", () => {
-    for (const role of ["Custodian", "Terminal", "Transporter", "Accreditor", null])
+  it("switches to the Batches or Loadings tab instead of pushing their screens", () => {
+    const batches = run(
+      { type: "push", route: intake },
+      { type: "push", route: { name: "batches" } },
+    );
+    expect(batches.tab).toBe("batches");
+    expect(isTabRoot(batches)).toBe(true);
+    expect(batches.stacks.home).toEqual([{ name: "home" }, intake]);
+    const handover = navReducer(batches, {
+      type: "push",
+      route: { name: "handover", commandId: "c-1" },
+    });
+    expect(handover.stacks.batches).toEqual([
+      { name: "batches" },
+      { name: "handover", commandId: "c-1" },
+    ]);
+    const loadings = run({ type: "push", route: { name: "loadings" } });
+    expect(loadings.tab).toBe("loadings");
+    expect(currentRoute(loadings)).toEqual({ name: "loadings" });
+  });
+
+  it("goes to the Home tab on back from the Batches and Loadings roots", () => {
+    for (const tab of ["batches", "loadings"] as const) {
+      const result = onBack(run({ type: "tab", tab }), false);
+      expect(result.handled).toBe(true);
+      expect(result.next.tab).toBe("home");
+    }
+  });
+
+  it("gives custodians and transporters Batches, the terminal Loadings, and anyone else Home and Account", () => {
+    expect(tabsFor("Custodian")).toEqual(["home", "batches", "account"]);
+    expect(tabsFor("Transporter")).toEqual(["home", "batches", "account"]);
+    expect(tabsFor("Terminal")).toEqual(["home", "loadings", "account"]);
+    for (const role of ["Accreditor", "Owner", "", null])
       expect(tabsFor(role)).toEqual(["home", "account"]);
   });
 });

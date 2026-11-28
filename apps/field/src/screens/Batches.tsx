@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { BackHandler } from "react-native";
 import { ApiError, ApiShapeError, ApiTimeout, ApiUnreachable } from "../api/client";
 import type { FieldBatch } from "../api/field";
 import { Cert, Head, ListBox, ListItem, Rows, Skeleton } from "../components/Blocks";
@@ -7,7 +8,7 @@ import { Frame } from "../components/Frame";
 import { ErrorBlock, Note } from "../components/Note";
 import { CustodyMark } from "../components/RegistryMark";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useBusy, useRootChrome } from "../context";
 import { RELAY_TIMEOUT, relayErrorCopy } from "../copy";
 import { nextHolderOf } from "../custody";
 import { readOrganisationAt } from "../data/reads";
@@ -19,9 +20,13 @@ const STAGE_WORDS = { AtSource: "At source", InTransit: "In transit", Arrived: "
 const OFFLINE =
   "Offline. A handover needs both phones online at the moment you sign. Nothing was recorded.";
 
-/** Batches you hold (holder side): the list, one batch's detail, and Start handover. */
+/**
+ * Batches you hold (holder side), the Batches tab's root: the list, one batch's detail, and Start
+ * handover. A transporter also starts a border crossing here (navigation.html).
+ */
 export function Batches() {
   const app = useApp();
+  const chrome = useRootChrome();
   const signing = useSigning();
   const [batches, setBatches] = useState<FieldBatch[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -29,6 +34,8 @@ export function Batches() {
   const [chosen, setChosen] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set in the same tap that starts the call, so a second tap before the re-render sends nothing.
+  const inFlight = useRef(false);
   const orgId = app.organisation.organisationId;
   const org = app.organisation.name;
 
@@ -55,9 +62,25 @@ export function Batches() {
   const held = batches && chain ? batches.filter((b) => b.holder === chain.address) : [];
   const batch = chosen ? (held.find((b) => b.batch === chosen) ?? null) : null;
   const next = batch ? nextHolderOf(batch) : null;
+  const transporter = chain?.role === "Transporter";
+
+  // The relay call can land while the person isn't looking: the tabs and Back wait for it.
+  useBusy(preparing);
+
+  // Android Back on a batch returns to the list before the tabs see it.
+  const detailOpen = chosen !== null;
+  useEffect(() => {
+    if (!detailOpen) return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (!inFlight.current) setChosen(null);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [detailOpen]);
 
   async function startHandover() {
-    if (!batch || !next || !app.online || preparing) return;
+    if (!batch || !next || !app.online || inFlight.current) return;
+    inFlight.current = true;
     setError(null);
     setPreparing(true);
     const vars = { org, detail: null, kind: "handover" };
@@ -86,6 +109,7 @@ export function Batches() {
         setError(relayErrorCopy(code, "create", vars));
       }
     } finally {
+      inFlight.current = false;
       setPreparing(false);
     }
   }
@@ -108,7 +132,12 @@ export function Batches() {
 
   if (batch) {
     return (
-      <Frame organisation={org} onBack={() => setChosen(null)} footer={footer}>
+      <Frame
+        organisation={org}
+        onBack={() => setChosen(null)}
+        footer={footer}
+        tabBar={chrome.tabBar}
+      >
         <Head title={`${batch.lotId}, batch ${batch.index} of ${batch.batchCount}`}>
           <CustodyMark state={STAGE_WORDS[batch.stage]} />
           <Cert label={app.protocol.instanceLabel} />
@@ -127,7 +156,19 @@ export function Batches() {
   }
 
   return (
-    <Frame organisation={org} onBack={app.back}>
+    <Frame
+      organisation={org}
+      {...chrome}
+      footer={
+        transporter ? (
+          <Button
+            label="Record border crossing"
+            kind="quiet"
+            onPress={() => app.navigate({ name: "observation" })}
+          />
+        ) : undefined
+      }
+    >
       <Head title="Batches you hold">
         <Cert label={app.protocol.instanceLabel} />
       </Head>

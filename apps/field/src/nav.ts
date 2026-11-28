@@ -3,7 +3,7 @@
 import type { Route } from "./context";
 import { NAV_COPY } from "./copy";
 
-export type Tab = "home" | "account";
+export type Tab = "home" | "batches" | "loadings" | "account";
 
 export interface NavState {
   tab: Tab;
@@ -19,21 +19,38 @@ export type NavAction =
 
 export const tabRoots: Record<Tab, Route> = {
   home: { name: "home" },
+  batches: { name: "batches" },
+  loadings: { name: "loadings" },
   account: { name: "account" },
 };
 
 export const tabLabels: Record<Tab, string> = {
   home: NAV_COPY.tabHome,
+  batches: NAV_COPY.tabBatches,
+  loadings: NAV_COPY.tabLoadings,
   account: NAV_COPY.tabAccount,
 };
 
 export function initialNav(): NavState {
-  return { tab: "home", stacks: { home: [tabRoots.home], account: [tabRoots.account] } };
+  return {
+    tab: "home",
+    stacks: {
+      home: [tabRoots.home],
+      batches: [tabRoots.batches],
+      loadings: [tabRoots.loadings],
+      account: [tabRoots.account],
+    },
+  };
 }
 
 /** The tab a route is the root of, or null for a pushed screen. */
 function rootOf(route: Route): Tab | null {
-  return route.name === "home" || route.name === "account" ? route.name : null;
+  return route.name === "home" ||
+    route.name === "batches" ||
+    route.name === "loadings" ||
+    route.name === "account"
+    ? route.name
+    : null;
 }
 
 /** Two routes are the same screen when their name and the record they open match. */
@@ -76,8 +93,13 @@ export function onBack(state: NavState, busy: boolean): { handled: boolean; next
   return { handled: next !== state, next };
 }
 
-/** Home first and Account last: this build draws these two for every chain role (§3.2). */
-export function tabsFor(_role: string | null): Tab[] {
+/**
+ * Home first, Account last, and the role's tab between them (§3.2): the holders at source and on
+ * the road get Batches, the terminal gets Loadings. Unknown, offline or not accredited: no role tab.
+ */
+export function tabsFor(role: string | null): Tab[] {
+  if (role === "Custodian" || role === "Transporter") return ["home", "batches", "account"];
+  if (role === "Terminal") return ["home", "loadings", "account"];
   return ["home", "account"];
 }
 

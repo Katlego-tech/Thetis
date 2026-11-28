@@ -430,7 +430,12 @@ describe("Talk on the phone (voice.md §5.1)", () => {
     await screen.findByText(UNAVAILABLE);
     expect(voiceSdk.starts).toEqual([]);
     expect(button("Try voice again")).not.toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    // The demo custodian's tabs stay on screen as the typed fallback.
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Home",
+      "Batches",
+      "Account",
+    ]);
   });
 
   it("shows Voice is unavailable. Use the controls below. when the microphone is refused, with the settings line", async () => {

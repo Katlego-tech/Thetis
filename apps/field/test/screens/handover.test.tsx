@@ -416,7 +416,7 @@ describe("how it ends", () => {
     await screen.findByText("Mosela Haulage holds batch 1 of 1");
   });
 
-  it("Arrival confirmed: the terminal holds the batch, and the lot is Stored once all arrived", async () => {
+  it("Arrival confirmed: the terminal holds the batch, and nothing is said about the lot", async () => {
     await open(
       "port",
       handoverView("confirmed", {
@@ -427,11 +427,7 @@ describe("how it ends", () => {
       [],
     );
     await screen.findByText("Port Terminal T1 holds batch 1 of 1");
-    expect(
-      screen.getByText(
-        "Arrival confirmed on devnet in slot 526,890,114. The lot is Stored at the terminal once every batch has arrived.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText("Arrival confirmed on devnet in slot 526,890,114.")).toBeTruthy();
   });
 
   it("submitted: waiting for confirmation, and nothing signable", async () => {
