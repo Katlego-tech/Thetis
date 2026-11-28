@@ -1,6 +1,7 @@
 // accept_loading as a sponsor-paid relay transaction kind: its spec, args, account order and size
 // (field-app.md owner decision 1 on loading, T067r.4 pre-check folds 52–57).
 import { type Address, generateKeyPairSigner } from "@solana/kit";
+import { getLoadingAcceptedEventEncoder } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import {
   admittedKeys,
@@ -9,6 +10,7 @@ import {
   measureCommand,
   tableCandidates,
 } from "../src/commands/compile.ts";
+import { outcomeData } from "../src/commands/lifecycle.ts";
 import {
   buildInstruction,
   KIND_SPECS,
@@ -145,3 +147,35 @@ describe("accept_loading transaction (folds 52, 55, 57)", () => {
 /** Measured through compile.ts (fold 55): a first acceptance and a re-acceptance. */
 const MEASURED_FIRST = 455;
 const MEASURED_AGAIN = 424;
+
+describe("accept_loading outcome (T056r R6, PR #80 review)", () => {
+  /** One LoadingAccepted `Program data:` line naming `intent` and `loan`. */
+  async function line(intent: Address, loan: Address) {
+    const bytes = getLoadingAcceptedEventEncoder().encode({
+      acceptance: await newKey(),
+      intent,
+      loan,
+      lender: await newKey(),
+      lockQuantityKg: 5_000_000n,
+      loanRevision: 3n,
+      principal: 0n,
+      bookedInterest: 0n,
+      version: 1,
+    });
+    return Buffer.from(bytes).toString("base64");
+  }
+
+  it("binds LoadingAccepted.intent and .loan to the plan; an event for another intent or loan is unreadable", async () => {
+    expect(KIND_SPECS.accept_loading.outcomeBinds).toStrictEqual(["intent", "loan"]);
+    const [intent, loan, other] = [await newKey(), await newKey(), await newKey()];
+    const row = { kind: "accept_loading" as const, plan: { intent, loan } };
+    expect(outcomeData(row, [await line(intent, loan)])).toMatchObject({
+      intent,
+      loan,
+      lockQuantityKg: "5000000",
+      version: 1,
+    });
+    expect(outcomeData(row, [await line(other, loan)])).toBeNull();
+    expect(outcomeData(row, [await line(intent, other)])).toBeNull();
+  });
+});

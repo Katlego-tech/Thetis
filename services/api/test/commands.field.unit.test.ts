@@ -24,8 +24,10 @@ import {
   tableCandidates,
 } from "../src/commands/compile.ts";
 import { sharedMessageInstruction } from "../src/commands/ed25519.ts";
+import { bestCaseBytes } from "../src/commands/lifecycle.ts";
 import {
   buildInstruction,
+  createdTableAddresses,
   KIND_SPECS,
   type KindSpec,
   Reader,
@@ -298,8 +300,14 @@ async function commandSize(
     candidates,
     candidates.map((key) => !missing.has(key)),
     tableSignerAddresses(kind, plan),
+    createdTableAddresses(kind, plan),
   );
   return {
+    plan,
+    text,
+    protocol,
+    sponsor,
+    absentKeys: missing,
     keys,
     candidates,
     bytes: measureCommand(commandInstructions(thetis, ed25519), sponsor, keys),
@@ -366,7 +374,13 @@ async function handoverSize(values: {
   to: string;
   stage: "Departure" | "Transfer" | "Arrival";
   nextHolderAuthority: boolean;
+  /** program-custody.md §11.1 item 1: batch 16 of 16, u64::MAX kg and sequence, i64::MAX. */
+  widest?: boolean;
 }) {
+  const quantity = values.widest ? U64_MAX : 5_000_000n;
+  const sequenceNo = values.widest ? U64_MAX : 0n;
+  const until = values.widest ? I64_MAX : DEMO.validUntil;
+  const batchNo = values.widest ? 16 : 1;
   const plan: Record<string, string> = {};
   for (const key of [
     "shipment",
@@ -382,23 +396,23 @@ async function handoverSize(values: {
     plan[key] = await newKey();
   Object.assign(plan, {
     manifestDigest: "44".repeat(32),
-    expectedSequence: "0",
-    validUntil: String(DEMO.validUntil),
+    expectedSequence: String(sequenceNo),
+    validUntil: String(until),
   });
   const text = custodyHandoverMessage(
     PROGRAM,
     DEMO.instanceId,
     values.lotId,
     new Uint8Array(16),
-    1,
-    1,
-    5_000_000n,
+    batchNo,
+    batchNo,
+    quantity,
     values.from,
     values.to,
     values.stage,
     new Uint8Array(32),
-    0n,
-    DEMO.validUntil,
+    sequenceNo,
+    until,
   );
   const wallets = { holder: await newKey(), next_holder: await newKey() };
   return commandSize("handover", plan, wallets, text, (thetis) => [
@@ -407,6 +421,9 @@ async function handoverSize(values: {
     ...(values.nextHolderAuthority ? [] : [thetis.accounts?.[8]?.address as Address]),
   ]);
 }
+
+const U64_MAX = 18_446_744_073_709_551_615n;
+const I64_MAX = 9_223_372_036_854_775_807n;
 
 const DEMO_FIELDS = {
   lotId: "CR-0001",
@@ -514,12 +531,9 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
           nextHolderAuthority,
         });
         expect(bytes, `${stage} ${nextHolderAuthority}`).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
-        // With the next holder's Authority static, the widest handover fits only without the price.
-        (nextHolderAuthority ? expectPriced : expectUnpriced)(
-          expect,
-          wire,
-          `${stage} ${nextHolderAuthority}`,
-        );
+        // T056r R7: with the HandoverRecord in the table every one carries the price, the next
+        // holder's Authority static or not.
+        expectPriced(expect, wire, `${stage} ${nextHolderAuthority}`);
       }
     }
     const widest = await handoverSize({
@@ -529,8 +543,26 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
       stage: "Departure",
       nextHolderAuthority: false,
     });
-    expect(widest.bytes).toBe(1_228);
-    expectUnpriced(expect, widest.wire, "widest handover");
+    expect(widest.bytes).toBe(MEASURED_HANDOVER_NO_AUTHORITY);
+    expectPriced(expect, widest.wire, "widest handover");
+  });
+
+  it("T056r R7: the HandoverRecord the handover creates enters the table (program-custody.md §4.6), so the §11.1 widest handover in the relay shape carries the price within 1,232 bytes", async () => {
+    const widest = await handoverSize({
+      lotId: "L".repeat(16),
+      from: "Kopano Stockyard Custody And Allied Yards Pty 01",
+      to: "Mosela Haulage And Allied Bulk Transport Pty 001",
+      stage: "Departure",
+      nextHolderAuthority: true,
+      widest: true,
+    });
+    expect(widest.text).toHaveLength(593);
+    expect(widest.keys).toContain(widest.plan.handover);
+    expect(widest.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+    expectPriced(expect, widest.wire, "§11.1 widest handover, relay shape");
+    // programs/thetis/tests/bypass_custody.rs: 1,181 B in the §11.1 shape, plus 31 for the
+    // protocol the relay keeps static, plus the 12-byte price.
+    expect(widest.bytes).toBe(1_224);
   });
 
   it("never admits a wallet-derived key that is not on chain: the undelegated next holder's Authority stays static", async () => {
@@ -542,8 +574,32 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
       nextHolderAuthority: false,
     });
     const admittedOnly = candidates.filter((key) => !keys.includes(key));
-    // The handover PDA the instruction creates and the next holder's missing Authority.
-    expect(admittedOnly).toHaveLength(2);
+    // Only the next holder's missing Authority: the HandoverRecord the instruction creates is
+    // appended to the table first (T056r R7).
+    expect(admittedOnly).toHaveLength(1);
+  });
+
+  it("names handover's HandoverRecord as the PDA it creates and appends to the table (T056r R7), typed as tableSigners is", async () => {
+    expect(KIND_SPECS.handover.tableCreated).toStrictEqual(["handover"]);
+    // @ts-expect-error: not a created-PDA plan key
+    const misspelt: KindSpec["tableCreated"] = ["handovr"];
+    expect(misspelt).toBeDefined();
+    const record = await newKey();
+    expect([...createdTableAddresses("handover", { handover: record })]).toStrictEqual([record]);
+    expect(() => createdTableAddresses("handover", {})).toThrow(/plan has no handover/);
+    // No other kind's created account enters the table (fold 9 and fold 55 stand for them).
+    for (const [kind, spec] of Object.entries(KIND_SPECS)) {
+      if (kind !== "handover") expect(spec.tableCreated, kind).toBeUndefined();
+    }
+    const [created, existing, absent] = [await newKey(), await newKey(), await newKey()];
+    expect(
+      admittedKeys(
+        [created, existing, absent],
+        [false, true, false],
+        new Set(),
+        new Set([created]),
+      ),
+    ).toStrictEqual([created, existing]);
   });
 
   it("types tableSigners as plan keys, so a misspelt key does not compile", () => {
@@ -551,6 +607,42 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
     const misspelt: KindSpec["tableSigners"] = ["mintAuthorty"];
     expect(misspelt).toBeDefined();
     expect(KIND_SPECS.issue_lot.tableSigners).toStrictEqual(["mintAuthority", "vaultAuthority"]);
+  });
+});
+
+describe("best-case size at create (T056r R1)", () => {
+  /** The relay's view of the chain for the estimate: `absent` does not exist, everything else
+   * does. The sponsor is the one the sized transaction used. */
+  function relayFor(size: Awaited<ReturnType<typeof issueSize>>, sponsor: Address) {
+    return {
+      protocol: size.protocol,
+      sponsor: { address: async () => sponsor, sign: async () => "" },
+      chain: {
+        accounts: async (keys: Address[]) =>
+          keys.map((key) => ({ exists: !size.absentKeys.has(key), address: key })),
+      },
+    } as never;
+  }
+
+  it("is the size the relay would send once the custodian signs: 1,308 bytes for the widest issue_lot with origin, refused before anyone signs; the demo fits", async () => {
+    for (const [values, expected] of [
+      [{ ...WIDEST, owner: name(48), custodian: name(48), origin: true }, 1_308],
+      [{ ...DEMO_FIELDS, owner: DEMO.owner, custodian: DEMO.custodian, origin: false }, 1_174],
+    ] as const) {
+      const size = await issueSize(values);
+      expect(size.bytes).toBe(expected);
+      const estimate = await bestCaseBytes(relayFor(size, size.sponsor), "issue_lot", {
+        plan: size.plan,
+        text: size.text,
+        signers: KIND_SPECS.issue_lot.signers.map((s) => ({
+          ...s,
+          organisationId: "6f1c4a52-0d3e-4c4b-9b7e-2a1f0c9d8e7a",
+        })) as never,
+      });
+      // The custodian's Authority is not in the plan, so the estimate takes it as in the table,
+      // as it is once a delegated custodian signs.
+      expect(estimate).toBe(expected);
+    }
   });
 });
 
@@ -599,3 +691,7 @@ describe("Reader owner check (field-app.md PR #69 fold 29)", () => {
     ).resolves.toMatchObject({ custodian, siteCode: "KOPANO-YARD-1" });
   });
 });
+
+/** 48-character names, a 16-character lot ID and no next-holder Authority, measured through
+ * compile.ts with the HandoverRecord in the table (T056r R7) and the price. */
+const MEASURED_HANDOVER_NO_AUTHORITY = 1_209;

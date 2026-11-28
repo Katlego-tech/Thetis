@@ -548,4 +548,15 @@ describe("record_loading transaction (folds 43, 49, 50)", () => {
       expect(bytes - widest.bytes).toBe(31);
     }
   });
+
+  it("T056r R8, re-measured after R7: record_loading creates no account, so the table already holds every key but the protocol, and the k = 4 widest with the price would be 1,242 bytes, so it still goes unpriced", async () => {
+    expect(KIND_SPECS.record_loading.tableCreated).toBeUndefined();
+    const widest = await recordSize(WIDEST_RECORD);
+    expect(widest.keys).toStrictEqual(widest.candidates);
+    expect(widest.bytes).toBe(1_230);
+    expectUnpriced(expect, widest.wire, "k = 4 widest");
+    // The price is 12 bytes: 1,242 is 10 over the limit (bypass_custody.rs relay shape agrees).
+    expect(widest.bytes + 12).toBe(1_242);
+    expect(widest.bytes + 12).toBeGreaterThan(MAX_TRANSACTION_BYTES);
+  });
 });

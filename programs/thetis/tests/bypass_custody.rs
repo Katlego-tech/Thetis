@@ -3120,9 +3120,11 @@ fn custody_accounts_from_other_protocol_refused() {
 /// The frame every signed text has (§5): the header, then `Network:`, `Program:`, `Protocol:`
 /// and `Action:` lines, `Valid until:` second to last and the test-network notice last. Returns
 /// the §9 mutants: one per rendered line, its last byte replaced.
-fn framed_mutations(text: &[u8], action: &str) -> Vec<Vec<u8>> {
+fn framed_mutations(text: &[u8], action: &str, line_count: usize) -> Vec<Vec<u8>> {
     let rendered = std::str::from_utf8(text).expect("a UTF-8 text");
     let lines: Vec<&str> = rendered.split('\n').collect();
+    // A literal per action, so a sweep can't silently cover fewer lines than the text has.
+    assert_eq!(lines.len(), line_count, "{action}: lines in the text");
     assert_eq!(lines[0], "Thetis authorisation v1");
     assert!(lines[1].starts_with("Network: "), "{}", lines[1]);
     assert!(lines[2].starts_with("Program: "), "{}", lines[2]);
@@ -3135,7 +3137,7 @@ fn framed_mutations(text: &[u8], action: &str) -> Vec<Vec<u8>> {
     );
     assert_eq!(lines[lines.len() - 1], "Test network only. Synthetic data.");
     let mutations = line_mutations(text);
-    assert_eq!(mutations.len(), lines.len());
+    assert_eq!(mutations.len(), line_count, "{action}: one mutant per line");
     mutations
 }
 
@@ -3147,10 +3149,11 @@ impl World {
         &mut self,
         text: &[u8],
         action: &str,
+        line_count: usize,
         absent: &[Pubkey],
         sign: impl Fn(&World, &[u8]) -> [Instruction; 2],
     ) {
-        let mutations = framed_mutations(text, action);
+        let mutations = framed_mutations(text, action, line_count);
         let payer = self.f.payer();
         let named: Vec<Pubkey> = sign(self, text)[1]
             .accounts
@@ -3183,9 +3186,13 @@ fn prepare_text_field_mutations_refused() {
     let owner = w.owner;
     let args = w.prepare_args(owner, w.terminal_class);
     let text = w.prepare_text(&args);
-    w.assert_mutations_refused(&text, "Prepare shipment", &[args.shipment], |w, text| {
-        w.prepare_signed(&args, text)
-    });
+    w.assert_mutations_refused(
+        &text,
+        "Prepare shipment",
+        17,
+        &[args.shipment],
+        |w, text| w.prepare_signed(&args, text),
+    );
     let honest = w.prepare_signed(&args, &text);
     w.f.sponsored_ok(&honest);
     assert_eq!(w.lot_state().state, LotState::Prepared);
@@ -3196,7 +3203,7 @@ fn cancel_text_field_mutations_refused() {
     let mut w = World::new();
     let (shipment, _) = w.prepare_to(w.terminal_class);
     let text = w.cancel_text(shipment);
-    w.assert_mutations_refused(&text, "Cancel shipment", &[], |w, text| {
+    w.assert_mutations_refused(&text, "Cancel shipment", 13, &[], |w, text| {
         w.cancel_signed(shipment, text)
     });
     let honest = w.cancel_signed(shipment, &text);
@@ -3215,6 +3222,7 @@ fn handover_text_field_mutations_refused() {
     w.assert_mutations_refused(
         &text,
         "Hand over custody",
+        16,
         &[handover_key(batch, 0)],
         |w, text| w.handover_signed(&args, text),
     );
@@ -3231,7 +3239,7 @@ fn observation_text_field_mutations_refused() {
     w.hand_over(batch, w.transporter);
     let args = w.border_args(batch);
     let text = w.observation_text(&args);
-    w.assert_mutations_refused(&text, "Record observation", &[], |w, text| {
+    w.assert_mutations_refused(&text, "Record observation", 17, &[], |w, text| {
         w.observation_signed(&args, text)
     });
     let honest = w.observation_signed(&args, &text);
@@ -3253,9 +3261,11 @@ fn shortfall_text_field_mutations_refused() {
     ];
     for args in &forms {
         let text = w.shortfall_text(args);
+        // Both forms print 18 lines: the whole-lot form keeps the batch line.
         w.assert_mutations_refused(
             &text,
             "Attest shortfall",
+            18,
             &[w.incident(&args.incident_id)],
             |w, text| w.shortfall_signed(args, text),
         );
@@ -3269,7 +3279,7 @@ fn loading_intent_text_field_mutations_refused() {
     let args = w.intent_args(w.owner, 1, LOADING_DOCUMENT);
     let text = w.intent_text(&args);
     let intent = intent_key(w.position(), args.nonce);
-    w.assert_mutations_refused(&text, "Prepare loading", &[intent], |w, text| {
+    w.assert_mutations_refused(&text, "Prepare loading", 16, &[intent], |w, text| {
         [
             ed25519_instruction(&[(w.f.signer(Owner), text)]),
             w.intent_instruction(&args),
@@ -3288,7 +3298,7 @@ fn record_loading_text_field_mutations_refused() {
     assert!(String::from_utf8(text.clone())
         .unwrap()
         .contains("Loan acceptances: 1"));
-    w.assert_mutations_refused(&text, "Record loading", &[], |w, text| {
+    w.assert_mutations_refused(&text, "Record loading", 16, &[], |w, text| {
         w.record_signed(&args, text)
     });
     w.record_ok(&args);
@@ -3486,21 +3496,18 @@ fn handover_transaction_fits_1232_bytes() {
     assert_eq!(widest_priced, 1_193);
     assert!(widest_priced <= PACKET_DATA_SIZE);
 
-    // The relay's shape (services/api compile.ts): the protocol stays static, and so does an
-    // account the instruction creates, the HandoverRecord.
-    let relay_table = w.f.create_lookup_table(without(
-        &inventory,
-        &[w.f.protocol, demo_record, widest_record],
-    ));
+    // The relay's shape (services/api compile.ts): the protocol stays static, and the relay
+    // appends the HandoverRecord it creates to the table first (§4.6; T056r R7).
+    let relay_table =
+        w.f.create_lookup_table(without(&inventory, &[w.f.protocol]));
     let relay_readonly = without(&readonly, &[w.f.protocol]);
-    let protocol = w.f.protocol;
-    let relay_inline = |record: Pubkey| [inline.clone(), vec![protocol, record]].concat();
+    let relay_inline = [inline.clone(), vec![w.f.protocol]].concat();
     let (_, relay_widest) = v0(
         &mut w,
         &relay_table,
         &plain(&widest_instructions),
-        &relay_inline(widest_record),
-        &without(&writable(widest_record), &[widest_record]),
+        &relay_inline,
+        &writable(widest_record),
         &relay_readonly,
     );
     println!("handover v0 widest, relay shape: {relay_widest} bytes");
@@ -3508,8 +3515,8 @@ fn handover_transaction_fits_1232_bytes() {
         &mut w,
         &relay_table,
         &priced(&widest_instructions),
-        &relay_inline(widest_record),
-        &without(&writable(widest_record), &[widest_record]),
+        &relay_inline,
+        &writable(widest_record),
         &relay_readonly,
     );
     println!("handover v0 widest, relay shape, with the price: {relay_widest_priced} bytes");
@@ -3517,16 +3524,15 @@ fn handover_transaction_fits_1232_bytes() {
         &mut w,
         &relay_table,
         &priced(&demo_instructions),
-        &relay_inline(demo_record),
-        &without(&writable(demo_record), &[demo_record]),
+        &relay_inline,
+        &writable(demo_record),
         &relay_readonly,
     );
     println!("handover v0 demo, relay shape, with the price: {relay_demo_priced} bytes");
-    // A relay finding (§4.6 says the relay appends the HandoverRecord to the table first), not
-    // a program defect: with the HandoverRecord left static the widest shape does not fit.
-    assert_eq!(relay_widest, 1_243);
-    assert_eq!(relay_widest_priced, 1_255);
-    assert!(relay_widest_priced > PACKET_DATA_SIZE);
+    // With the HandoverRecord in the table the widest relay shape carries the price.
+    assert_eq!(relay_widest, 1_212);
+    assert_eq!(relay_widest_priced, 1_224);
+    assert!(relay_widest_priced <= PACKET_DATA_SIZE);
     assert!(relay_demo_priced <= PACKET_DATA_SIZE);
 }
 
@@ -3692,4 +3698,18 @@ fn record_loading_transaction_fits_1232_bytes() {
     println!("record_loading v0 widest, relay shape, with the price: {relay_priced} bytes");
     assert_eq!(relay_priced, 1_242);
     assert!(relay_priced > PACKET_DATA_SIZE);
+    // The demo worst case in the relay's shape carries the price.
+    let (_, relay_demo_priced) = v0(
+        &mut w,
+        &relay_table,
+        &priced(&demo_instructions),
+        &relay_inline,
+        &writable,
+        &relay_readonly,
+    );
+    println!(
+        "record_loading v0 demo worst case, relay shape, with the price: {relay_demo_priced} bytes"
+    );
+    assert_eq!(relay_demo_priced, 1_087);
+    assert!(relay_demo_priced <= PACKET_DATA_SIZE);
 }
