@@ -5,12 +5,16 @@ import { Button } from "../components/Button";
 import { Frame } from "../components/Frame";
 import { ErrorBlock, Note } from "../components/Note";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useRootChrome } from "../context";
 import { formatTonnes } from "../format";
 
-/** Loadings at your terminal (§7.7): the open loading intents the owner prepared on the web. */
+/**
+ * Loadings at your terminal (§7.7), the Loadings tab's root: the open loading intents the owner
+ * prepared on the web. One intent opens as a pushed screen.
+ */
 export function Loadings() {
   const app = useApp();
+  const chrome = useRootChrome();
   const [intents, setIntents] = useState<LoadingIntent[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [tick, setTick] = useState(0);
@@ -36,7 +40,7 @@ export function Loadings() {
   }, [app.field, orgId, app.online, tick]);
 
   return (
-    <Frame organisation={org} onBack={app.back}>
+    <Frame organisation={org} {...chrome}>
       <Head title="Loadings at your terminal">
         <Cert label={app.protocol.instanceLabel} />
       </Head>

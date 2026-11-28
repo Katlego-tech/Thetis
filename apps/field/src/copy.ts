@@ -249,6 +249,8 @@ export const RELAY_TIMEOUT =
 /** The tab bar, the top-bar switcher and the Account tab (navigation.md §9.2). */
 export const NAV_COPY = {
   tabHome: "Home",
+  tabBatches: "Batches",
+  tabLoadings: "Loadings",
   tabAccount: "Account",
   busyHint: "Wait for your wallet to finish.",
   switchLabel: "Switch organisation, now {org}",

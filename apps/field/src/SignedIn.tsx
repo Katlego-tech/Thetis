@@ -13,7 +13,13 @@ import { Picker } from "./components/Picker";
 import type { FieldConfig } from "./config";
 import { AppContext, type AppContextValue } from "./context";
 import { NAV_COPY } from "./copy";
-import { type Membership, ReadError, readMemberships, readProtocol } from "./data/reads";
+import {
+  type Membership,
+  ReadError,
+  readChainOrganisation,
+  readMemberships,
+  readProtocol,
+} from "./data/reads";
 import { createDraftStore, type StoredWallet } from "./drafts/store";
 import { currentRoute, initialNav, isTabRoot, navReducer, onBack, tabsFor } from "./nav";
 import { createOfflineCache } from "./offline-cache";
@@ -77,6 +83,8 @@ export function SignedIn(props: {
   const [busy, setBusy] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [tick, setTick] = useState(0);
+  // The chosen organisation's chain role, for its tabs (navigation.md §3.2); null when unknown.
+  const [chainRole, setChainRole] = useState<{ orgId: string; role: string | null } | null>(null);
   // Set while the gates run on what this phone read before (offline cold start); cleared by the
   // next successful read.
   const [membershipsCachedAt, setMembershipsCachedAt] = useState<string | null>(null);
@@ -161,6 +169,38 @@ export function SignedIn(props: {
     void store.wallet(userId, chosen).then(setWalletState);
   }, [userId, chosen]);
 
+  // The role is the chain's: read online, else this phone's last read for the organisation (the
+  // facts useSigning stores). Nothing read means no role tab.
+  const reachable = online && offlineSince === null;
+  const instance = protocol && protocol !== "none" ? protocol.protocol : null;
+  useEffect(() => {
+    if (!chosen || !instance) return;
+    let live = true;
+    const cached = async () =>
+      (await cache.signing(userId, chosen))?.value.chainOrganisation?.role ?? null;
+    (async () => {
+      let role: string | null;
+      try {
+        role = reachable
+          ? ((await readChainOrganisation(db, instance, chosen))?.role ?? null)
+          : await cached();
+      } catch {
+        role = await cached().catch(() => null);
+      }
+      if (live) setChainRole({ orgId: chosen, role });
+    })();
+    return () => {
+      live = false;
+    };
+  }, [db, instance, chosen, userId, reachable]);
+
+  const role = chainRole && chainRole.orgId === chosen ? chainRole.role : null;
+  const tabs = useMemo(() => tabsFor(role), [role]);
+  // A tab the role no longer has (the role read changed) is left for Home.
+  useEffect(() => {
+    if (!tabs.includes(nav.tab)) dispatch({ type: "tab", tab: "home" });
+  }, [tabs, nav.tab]);
+
   // Android Back (navigation.md §4.3): an open Picker closes itself first (its Modal); then a call
   // in flight consumes the press; then onBack, which leaves only the Home root to Android.
   const latest = useRef({ nav, busy });
@@ -219,11 +259,9 @@ export function SignedIn(props: {
       sessionExpired: props.sessionExpired,
       signOut: props.signOut,
       tab: nav.tab,
-      // The chain role is read per screen (useSigning); tabsFor gives every role the same two
-      // tabs in this build, so SignedIn does not read it again here.
-      tabs: tabsFor(null),
+      tabs,
       openTab: (tab) => {
-        if (!busy) dispatch({ type: "tab", tab });
+        if (!busy && tabs.includes(tab)) dispatch({ type: "tab", tab });
       },
       busy,
       setBusy,
@@ -249,6 +287,7 @@ export function SignedIn(props: {
     props.signOut,
     nav,
     busy,
+    tabs,
   ]);
 
   if (membershipError) {

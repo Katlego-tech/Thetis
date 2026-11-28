@@ -34,7 +34,11 @@ const terminal = {
   kind: "terminal",
   synthetic: true,
 };
-const cast = vi.hoisted(() => ({ memberships: [] as unknown[] }));
+const cast = vi.hoisted(() => ({
+  memberships: [] as unknown[],
+  // The chosen organisation's chain row; undefined means the demo custodian's.
+  chain: undefined as { address: string; role: string; displayName: string } | null | undefined,
+}));
 // The context each wrapped screen last rendered with, and every organisation and wallet a tab root
 // rendered together.
 const probe = vi.hoisted(() => ({
@@ -79,7 +83,9 @@ vi.mock("../../src/data/reads", async (importOriginal) => {
     ...(await importOriginal<typeof import("../../src/data/reads")>()),
     readMemberships: vi.fn(async () => cast.memberships),
     readProtocol: vi.fn(async () => ({ kind: "ready", context: protocolContext })),
-    readChainOrganisation: vi.fn(async () => chainOrganisation),
+    readChainOrganisation: vi.fn(async () =>
+      cast.chain === undefined ? chainOrganisation : cast.chain,
+    ),
     readSignerLinks: vi.fn(async () => []),
     readAuthority: vi.fn(async () => null),
     readSites: vi.fn(async () => [site]),
@@ -143,6 +149,9 @@ vi.mock("../../src/screens/Intake", async (importOriginal) => {
     },
   };
 });
+vi.mock("../../src/api/field", () => ({
+  fieldApi: () => ({ batches: vi.fn(async () => []), loadingIntents: vi.fn(async () => []) }),
+}));
 vi.mock("../../src/link-challenge", () => ({ checkLinkChallenge: () => true }));
 vi.mock("../../src/wallet", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/wallet")>()),
@@ -177,6 +186,7 @@ async function start(options: { two?: boolean; wallet?: boolean } = {}) {
   await screen.findByText("Drafts on this phone");
 }
 
+const tabNames = () => screen.getAllByRole("tab").map((t) => t.textContent);
 const tab = (name: string) => screen.getByRole("tab", { name }) as HTMLButtonElement;
 const selected = () =>
   screen
@@ -195,6 +205,7 @@ const switcher = (org: string) =>
   screen.queryByRole("button", { name: `Switch organisation, now ${org}` });
 
 beforeEach(() => {
+  cast.chain = undefined;
   probe.app = null;
   probe.renders = [];
   stores.drafts.values.clear();
@@ -207,7 +218,7 @@ describe("tab bar and per-tab stacks (navigation.md §4)", () => {
   it("shows the tab bar on Home and Account with the current tab selected", async () => {
     await start();
     expect(screen.getAllByRole("tablist")).toHaveLength(1);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Home", "Account"]);
+    await waitFor(() => expect(tabNames()).toEqual(["Home", "Batches", "Account"]));
     expect(selected()).toEqual(["Home"]);
     await press(tab("Account"));
     await screen.findByText(NAV_COPY.signedInTitle);
@@ -375,5 +386,83 @@ describe("tab bar and per-tab stacks (navigation.md §4)", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(await back()).toBe(true);
     await screen.findByText("Drafts on this phone");
+  });
+});
+
+describe("tabs by chain role (navigation.md §3.2)", () => {
+  const talk = () => screen.queryByRole("button", { name: "Talk to the Thetis navigator" });
+
+  it("gives Kopano Stockyard Custody Home, Batches and Account, with Batches you hold as its root", async () => {
+    await start();
+    await waitFor(() => expect(tabNames()).toEqual(["Home", "Batches", "Account"]));
+    await press(tab("Batches"));
+    await screen.findByText("Batches you hold");
+    expect(selected()).toEqual(["Batches"]);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(talk()).not.toBeNull();
+  });
+
+  it("gives Mosela Haulage Home, Batches and Account", async () => {
+    cast.chain = {
+      address: "Ho1derMoseLaHau1age11111111111111111111111",
+      role: "Transporter",
+      displayName: "Mosela Haulage",
+    };
+    await start();
+    await waitFor(() => expect(tabNames()).toEqual(["Home", "Batches", "Account"]));
+    await press(tab("Batches"));
+    await screen.findByText("Batches you hold");
+    expect(screen.getByRole("button", { name: "Record border crossing" })).toBeTruthy();
+  });
+
+  it("gives Port Terminal T1 Home, Loadings and Account, with Loadings at your terminal as its root", async () => {
+    cast.chain = {
+      address: "PortTermina1T1111111111111111111111111111",
+      role: "Terminal",
+      displayName: "Port Terminal T1",
+    };
+    await start();
+    await waitFor(() => expect(tabNames()).toEqual(["Home", "Loadings", "Account"]));
+    await press(tab("Loadings"));
+    await screen.findByText("Loadings at your terminal");
+    expect(selected()).toEqual(["Loadings"]);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(talk()).not.toBeNull();
+  });
+
+  it("gives an organisation that is not accredited Home and Account only", async () => {
+    cast.chain = null;
+    await start();
+    await screen.findByText(/is not accredited on this Thetis instance yet/);
+    expect(tabNames()).toEqual(["Home", "Account"]);
+  });
+
+  it("returns to Home on Android Back from the Batches and Loadings roots", async () => {
+    await start();
+    await waitFor(() => expect(tabNames()).toContain("Batches"));
+    await press(tab("Batches"));
+    await screen.findByText("Batches you hold");
+    expect(await back()).toBe(true);
+    await screen.findByText("Drafts on this phone");
+    expect(selected()).toEqual(["Home"]);
+    cleanup();
+    cast.chain = {
+      address: "PortTermina1T1111111111111111111111111111",
+      role: "Terminal",
+      displayName: "Port Terminal T1",
+    };
+    await start();
+    await waitFor(() => expect(tabNames()).toContain("Loadings"));
+    await press(tab("Loadings"));
+    await screen.findByText("Loadings at your terminal");
+    expect(await back()).toBe(true);
+    await screen.findByText("Drafts on this phone");
+    expect(selected()).toEqual(["Home"]);
+  });
+
+  it("opens the Batches tab from Home's Batches you hold", async () => {
+    await start();
+    await press(await screen.findByRole("button", { name: "Batches you hold" }));
+    await waitFor(() => expect(selected()).toEqual(["Batches"]));
   });
 });

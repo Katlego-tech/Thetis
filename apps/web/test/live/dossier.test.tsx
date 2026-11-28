@@ -121,7 +121,10 @@ describe("live lot dossier", () => {
     unmount();
 
     show(transferredSnapshot(), "financing");
-    const financing = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    // The first table is the results; the owner also sees the chromium-products reference (web.md §10).
+    const [results] = screen.getAllByRole("table");
+    if (!results) throw new Error("no results table");
+    const financing = within(results).getAllByRole("row").slice(1);
     expect(financing.map(rowCells)).toEqual(noLoanRows);
     expect(screen.getByText("No releases for this lot.")).toBeInTheDocument();
     expect(screen.queryByText("Principal")).not.toBeInTheDocument();

@@ -10,6 +10,7 @@ import { type LendingActions, livePaymentLabels, summaryLine } from "./lending-c
 import { LoadingSection } from "./loading-section";
 import { LoanBlock } from "./loan-block";
 import { type FinancialRecord, FinancialResults } from "./record-tables";
+import { ReferencePrices } from "./reference-prices";
 
 // The Financing tab in live mode (live-lending.md §6.9.2): the lot's results, then the facilities,
 // loans, releases and open commands the chain and the relay hold for it.
@@ -43,6 +44,7 @@ export function FinancingLive({
       )}
       <LoadingSection lot={lot} context={context} actions={actions} />
       {showFacilities && <FacilitySection lending={lending} context={context} actions={actions} />}
+      {showFacilities && <ReferencePrices />}
       {lending.loans.length > 0 && (
         <section aria-labelledby="financing-loans" className="flex flex-col gap-4">
           <h2 id="financing-loans">Loans</h2>
