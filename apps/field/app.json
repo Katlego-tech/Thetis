@@ -8,7 +8,8 @@
     "platforms": ["android"],
     "android": {
       "package": "dev.thetis.field",
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["RECORD_AUDIO"]
     },
     "plugins": [
       "expo-secure-store",
@@ -18,10 +19,19 @@
         {
           "cameraPermission": "Thetis field uses the camera to photograph weighbridge tickets, assay certificates and origin documents for an intake.",
           "photosPermission": false,
-          "microphonePermission": false
+          "microphonePermission": "Thetis field uses the microphone only while you talk to the Thetis navigator."
         }
       ],
-      ["expo-document-picker"]
+      ["expo-document-picker"],
+      [
+        "@livekit/react-native-expo-plugin",
+        {
+          "android": {
+            "audioType": "communication"
+          }
+        }
+      ],
+      "@config-plugins/react-native-webrtc"
     ]
   }
 }

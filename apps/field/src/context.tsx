@@ -14,6 +14,7 @@ import type { DraftStore, StoredWallet } from "./drafts/store";
 import type { Tab } from "./nav";
 import type { OfflineCache } from "./offline-cache";
 import type { ProtocolContext } from "./protocol";
+import { TalkButton, VoiceStrip } from "./voice/VoiceControls";
 import type { WalletConnection } from "./wallet";
 
 export type Route =
@@ -90,7 +91,18 @@ export function useBusy(active: boolean): void {
 export function useRootChrome(): { tabBar?: ReactNode; onSwitchOrganisation?: () => void } {
   const app = useApp();
   return {
-    tabBar: <TabBar tabs={app.tabs} current={app.tab} disabled={app.busy} onSelect={app.openTab} />,
+    tabBar: (
+      <>
+        <VoiceStrip />
+        <TabBar
+          tabs={app.tabs}
+          current={app.tab}
+          disabled={app.busy}
+          onSelect={app.openTab}
+          trailing={<TalkButton />}
+        />
+      </>
+    ),
     onSwitchOrganisation: app.memberships.length > 1 ? app.switchOrganisation : undefined,
   };
 }
