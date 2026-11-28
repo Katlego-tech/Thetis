@@ -7,6 +7,13 @@ import { vi } from "vitest";
 type Props = Record<string, unknown> & { children?: ReactNode };
 
 const appStateListeners = new Set<(state: string) => void>();
+const backListeners: (() => boolean)[] = [];
+
+/** Presses Android Back: the newest listener first, as React Native does. True when consumed. */
+export function pressBack(): boolean {
+  for (const listener of [...backListeners].reverse()) if (listener()) return true;
+  return false;
+}
 
 /** Fires an AppState change, as Android does when the app returns to the foreground. */
 export function emitAppState(state: "active" | "background"): void {
@@ -15,11 +22,24 @@ export function emitAppState(state: "active" | "background"): void {
 
 function Box(props: Props) {
   const label = props.accessibilityLabel as string | undefined;
+  if (props.accessibilityRole === "tablist")
+    return (
+      <div role="tablist" aria-label={label}>
+        {props.children}
+      </div>
+    );
   return label ? (
     <section aria-label={label}>{props.children}</section>
   ) : (
     <div>{props.children}</div>
   );
+}
+
+/** A pressable tab keeps its role and selected state, so a test can find it as a tab. */
+function tabRole(props: Props): Record<string, unknown> {
+  if (props.accessibilityRole !== "tab") return {};
+  const state = props.accessibilityState as { selected?: boolean } | undefined;
+  return { role: "tab", "aria-selected": state?.selected === true };
 }
 
 export const reactNative = {
@@ -29,6 +49,8 @@ export const reactNative = {
   Pressable: (props: Props) => (
     <button
       type="button"
+      {...tabRole(props)}
+      aria-description={props.accessibilityHint as string | undefined}
       aria-label={props.accessibilityLabel as string | undefined}
       disabled={props.disabled === true}
       onClick={props.onPress as (() => void) | undefined}
@@ -58,7 +80,17 @@ export const reactNative = {
       return { remove: () => appStateListeners.delete(listener) };
     },
   },
-  BackHandler: { addEventListener: () => ({ remove: () => {} }) },
+  BackHandler: {
+    addEventListener: (_event: string, listener: () => boolean) => {
+      backListeners.push(listener);
+      return {
+        remove: () => {
+          const at = backListeners.indexOf(listener);
+          if (at >= 0) backListeners.splice(at, 1);
+        },
+      };
+    },
+  },
   Linking: { openURL: vi.fn(async () => true) },
   Platform: { OS: "android", select: (options: Record<string, unknown>) => options.android },
 };

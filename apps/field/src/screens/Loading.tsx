@@ -9,7 +9,7 @@ import { RegistryMark } from "../components/RegistryMark";
 import { SignedText } from "../components/SignedText";
 import { SigningNotes } from "../components/SigningNotes";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useBusy } from "../context";
 import {
   acceptanceLabel,
   acceptanceWarnings,
@@ -119,6 +119,7 @@ export function Loading(props: { intent: string }) {
       candidate.kind === "record_loading" && candidate.intent === props.intent,
   });
   const { view, phase, problem } = signing;
+  useBusy(phase.kind === "wallet" || phase.kind === "sending");
   const viewSha =
     view?.status === "awaiting_signatures" ? (view.text?.messageSha256 ?? null) : null;
 

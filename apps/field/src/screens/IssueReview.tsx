@@ -10,7 +10,7 @@ import { Outcome } from "../components/Outcome";
 import { RegistryMark } from "../components/RegistryMark";
 import { SignedText } from "../components/SignedText";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useBusy } from "../context";
 import { REFETCH_CODES, RELAY_TIMEOUT, type RelayPhase, relayErrorCopy } from "../copy";
 import { type Owner, readOwners, readSites, type Site } from "../data/reads";
 import { useSigning } from "../data/useSigning";
@@ -71,6 +71,7 @@ export function IssueReview(props: { draftId: string }) {
   const [draft, setDraft] = useState<IntakeDraft | null>(null);
   const [view, setView] = useState<CommandView | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  useBusy(phase.kind === "wallet" || phase.kind === "sending");
   const [problem, setProblem] = useState<Problem>(null);
   const [site, setSite] = useState<Site | null>(null);
   const [owner, setOwner] = useState<Owner | null>(null);

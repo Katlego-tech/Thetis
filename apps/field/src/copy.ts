@@ -245,3 +245,19 @@ export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars
 
 export const RELAY_TIMEOUT =
   "Thetis did not answer in time. Nothing changed on this phone. Try again.";
+
+/** The tab bar, the top-bar switcher and the Account tab (navigation.md §9.2). */
+export const NAV_COPY = {
+  tabHome: "Home",
+  tabAccount: "Account",
+  busyHint: "Wait for your wallet to finish.",
+  switchLabel: "Switch organisation, now {org}",
+  accountTitle: "Account",
+  organisationTitle: "Organisation",
+  switchOrganisation: "Switch organisation",
+  signedInTitle: "Signed in",
+  signOut: "Sign out",
+  signOutHelp: "Your drafts stay on this phone. Signing in again needs a code from your email.",
+  pickerFootnote:
+    "Drafts and wallets are kept per organisation. You can switch later from Account.",
+} as const;

@@ -8,7 +8,15 @@ import type { IntakeDraft } from "../../src/drafts/store";
 import { decodeBase58, encodeBase64 } from "../../src/lib/encoding";
 import { IssueReview } from "../../src/screens/IssueReview";
 import { commandView, DEMO_TEXT } from "../fixtures";
-import { completeDraft, fakeApp, membership, renderScreen, USER, WALLET } from "./app";
+import {
+  completeDraft,
+  expectBusyBack,
+  fakeApp,
+  membership,
+  renderScreen,
+  USER,
+  WALLET,
+} from "./app";
 import { emitAppState } from "./native";
 
 vi.mock("react-native", async () => (await import("./native")).reactNative);
@@ -252,6 +260,19 @@ describe("another Thetis instance (F12)", () => {
     (created as { protocol: string }).protocol = "11111111111111111111111111111111";
     await act(async () => fireEvent.click(sign));
     expect(transact).not.toHaveBeenCalled();
+  });
+});
+
+describe("busy while signing (navigation.md §4.4)", () => {
+  it("marks the app busy while the signatures are sending, and Back does nothing", async () => {
+    const app = await withStored(completeDraft());
+    vi.mocked(app.commands.create).mockResolvedValue(commandView("awaiting_signatures"));
+    vi.mocked(app.commands.get).mockResolvedValue(commandView("awaiting_signatures"));
+    vi.mocked(app.commands.sign).mockReturnValue(new Promise(() => {}));
+    await renderScreen(<IssueReview draftId="d-1" />, app);
+    const sign = await enabled("Sign in your wallet");
+    await act(async () => fireEvent.click(sign));
+    await expectBusyBack(app);
   });
 });
 

@@ -2,6 +2,7 @@ import { Head, ListBox, ListItem, Panel } from "../components/Blocks";
 import { Button } from "../components/Button";
 import { Frame } from "../components/Frame";
 import { Txt } from "../components/Txt";
+import { NAV_COPY } from "../copy";
 import type { Membership } from "../data/reads";
 
 export function ConfigError(props: { errors: string[] }) {
@@ -55,7 +56,7 @@ export function ChooseOrganisation(props: {
         ))}
       </ListBox>
       <Txt variant="small" tone="ink2">
-        Drafts and wallets are kept per organisation. You can switch later from this screen.
+        {NAV_COPY.pickerFootnote}
       </Txt>
     </Frame>
   );

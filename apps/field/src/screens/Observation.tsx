@@ -15,7 +15,7 @@ import { RegistryMark } from "../components/RegistryMark";
 import { SignedText } from "../components/SignedText";
 import { SigningNotes } from "../components/SigningNotes";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useBusy } from "../context";
 import {
   batchLine,
   expectedObservationText,
@@ -282,6 +282,7 @@ export function Observation() {
     },
   });
   const { view, phase, problem } = signing;
+  useBusy(phase.kind === "wallet" || phase.kind === "sending");
 
   // A draft that holds a command opens it; it never prepares a second.
   // biome-ignore lint/correctness/useExhaustiveDependencies: opens once, when online with a stored command
