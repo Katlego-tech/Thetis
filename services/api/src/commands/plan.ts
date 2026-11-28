@@ -62,9 +62,11 @@ import {
   getCreateLoadingIntentInstruction,
   getCreateReleaseIntentInstruction,
   getDepositInstruction,
+  getDocumentAttestationEncoder,
   getHandoverInstruction,
   getIssueLotInstruction,
   getLiquidateInstruction,
+  getLockAllocationEncoder,
   getLockAllocationSize,
   getOpenFacilityInstruction,
   getPledgeInstruction,
@@ -82,6 +84,7 @@ import {
   type Loan,
   LoanStatus,
   type LockAllocation,
+  LockControl,
   type ManifestBatch,
   ObservationKind,
   type Organisation,
@@ -121,16 +124,48 @@ import {
 } from "./texts.ts";
 import { type CommandKind, RelayError, type SignerRole, type StoredSigner } from "./views.ts";
 
-// LockAllocation (state.rs): 8 discriminator + protocol 32 + loan 32, then the position
-// (field-app.md T067r.3 fold 43).
-const LOCK_POSITION_OFFSET = 72;
+/** The byte at which a generated encoder writes a 32-byte field: the first byte that differs
+ * between two encodings whose only difference is that field (no hand-written layout). */
+function fieldOffset(encode: (fill: number) => ArrayLike<number>): number {
+  const [low, high] = [Array.from(encode(0x00)), Array.from(encode(0xff))];
+  const at = low.findIndex((byte, index) => byte !== high[index]);
+  if (at < 0) throw new Error("the field is not in the encoding");
+  return at;
+}
+const filled = (fill: number) => new Uint8Array(32).fill(fill);
+const filledKey = (fill: number) => getAddressDecoder().decode(filled(fill));
+
+// LockAllocation's position, filtered on by memcmp (field-app.md T067r.3 fold 43).
+export const LOCK_POSITION_OFFSET = fieldOffset((fill) =>
+  getLockAllocationEncoder().encode({
+    protocol: filledKey(1),
+    loan: filledKey(2),
+    position: filledKey(fill),
+    quantityKg: 0n,
+    control: Object.values(LockControl)[0] as never,
+    bump: 0,
+  }),
+);
 const LOCK_DISCRIMINATOR = Buffer.from(LOCK_ALLOCATION_DISCRIMINATOR);
 /** state.rs MAX_LOADING_LOANS: the triples one record_loading takes (driver decision D3). */
 const MAX_LOADING_LOANS = 4;
 
-// DocumentAttestation (state.rs): 8 discriminator + protocol 32 + kind 1, then the subject.
-const DOCUMENT_SUBJECT_OFFSET = 41;
-const DOCUMENT_ATTESTATION_SIZE = 159;
+// DocumentAttestation's subject, filtered on by memcmp, and its allocated size: the encoding with
+// every option present (`revoked_at` Some), which is the space the program allocates.
+const documentAttestation = (subject: Uint8Array) =>
+  getDocumentAttestationEncoder().encode({
+    protocol: filledKey(1),
+    kind: DocumentKind.Origin,
+    subject,
+    version: 0,
+    issuer: filledKey(2),
+    sha256: filled(3),
+    validUntil: 0n,
+    revokedAt: 0n,
+    bump: 0,
+  });
+export const DOCUMENT_SUBJECT_OFFSET = fieldOffset((fill) => documentAttestation(filled(fill)));
+export const DOCUMENT_ATTESTATION_SIZE = documentAttestation(filled(0)).length;
 const DOCUMENT_DISCRIMINATOR = Buffer.from(DOCUMENT_ATTESTATION_DISCRIMINATOR);
 
 export const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" as Address;
