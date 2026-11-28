@@ -15,6 +15,7 @@ type StartOptions = {
   onDisconnect?: (details: { reason: string; message?: string }) => void;
   onError?: (message: string, context?: unknown) => void;
   onModeChange?: (props: { mode: "speaking" | "listening" }) => void;
+  onStatusChange?: (props: { status: string }) => void;
 };
 
 const sdk = vi.hoisted(() => ({
@@ -50,6 +51,9 @@ vi.mock("@/components/access/use-access-session", () => ({
 
 const { VoiceProvider } = await import("@/components/voice/voice-provider");
 const { VoicePanel } = await import("@/components/voice/voice-panel");
+const { WorkspaceLoading } = await import("@/components/shell/workspace-loading");
+const { default: ContextNotFound } = await import("@/app/[context]/not-found");
+const { default: ContextLayout } = await import("@/app/[context]/layout");
 
 const API = "http://api.test";
 const RELEASE_ONE = "7VDNjuhymdWkPh1isgKCw36ESFCKf6uieAyzbVJWiyxs";
@@ -526,6 +530,144 @@ describe("voice panel", () => {
     const options = await goLive();
     view.unmount();
     expect(sdk.ends).toBe(1);
+    expect(await options.clientTools?.navigate_to?.({ screen: "queue" })).toBeUndefined();
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+
+  test("unmounting while the token is being fetched starts nothing afterwards", async () => {
+    let answer: (response: Response) => void = () => {};
+    replies.push((call) =>
+      call.url === "/v1/conversations/session"
+        ? new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+        : undefined,
+    );
+    const view = renderPanel();
+    fireEvent.click(talkButton());
+    await waitFor(() => expect(sessionCalls()).toHaveLength(1));
+    view.unmount();
+    answer(
+      json(200, {
+        data: {
+          conversationToken: "synthetic-conversation-token-1",
+          conversationId: "c",
+          agentId: "a",
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sdk.starts).toHaveLength(0);
+  });
+
+  test("stops each microphone track exactly once before asking for a token", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    microphone = async () => ({ getTracks: () => [{ stop: first }, { stop: second }] });
+    renderPanel();
+    fireEvent.click(talkButton());
+    await waitFor(() => expect(sdk.starts).toHaveLength(1));
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("voice review folds", () => {
+  test("a loading page and not-found keep the status line and End on screen while voice is live", async () => {
+    vi.stubEnv("THETIS_DATA_SOURCE", "live");
+    const view = renderPanel();
+    // Idle: the loading page adds no voice line.
+    view.rerender(
+      <VoiceProvider organisationId="lender-one">
+        <WorkspaceLoading>
+          <p>Loading body</p>
+        </WorkspaceLoading>
+      </VoiceProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "End voice session" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    view.rerender(
+      <VoiceProvider organisationId="lender-one">
+        <VoicePanel organisationId="lender-one" sections={SECTIONS} />
+      </VoiceProvider>,
+    );
+    await goLive();
+    // The page navigates: its loading screen has no rail, but keeps the line and End.
+    view.rerender(
+      <VoiceProvider organisationId="lender-one">
+        <WorkspaceLoading>
+          <p>Loading body</p>
+        </WorkspaceLoading>
+      </VoiceProvider>,
+    );
+    expect(screen.queryByRole("combobox", { name: "Open a screen" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Talk to the Thetis navigator" }),
+    ).not.toBeInTheDocument();
+    expect(status()).toHaveTextContent("Listening.");
+    // The not-found page keeps them too.
+    view.rerender(
+      <VoiceProvider organisationId="lender-one">
+        <ContextNotFound />
+      </VoiceProvider>,
+    );
+    expect(status()).toHaveTextContent("Listening.");
+    const end = screen.getByRole("button", { name: "End voice session" });
+    expect(end).toHaveTextContent("End");
+    fireEvent.click(end);
+    expect(sdk.ends).toBe(1);
+    expect(screen.queryByRole("button", { name: "End voice session" })).not.toBeInTheDocument();
+  });
+
+  test("a malformed tool call is refused and never ends a live session", async () => {
+    renderPanel();
+    const options = await goLive();
+    const tools = options.clientTools ?? {};
+    const navigate = tools.navigate_to as unknown as (parameters?: unknown) => unknown;
+    const lookup = tools.get_lot_evidence as unknown as (parameters?: unknown) => unknown;
+    for (const parameters of [undefined, null, "CR-0001", 7]) {
+      const refused = await act(async () => navigate(parameters));
+      expect(JSON.parse(String(refused))).toEqual({
+        ok: false,
+        reason: "UNKNOWN_SCREEN",
+        message: "That screen is not in Thetis.",
+      });
+      const bad = await act(async () => lookup(parameters));
+      expect(JSON.parse(String(bad))).toEqual({
+        ok: false,
+        reason: "BAD_ID",
+        message: "That is not a lot id. Lot ids look like CR-0001.",
+      });
+    }
+    expect(talkButton()).toHaveAccessibleName("End voice session");
+    expect(mocks.push).not.toHaveBeenCalled();
+
+    // An SDK error on an open connection leaves the session live.
+    act(() => options.onError?.("audio glitch"));
+    expect(talkButton()).toHaveAccessibleName("End voice session");
+    expect(sdk.ends).toBe(0);
+    // Once the SDK reports the connection closed, an error ends it: unavailable.
+    act(() => {
+      options.onStatusChange?.({ status: "disconnected" });
+      options.onError?.("connection lost");
+    });
+    expect(status()).toHaveTextContent(UNAVAILABLE);
+    expect(talkButton()).toHaveAccessibleName("Try voice again");
+  });
+
+  test("switching organisation ends the session", async () => {
+    vi.stubEnv("THETIS_DATA_SOURCE", "live");
+    const panel = <VoicePanel organisationId="lender-one" sections={SECTIONS} />;
+    const view = render(
+      await ContextLayout({ params: Promise.resolve({ context: "lender-one" }), children: panel }),
+    );
+    const options = await goLive();
+    view.rerender(
+      await ContextLayout({ params: Promise.resolve({ context: "khunou" }), children: panel }),
+    );
+    expect(sdk.ends).toBe(1);
+    expect(status()).toHaveTextContent("Ask to open a screen, or what evidence a lot has.");
     expect(await options.clientTools?.navigate_to?.({ screen: "queue" })).toBeUndefined();
     expect(mocks.push).not.toHaveBeenCalled();
   });

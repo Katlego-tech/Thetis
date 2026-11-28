@@ -29,14 +29,18 @@ export default async function ContextLayout({
   // navigation inside the organisation, so a voice navigate_to never ends its own session.
   const { context } = await params;
   if (source !== "reference")
-    return <VoiceProvider organisationId={context}>{children}</VoiceProvider>;
+    return (
+      <VoiceProvider key={context} organisationId={context}>
+        {children}
+      </VoiceProvider>
+    );
 
   const reader = getReader();
   const current = reader.context(context);
   if (!current) notFound();
 
   return (
-    <VoiceProvider organisationId={context}>
+    <VoiceProvider key={context} organisationId={context}>
       <SkipLink />
       <ReferenceBanner />
       <div className="workspace-shell">

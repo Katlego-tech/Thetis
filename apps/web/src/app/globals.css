@@ -481,6 +481,23 @@
     background: transparent;
   }
 
+  /* A page without the rail keeps the status line and End (voice.md review fold 1). */
+  .voice-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    background: var(--rail);
+  }
+
+  .voice-line .voice-button {
+    flex: none;
+    min-width: 84px;
+  }
+
   .voice-reason {
     border-inline-start: 2px solid var(--refuse);
     padding-inline-start: 8px;

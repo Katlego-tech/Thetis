@@ -138,3 +138,27 @@ export function VoicePanel(props: {
     </section>
   );
 }
+
+/**
+ * voice.md review fold 1: a page without the rail (a loading screen, not-found) keeps the
+ * status line and End on screen while voice is connecting or live. Nothing else of the panel.
+ */
+export function VoiceLine(): JSX.Element | null {
+  const { state, end } = useVoice();
+  if (state.phase !== "connecting" && state.phase !== "live") return null;
+  return (
+    <div className="voice-line">
+      <p role="status" className="voice-status">
+        {statusLine(state)}
+      </p>
+      <button
+        type="button"
+        className="voice-button is-live"
+        aria-label={VOICE_COPY.talk.live.name}
+        onClick={end}
+      >
+        {VOICE_COPY.talk.live.label}
+      </button>
+    </div>
+  );
+}

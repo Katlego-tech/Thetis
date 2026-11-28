@@ -50,6 +50,13 @@ export function useVoice(): VoiceValue {
 
 type SessionData = { conversationToken: string; conversationId: string; agentId: string };
 
+/** A tool call's parameters; anything that is not an object reads as {} and is refused. */
+function argumentsOf(parameters: unknown): Record<string, unknown> {
+  return typeof parameters === "object" && parameters !== null
+    ? (parameters as Record<string, unknown>)
+    : {};
+}
+
 async function microphoneGranted(): Promise<boolean> {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -114,19 +121,19 @@ function VoiceSession({
         return;
       }
 
-      const navigate_to = (parameters: Record<string, unknown>) => {
+      const navigate_to = (parameters?: Record<string, unknown>) => {
         const now = stateRef.current;
         if (!current() || now.phase !== "live") return undefined;
-        const { result, href } = resolveNavigate(parameters, targetsRef.current);
+        const { result, href } = resolveNavigate(argumentsOf(parameters), targetsRef.current);
         setState({ ...now, notice: result.ok ? null : result.message });
         if (result.ok && href) routerRef.current.push(href);
         return JSON.stringify(result);
       };
-      const get_lot_evidence = async (parameters: Record<string, unknown>) => {
+      const get_lot_evidence = async (parameters?: Record<string, unknown>) => {
         const now = stateRef.current;
         if (!current() || now.phase !== "live") return undefined;
         setState({ ...now, notice: null });
-        const lotId = normaliseId(parameters.lot_id);
+        const lotId = normaliseId(argumentsOf(parameters).lot_id);
         if (lotId === null)
           return JSON.stringify({
             ok: false,
@@ -144,6 +151,8 @@ function VoiceSession({
         return JSON.stringify(found.ok ? found.data : { ok: false, reason: found.code });
       };
 
+      // The SDK's own connection status, so an error ends only a closed connection (review fold 2).
+      let closed = false;
       conversationRef.current.startSession({
         conversationToken: issued.data.conversationToken,
         connectionType: "webrtc",
@@ -157,6 +166,9 @@ function VoiceSession({
           if (!current() || now.phase !== "live") return;
           setState({ ...now, speaking: mode === "speaking" });
         },
+        onStatusChange: ({ status }) => {
+          closed = status === "disconnected" || status === "disconnecting";
+        },
         onError: () => {
           if (!current()) return;
           const now = stateRef.current;
@@ -165,6 +177,8 @@ function VoiceSession({
             void start(id, 2);
             return;
           }
+          // An error on an open connection leaves a live session live.
+          if (now.phase === "live" && !closed) return;
           retire();
           conversationRef.current.endSession();
           setState({ phase: "unavailable", cause: now.phase === "live" ? "dropped" : "service" });
