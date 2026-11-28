@@ -1,6 +1,7 @@
 // The phone's reads of the read model and access tables, under the person's RLS. The read
 // model is for choosing and showing; it is never the evidence that something happened.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SIGNER_ROLES, type SignerRole } from "../api/commands";
 import { type CheckpointRow, type ProtocolResult, resolveProtocol } from "../protocol";
 import { SupabaseTimeout } from "../supabase";
 
@@ -106,6 +107,135 @@ export async function readChainOrganisation(
       .maybeSingle(),
   );
   return row && { address: row.address, role: row.role, displayName: row.display_name };
+}
+
+/** The organisation behind a chain Organisation address, for a handover's `to`. */
+export async function readOrganisationAt(
+  db: SupabaseClient,
+  protocol: string,
+  address: string,
+): Promise<{ orgId: string; displayName: string } | null> {
+  const row = await run<{ org_id: string; display_name: string } | null>(
+    db
+      .from("chain_organisations")
+      .select("org_id, display_name")
+      .eq("protocol", protocol)
+      .eq("address", address)
+      .maybeSingle(),
+  );
+  return row && { orgId: row.org_id, displayName: row.display_name };
+}
+
+export interface WaitingCommand {
+  id: string;
+  kind: "handover" | "record_loading";
+  intent: string | null;
+  createdAt: string;
+  fields: { label: string; value: string }[];
+  role: SignerRole;
+}
+
+interface WaitingRow {
+  id: string;
+  kind: "handover" | "record_loading";
+  intent: string | null;
+  fields: unknown;
+  signers: unknown;
+  signatures: unknown;
+  created_at: string;
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+function readFields(value: unknown): { label: string; value: string }[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: { label: string; value: string }[] = [];
+  for (const item of value) {
+    if (!isObject(item) || typeof item.label !== "string" || typeof item.value !== "string") {
+      return null;
+    }
+    out.push({ label: item.label, value: item.value });
+  }
+  return out;
+}
+
+/** The role of this organisation's signer that has not signed yet, or null (also for bad jsonb). */
+function unsignedRole(row: WaitingRow, organisationId: string): SignerRole | null {
+  if (!Array.isArray(row.signers) || !Array.isArray(row.signatures)) return null;
+  const signed = new Set<string>();
+  for (const item of row.signatures) {
+    if (!isObject(item) || typeof item.role !== "string") return null;
+    signed.add(item.role);
+  }
+  let mine: SignerRole | null = null;
+  for (const item of row.signers) {
+    if (
+      !isObject(item) ||
+      typeof item.role !== "string" ||
+      !(SIGNER_ROLES as readonly string[]).includes(item.role) ||
+      typeof item.organisationId !== "string"
+    ) {
+      return null;
+    }
+    if (mine === null && item.organisationId === organisationId && !signed.has(item.role)) {
+      mine = item.role as SignerRole;
+    }
+  }
+  return mine;
+}
+
+/** Open handovers and loadings where this organisation's signer has not signed yet. */
+export async function readWaiting(
+  db: SupabaseClient,
+  protocol: string,
+  organisationId: string,
+): Promise<WaitingCommand[]> {
+  const rows = await run<WaitingRow[]>(
+    db
+      .from("commands")
+      .select("id, kind, intent, fields, signers, signatures, created_at")
+      .eq("protocol", protocol)
+      .eq("status", "awaiting_signatures")
+      .in("kind", ["handover", "record_loading"])
+      .order("created_at", { ascending: false }),
+  );
+  const waiting: WaitingCommand[] = [];
+  for (const row of rows) {
+    const fields = readFields(row.fields);
+    const role = unsignedRole(row, organisationId);
+    if (fields === null || role === null) continue;
+    waiting.push({
+      id: row.id,
+      kind: row.kind,
+      intent: row.intent,
+      createdAt: row.created_at,
+      fields,
+      role,
+    });
+  }
+  return waiting;
+}
+
+/** An open record_loading for this intent: the screen links to it and never prepares a second. */
+export async function readOpenLoadingCommand(
+  db: SupabaseClient,
+  protocol: string,
+  intent: string,
+): Promise<string | null> {
+  const rows = await run<{ id: string }[]>(
+    db
+      .from("commands")
+      .select("id")
+      .eq("protocol", protocol)
+      .eq("kind", "record_loading")
+      .eq("intent", intent)
+      .in("status", ["awaiting_signatures", "submitted", "outcome_unknown"])
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(1),
+  );
+  return rows[0]?.id ?? null;
 }
 
 export interface SignerLink {

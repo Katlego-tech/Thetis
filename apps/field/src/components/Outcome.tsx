@@ -1,6 +1,11 @@
 import { View } from "react-native";
 import type { CommandView } from "../api/commands";
-import { type OutcomeContext, outcomeView } from "../outcome";
+import {
+  type CustodyOutcomeContext,
+  custodyOutcomeView,
+  type OutcomeContext,
+  outcomeView,
+} from "../outcome";
 import { Button } from "./Button";
 import { ErrorBlock } from "./Note";
 import { RegistryMark } from "./RegistryMark";
@@ -16,11 +21,17 @@ const PRIMARY_LABEL = {
 /** The only component that can render Confirmed or Finalized, and only from the relay's view. */
 export function Outcome(props: {
   command: CommandView;
-  context: OutcomeContext;
+  context: OutcomeContext | CustodyOutcomeContext;
   onPrimary: (action: "back_home" | "edit" | "renew") => void;
   busy?: boolean;
+  /** Button words a screen names itself; the rest keep the issue screen's. */
+  labels?: Partial<Record<"back_home" | "edit" | "renew", string>>;
 }) {
-  const view = outcomeView(props.command, props.context);
+  const { context } = props;
+  const view =
+    "kind" in context
+      ? custodyOutcomeView(props.command, context)
+      : outcomeView(props.command, context);
   const failed = props.command.status === "failed";
   const primary = view.primary;
   return (
@@ -44,7 +55,7 @@ export function Outcome(props: {
       {view.transaction ? <TxLink {...view.transaction} /> : null}
       {primary ? (
         <Button
-          label={PRIMARY_LABEL[primary]}
+          label={props.labels?.[primary] ?? PRIMARY_LABEL[primary]}
           kind={primary === "back_home" ? "quiet" : "primary"}
           disabled={props.busy}
           onPress={() => props.onPrimary(primary)}

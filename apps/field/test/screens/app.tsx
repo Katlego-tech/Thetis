@@ -127,6 +127,7 @@ export function fakeApp(overrides: Partial<AppContextValue> = {}): AppContextVal
     } as unknown as AppContextValue["commands"],
     walletLinks: { challenge: vi.fn(), complete: vi.fn() },
     evidence: { finalize: vi.fn() } as unknown as AppContextValue["evidence"],
+    field: { batches: vi.fn(), loadingIntents: vi.fn() } as unknown as AppContextValue["field"],
     store: createDraftStore(storage),
     cache: createOfflineCache(memoryStorage()),
     user: { id: USER, email: "custodian@example.test" },
