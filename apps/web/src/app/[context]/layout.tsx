@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { ReferenceBanner } from "@/components/shell/reference-banner";
 import { SideRail } from "@/components/shell/side-rail";
 import { SkipLink } from "@/components/shell/skip-link";
+import { VoiceProvider } from "@/components/voice/voice-provider";
 import { getReader } from "@/data/get-reader";
 import { LiveDataError } from "@/data/live/types";
 import { dataSource } from "@/data/load-reader";
@@ -24,15 +25,22 @@ export default async function ContextLayout({
     if (!(error instanceof LiveDataError)) throw error;
     source = null;
   }
-  if (source !== "reference") return children;
-
+  // One voice session per organisation workspace, in both modes: this layout persists across
+  // navigation inside the organisation, so a voice navigate_to never ends its own session.
   const { context } = await params;
+  if (source !== "reference")
+    return (
+      <VoiceProvider key={context} organisationId={context}>
+        {children}
+      </VoiceProvider>
+    );
+
   const reader = getReader();
   const current = reader.context(context);
   if (!current) notFound();
 
   return (
-    <>
+    <VoiceProvider key={context} organisationId={context}>
       <SkipLink />
       <ReferenceBanner />
       <div className="workspace-shell">
@@ -41,6 +49,6 @@ export default async function ContextLayout({
           <div className="page-content">{children}</div>
         </main>
       </div>
-    </>
+    </VoiceProvider>
   );
 }

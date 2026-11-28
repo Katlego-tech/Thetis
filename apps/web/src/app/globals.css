@@ -380,6 +380,131 @@
     border-top: 1px solid var(--rail-line);
   }
 
+  /* The voice block (voice.md §5.1, web-reference/voice.html): after the nav, before the account. */
+  .rail-voice {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rail-line);
+  }
+
+  .rail-voice-heading {
+    padding: 0 0 2px;
+  }
+
+  .rail-voice-talk,
+  .rail-voice-fallback {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .voice-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    border: 1px solid var(--rail-line);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    color: var(--rail-ink);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .voice-button:hover {
+    background: var(--rail-on);
+  }
+
+  .voice-button.is-live {
+    border-color: var(--rail-ink);
+    color: #ffffff;
+  }
+
+  .voice-button.is-waiting {
+    color: var(--rail-mute);
+    cursor: default;
+  }
+
+  .voice-status {
+    color: var(--rail-ink);
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+
+  .voice-status.is-down {
+    border-inline-start: 2px solid var(--refuse);
+    padding-inline-start: 8px;
+  }
+
+  .voice-status small {
+    display: block;
+    margin-top: 2px;
+    color: var(--rail-mute);
+    font-size: 12px;
+  }
+
+  .voice-label {
+    margin-top: 4px;
+    color: var(--rail-mute);
+    font-size: 11px;
+  }
+
+  .voice-control {
+    min-height: 36px;
+    min-width: 0;
+    border: 1px solid var(--rail-line);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    color: #ffffff;
+    background: var(--rail-on);
+    font-size: 13px;
+  }
+
+  .voice-control-mono {
+    font-family: var(--font-mono), monospace;
+    font-weight: 500;
+  }
+
+  .voice-control::placeholder {
+    color: var(--rail-mute);
+  }
+
+  .voice-control:disabled {
+    border-style: dashed;
+    color: var(--rail-mute);
+    background: transparent;
+  }
+
+  /* A page without the rail keeps the status line and End (voice.md review fold 1). */
+  .voice-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    background: var(--rail);
+  }
+
+  .voice-line .voice-button {
+    flex: none;
+    min-width: 84px;
+  }
+
+  .voice-reason {
+    border-inline-start: 2px solid var(--refuse);
+    padding-inline-start: 8px;
+    color: var(--rail-ink);
+    font-size: 12px;
+  }
+
   .rail-account .rail-link {
     padding: 6px 10px;
   }
@@ -923,16 +1048,66 @@
   @media (width < 1024px) {
     .workspace-shell {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: 56px 1fr;
+      grid-template-rows: auto 1fr;
     }
 
     .side-rail {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-rows: 56px auto;
       align-items: center;
       justify-items: end;
       gap: 8px;
       padding: 0 16px;
+    }
+
+    /* The voice block becomes the top bar's second row, outside the Menu sheet (voice.md §5.1). */
+    .side-rail > .rail-voice {
+      grid-row: 2;
+      grid-column: 1 / -1;
+      justify-self: stretch;
+      margin-inline: -16px;
+      padding: 10px 16px 12px;
+    }
+
+    .rail-voice-heading,
+    .rail-voice .voice-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .rail-voice-talk {
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .rail-voice-talk .voice-button {
+      flex: none;
+      min-width: 84px;
+    }
+
+    .rail-voice-talk .voice-status {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .rail-voice-fallback {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .rail-voice-fallback .voice-open {
+      min-width: 64px;
+    }
+
+    .rail-voice-fallback .voice-reason {
+      grid-column: 1 / -1;
     }
 
     .context-switcher {
