@@ -61,14 +61,18 @@ export async function apiPost<T>(
   return request<T>(path, accessToken, { method: "POST", body: JSON.stringify(body) });
 }
 
-export async function apiGet<T>(path: string, accessToken: string): Promise<ApiResult<T>> {
-  return request<T>(path, accessToken, { method: "GET" });
+export async function apiGet<T>(
+  path: string,
+  accessToken: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ApiResult<T>> {
+  return request<T>(path, accessToken, { method: "GET", ...options });
 }
 
 async function request<T>(
   path: string,
   accessToken: string,
-  init: { method: "GET" | "POST"; body?: string },
+  init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal },
 ): Promise<ApiResult<T>> {
   const baseUrl = process.env.NEXT_PUBLIC_API_URL;
   if (!baseUrl) throw new Error("NEXT_PUBLIC_API_URL is not set");
@@ -82,6 +86,7 @@ async function request<T>(
         ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(init.body === undefined ? {} : { body: init.body }),
+      ...(init.signal === undefined ? {} : { signal: init.signal }),
     });
   } catch {
     return { ok: false, code: "NETWORK", status: 0 };

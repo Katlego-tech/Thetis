@@ -14,6 +14,7 @@ import { type CommandView, failureExplanation } from "@/lib/commands";
 import { fakeWallet } from "../access/fake-wallet";
 import {
   acceptance,
+  address,
   BUYER_POSITION,
   checkpoint,
   command,
@@ -644,6 +645,191 @@ describe("loading reads", () => {
       ),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/Accepted for \d+ of/);
+  });
+});
+
+describe("loading per position", () => {
+  // Lender One Bank lends to Khunou (3,000 t, all locked to loan 0) and to Buyer Smelter Co
+  // (2,000 t, 1,000 t locked to its loan 0 and 1,000 t to a lock it can't see). Each position has
+  // a live loading intent; the buyer's was created later, at a higher position revision.
+  const BUYER_FACILITY = address(90);
+  const BUYER_LOAN = address(91);
+  const BUYER_LOCK = address(92);
+  const BUYER_INTENT = address(93);
+
+  function twoPositions(): LiveSnapshot {
+    const snapshot = loadingSnapshot(
+      ["lender-one"],
+      [
+        loadingIntent(),
+        loadingIntent({
+          address: BUYER_INTENT,
+          position: BUYER_POSITION,
+          owner: orgAccount("buyer-smelter"),
+          owner_org_id: orgId("buyer-smelter"),
+          nonce: "4",
+          quantity_kg: "2000000",
+          locked_kg: "2000000",
+          position_revision: "5",
+        }),
+      ],
+    );
+    snapshot.positions = [
+      position(KHUNOU_POSITION, "khunou", "3000000", { locked_kg: "3000000", revision: "3" }),
+      position(BUYER_POSITION, "buyer-smelter", "2000000", { locked_kg: "2000000", revision: "5" }),
+    ];
+    snapshot.facilities = [
+      facility(FACILITY_ONE, "lender-one", { loan_count: 1 }),
+      facility(BUYER_FACILITY, "lender-one", {
+        borrower: orgAccount("buyer-smelter"),
+        borrower_org_id: orgId("buyer-smelter"),
+        facility_id_hex: "33".repeat(16),
+        loan_count: 1,
+      }),
+    ];
+    snapshot.loans = [
+      loan(LOAN_ONE, FACILITY_ONE, "lender-one", {
+        principal: "20000000",
+        accrued_at: String(NOW_SECONDS),
+        revision: "2",
+        event_revision: "2",
+      }),
+      loan(BUYER_LOAN, BUYER_FACILITY, "lender-one", {
+        borrower: orgAccount("buyer-smelter"),
+        borrower_org_id: orgId("buyer-smelter"),
+        position: BUYER_POSITION,
+        principal: "10000000",
+        accrued_at: String(NOW_SECONDS),
+      }),
+    ];
+    snapshot.locks = [
+      lock(LOCK_ONE, LOAN_ONE, "3000000"),
+      lock(BUYER_LOCK, BUYER_LOAN, "1000000", { position: BUYER_POSITION }),
+    ];
+    return snapshot;
+  }
+
+  const blockOf = (heading: string) =>
+    screen.getByRole("heading", { level: 3, name: heading }).closest(".work-panel") as HTMLElement;
+
+  test("a lender with loans on two positions of one lot sees Accept loading for the live intent on the shown position", () => {
+    const snapshot = twoPositions();
+    const lot = lotOf(snapshot, "lender-one");
+    expect(lot.lending?.shownPosition.address).toBe(KHUNOU_POSITION);
+    const intents = lot.lending?.loading.intents ?? [];
+    const shown = intents.find(({ address }) => address === LOADING_INTENT);
+    const other = intents.find(({ address }) => address === BUYER_INTENT);
+    // Each intent counts the locks of its own position: the shown one sees every lock, the
+    // buyer's does not.
+    expect(shown).toMatchObject({ live: true, state: "open", required: 1, hiddenLockedKg: 0n });
+    expect(other).toMatchObject({
+      live: true,
+      state: "open",
+      required: null,
+      hiddenLockedKg: 1_000_000n,
+    });
+
+    renderSection(snapshot, "lender-one");
+    // The shown position's live intent leads, with its acceptance table and Accept loading.
+    const [first] = screen.getAllByRole("heading", { level: 3 });
+    expect(first).toHaveTextContent("Loading intent 1, Port Terminal T1");
+    const khunou = blockOf("Loading intent 1, Port Terminal T1");
+    expect(within(khunou).getByText("Loan 0, Lender One Bank")).toBeInTheDocument();
+    expect(within(khunou).getByRole("button", { name: "Accept loading" })).toBeInTheDocument();
+    expect(within(khunou).queryByText("Other lenders")).not.toBeInTheDocument();
+    expect(
+      within(khunou).getByText(
+        "Accepted for 0 of 1 loans on chain. The loading can be recorded once every loan with a lock on this position is accepted.",
+      ),
+    ).toBeInTheDocument();
+    // The other position's live intent keeps its own block, its own hidden locks and its button.
+    const buyer = blockOf("Loading intent 4, Port Terminal T1");
+    expect(within(buyer).getByRole("button", { name: "Accept loading" })).toBeInTheDocument();
+    const rows = within(within(buyer).getAllByRole("table")[0] as HTMLElement).getAllByRole("row");
+    expect(rows.at(-1)).toHaveTextContent("Other lenders");
+    expect(rows.at(-1)).toHaveTextContent("1,000.000 t");
+    expect(
+      within(buyer).getByText(
+        "Your loan's acceptance is below. Acceptances of other lenders' loans are not visible to you.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Accept loading" })).toHaveLength(2);
+  });
+
+  test("an older intent of the shown position is compact, and a newer one on another position never takes its place", () => {
+    const snapshot = twoPositions();
+    snapshot.loadingIntents = [
+      ...snapshot.loadingIntents,
+      loadingIntent({ address: LOADING_INTENT_OLD, nonce: "7", position_revision: "2" }),
+    ];
+    renderSection(snapshot, "lender-one");
+    const old = blockOf("Loading intent 7, Port Terminal T1");
+    expect(within(old).queryByRole("table")).not.toBeInTheDocument();
+    expect(within(old).getByText(/can't be recorded\.$/)).toBeInTheDocument();
+    const headings = screen.getAllByRole("heading", { level: 3 }).map((node) => node.textContent);
+    expect(headings).toEqual([
+      "Loading intent 1, Port Terminal T1",
+      "Loading intent 7, Port Terminal T1",
+      "Loading intent 4, Port Terminal T1",
+    ]);
+  });
+
+  test("an intent that names a position of another lot is left out, and the dossier still reads", () => {
+    const OTHER_LOT = address(94);
+    const OTHER_POSITION = address(95);
+    const STRAY_INTENT = address(96);
+    const snapshot = loadingSnapshot(["lender-one"]);
+    snapshot.lots = [
+      ...snapshot.lots,
+      lotRow({ address: OTHER_LOT, lot_id: "CR-0002", root: OTHER_LOT, supply_kg: "1000000" }),
+    ];
+    snapshot.positions = [
+      ...snapshot.positions,
+      position(OTHER_POSITION, "khunou", "1000000", { lot: OTHER_LOT }),
+    ];
+    // A loan row of CR-0001 that names the other lot's position (a bad row) lets the stray intent
+    // into this lot's view.
+    snapshot.loans = [
+      ...snapshot.loans,
+      loan(address(97), FACILITY_ONE, "lender-one", { position: OTHER_POSITION, loan_index: 1 }),
+    ];
+    snapshot.locks = [
+      ...snapshot.locks,
+      lock(address(98), address(97), "0", { position: OTHER_POSITION }),
+    ];
+    snapshot.loadingIntents = [
+      loadingIntent(),
+      loadingIntent({ address: STRAY_INTENT, position: OTHER_POSITION, nonce: "8" }),
+    ];
+    const loading = loadingOf(snapshot, "lender-one");
+    expect(loading.intents.map(({ address: at }) => at)).toEqual([LOADING_INTENT]);
+    renderSection(snapshot, "lender-one");
+    expect(screen.getByRole("button", { name: "Accept loading" })).toBeInTheDocument();
+    expect(screen.queryByText(/Loading intent 8/)).not.toBeInTheDocument();
+  });
+
+  test("an intent with no lock to accept is ready, and its tally and queue item read fold 12's line", () => {
+    const snapshot = loadingSnapshot(["khunou"], [loadingIntent({ locked_kg: "0" })]);
+    snapshot.positions = [
+      position(KHUNOU_POSITION, "khunou", "3000000", { revision: "3" }),
+      position(BUYER_POSITION, "buyer-smelter", "2000000"),
+    ];
+    snapshot.facilities = [];
+    snapshot.valuations = [];
+    snapshot.loans = [];
+    snapshot.locks = [];
+    const [intentView] = loadingOf(snapshot, "khunou").intents;
+    expect(intentView).toMatchObject({ state: "ready", required: 0, accepted: 0 });
+    const line = "No loan holds a lock on this position, so no lender needs to accept.";
+    renderSection(snapshot, "khunou");
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(liveReader(snapshot, NOW).workQueue("khunou")).toEqual([
+      expect.objectContaining({
+        id: `record-loading:${LOADING_INTENT}`,
+        action: "Record loading",
+        blocker: `${line} Record the loading with Port Terminal T1.`,
+      }),
+    ]);
   });
 });
 
