@@ -2210,6 +2210,35 @@ fn attest_shortfall_within_tolerance_recorded_without_restriction() {
 }
 
 #[test]
+fn attest_shortfall_tolerance_boundary_pinned() {
+    // The boundary in literals: 5,000,000 kg expected at 50 bps allows exactly 25,000 kg short.
+    // The oracle first, then the program on two whole-lot readings of the same lot.
+    assert!(within(5_000_000, 4_975_000, 50));
+    assert!(!within(5_000_000, 4_974_999, 50));
+    let mut w = World::new();
+    let at_edge = ShortfallArgs {
+        observed_kg: 4_975_000,
+        ..w.shortfall_args(None)
+    };
+    let incident = w.attest_ok(&at_edge);
+    let stored: Incident = w.f.read(incident);
+    assert_eq!(stored.expected_kg, 5_000_000);
+    assert!(stored.within_tolerance);
+    assert_eq!(stored.restriction_after, Restriction::Normal);
+    assert_eq!(w.lot_state().restriction, Restriction::Normal);
+    let past_edge = ShortfallArgs {
+        incident_id: INCIDENT_TWO,
+        observed_kg: 4_974_999,
+        ..w.shortfall_args(None)
+    };
+    let incident = w.attest_ok(&past_edge);
+    let stored: Incident = w.f.read(incident);
+    assert!(!stored.within_tolerance);
+    assert_eq!(stored.restriction_after, Restriction::ReviewRequired);
+    assert_eq!(w.lot_state().restriction, Restriction::ReviewRequired);
+}
+
+#[test]
 fn attest_shortfall_rejects_repeated_incident_id() {
     // An incident id is used once per protocol, ever (A20): a second reading under the same id,
     // even of a different shape, fails at init and changes nothing.

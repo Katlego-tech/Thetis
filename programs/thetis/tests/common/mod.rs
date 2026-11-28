@@ -1033,9 +1033,20 @@ impl Fixture {
             &(0_u32, slot, bump),
             table_accounts.clone(),
         );
+        // One transaction carries the creation and up to 28 addresses; the rest of a larger
+        // inventory (the custody bypass size tests) follows in extensions of their own.
+        let (first, rest) = addresses.split_at(addresses.len().min(28));
         let extend =
-            Instruction::new_with_bincode(LOOKUP_PROGRAM, &(2_u32, &addresses), table_accounts);
+            Instruction::new_with_bincode(LOOKUP_PROGRAM, &(2_u32, first), table_accounts.clone());
         self.sponsored_ok(&[create, extend]);
+        for chunk in rest.chunks(28) {
+            let extend = Instruction::new_with_bincode(
+                LOOKUP_PROGRAM,
+                &(2_u32, chunk),
+                table_accounts.clone(),
+            );
+            self.sponsored_ok(&[extend]);
+        }
         // Extended addresses become available in the slot after the extension.
         self.svm.warp_to_slot(slot + 1);
         AddressLookupTableAccount { key, addresses }
