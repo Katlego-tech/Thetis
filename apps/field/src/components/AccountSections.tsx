@@ -43,7 +43,14 @@ export function SignedInSection() {
   return (
     <Section title={NAV_COPY.signedInTitle}>
       <Rows rows={[{ label: "Email", value: app.user.email }]} />
-      <Button label={NAV_COPY.signOut} kind="quiet" inline onPress={app.signOut} />
+      <Button
+        label={NAV_COPY.signOut}
+        kind="quiet"
+        inline
+        disabled={app.busy}
+        accessibilityHint={app.busy ? NAV_COPY.busyHint : undefined}
+        onPress={app.signOut}
+      />
       <Txt variant="small" tone="ink2">
         {NAV_COPY.signOutHelp}
       </Txt>

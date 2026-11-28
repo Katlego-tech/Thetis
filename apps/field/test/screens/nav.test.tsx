@@ -4,6 +4,7 @@
 import type { Session } from "@supabase/supabase-js";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppContextValue } from "../../src/context";
 import { NAV_COPY } from "../../src/copy";
 import { createDraftStore } from "../../src/drafts/store";
 import { SignedIn } from "../../src/SignedIn";
@@ -34,6 +35,12 @@ const terminal = {
   synthetic: true,
 };
 const cast = vi.hoisted(() => ({ memberships: [] as unknown[] }));
+// The context each wrapped screen last rendered with, and every organisation and wallet a tab root
+// rendered together.
+const probe = vi.hoisted(() => ({
+  app: null as AppContextValue | null,
+  renders: [] as { organisation: string; wallet: string | null }[],
+}));
 
 vi.mock("react-native", async () => (await import("./native")).reactNative);
 vi.mock("react-native-safe-area-context", async () => (await import("./native")).safeArea);
@@ -93,6 +100,49 @@ vi.mock("../../src/api/walletLinks", () => ({
     complete: vi.fn(),
   }),
 }));
+vi.mock("../../src/screens/Home", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/screens/Home")>();
+  const { useApp } = await import("../../src/context");
+  return {
+    ...real,
+    Home: () => {
+      const app = useApp();
+      probe.app = app;
+      probe.renders.push({
+        organisation: app.organisation.organisationId,
+        wallet: app.wallet?.address ?? null,
+      });
+      return <real.Home />;
+    },
+  };
+});
+vi.mock("../../src/screens/Wallet", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/screens/Wallet")>();
+  const { useApp } = await import("../../src/context");
+  return {
+    ...real,
+    Wallet: () => {
+      const app = useApp();
+      probe.app = app;
+      probe.renders.push({
+        organisation: app.organisation.organisationId,
+        wallet: app.wallet?.address ?? null,
+      });
+      return <real.Wallet />;
+    },
+  };
+});
+vi.mock("../../src/screens/Intake", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../src/screens/Intake")>();
+  const { useApp } = await import("../../src/context");
+  return {
+    ...real,
+    Intake: (props: { draftId: string }) => {
+      probe.app = useApp();
+      return <real.Intake {...props} />;
+    },
+  };
+});
 vi.mock("../../src/link-challenge", () => ({ checkLinkChallenge: () => true }));
 vi.mock("../../src/wallet", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/wallet")>()),
@@ -145,6 +195,8 @@ const switcher = (org: string) =>
   screen.queryByRole("button", { name: `Switch organisation, now ${org}` });
 
 beforeEach(() => {
+  probe.app = null;
+  probe.renders = [];
   stores.drafts.values.clear();
   stores.secure.values.clear();
   signOut.mockReset();
@@ -212,6 +264,57 @@ describe("tab bar and per-tab stacks (navigation.md §4)", () => {
     await screen.findByRole("button", { name: "Back" });
     expect(switcher("Port Terminal T1")).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("refuses a tab, the switch and Back while busy, and the switch off a tab root", async () => {
+    await start({ two: true, wallet: true });
+    await press(tab("Account"));
+    await press(await screen.findByRole("button", { name: "Link this wallet" }));
+    await press(await screen.findByRole("button", { name: "Sign in your wallet" }));
+    await screen.findByRole("button", { name: "Waiting for your wallet" });
+    await waitFor(() => expect(probe.app?.busy).toBe(true));
+    const busy = probe.app as AppContextValue;
+    await act(async () => {
+      busy.openTab("home");
+      busy.switchOrganisation();
+      busy.back();
+    });
+    expect(selected()).toEqual(["Account"]);
+    expect(screen.queryByText("Which organisation are you working for?")).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: NAV_COPY.signOut }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    cleanup();
+    stores.drafts.values.clear();
+    await draftStore().save(completeDraft());
+    await start({ two: true });
+    await press(await screen.findByRole("button", { name: "CR-0001" }));
+    await screen.findByText("New intake");
+    await act(async () => (probe.app as AppContextValue).switchOrganisation());
+    expect(screen.queryByText("Which organisation are you working for?")).toBeNull();
+  });
+
+  it("switching organisation from Account resets both stacks and shows nothing of the first", async () => {
+    await draftStore().save(completeDraft());
+    await start({ two: true, wallet: true });
+    await press(await screen.findByRole("button", { name: "CR-0001" }));
+    await screen.findByText("New intake");
+    await act(async () => (probe.app as AppContextValue).navigate({ name: "account" }));
+    expect(selected()).toEqual(["Account"]);
+    await press(await screen.findByRole("button", { name: NAV_COPY.switchOrganisation }));
+    await press(screen.getByRole("button", { name: "Port Terminal T1" }));
+    await waitFor(() => expect(switcher("Port Terminal T1")).not.toBeNull());
+    await screen.findByText("Drafts on this phone");
+    expect(selected()).toEqual(["Home"]);
+    await waitFor(() => expect(screen.getByText(/^No drafts\./)).toBeTruthy());
+    expect(screen.queryByText("CR-0001")).toBeNull();
+    expect(await back()).toBe(false);
+    await press(tab("Account"));
+    await screen.findByText(NAV_COPY.signedInTitle);
+    expect(screen.getByRole("button", { name: "Connect wallet" })).toBeTruthy();
+    expect(
+      probe.renders.filter((r) => r.organisation === terminal.organisationId && r.wallet !== null),
+    ).toEqual([]);
   });
 
   it("shows the wallet, the organisation and Sign out on Account", async () => {

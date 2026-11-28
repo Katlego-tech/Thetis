@@ -50,12 +50,19 @@ export function TopBar(props: {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back"
+          accessibilityHint={busy ? NAV_COPY.busyHint : undefined}
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
           onPress={props.onBack}
           style={{ minHeight: 48, justifyContent: "center" }}
         >
           <Txt
             tone="railInk"
-            style={{ fontSize: 14, color: "#FFFFFF", textDecorationLine: "underline" }}
+            style={{
+              fontSize: 14,
+              color: busy ? "#6E777B" : "#FFFFFF",
+              textDecorationLine: busy ? "none" : "underline",
+            }}
           >
             Back
           </Txt>
@@ -76,7 +83,7 @@ export function TopBar(props: {
       {organisation && props.onSwitchOrganisation ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={NAV_COPY.switchLabel.replace("{org}", organisation)}
+          accessibilityLabel={NAV_COPY.switchLabel.replace("{org}", () => organisation)}
           accessibilityHint={busy ? NAV_COPY.busyHint : undefined}
           accessibilityState={{ disabled: busy }}
           disabled={busy}

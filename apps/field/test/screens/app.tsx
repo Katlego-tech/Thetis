@@ -1,8 +1,8 @@
 // A whole AppContext for screen tests: throwaway parties, an in-memory draft store, and command
 // routes as spies. Every value is test-only (fixtures.ts says where the addresses come from).
-import { act, render } from "@testing-library/react";
-import { type ReactNode, useState } from "react";
-import { vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { type ReactNode, useCallback, useState } from "react";
+import { expect, vi } from "vitest";
 import type { CommandView } from "../../src/api/commands";
 import { AppContext, type AppContextValue } from "../../src/context";
 import { createDraftStore, editDraft, type IntakeDraft, newDraft } from "../../src/drafts/store";
@@ -161,9 +161,33 @@ const flips: { current: (online: boolean) => void } = { current: () => {} };
 function Shell(props: { app: AppContextValue; children: ReactNode }) {
   const [online, setOnline] = useState(props.app.online);
   flips.current = setOnline;
-  return (
-    <AppContext.Provider value={{ ...props.app, online }}>{props.children}</AppContext.Provider>
+  // Busy is held here as SignedIn holds it, so a screen's useBusy reaches its own top bar.
+  const [busy, setBusyState] = useState(props.app.busy);
+  const spy = props.app.setBusy;
+  const setBusy = useCallback(
+    (next: boolean) => {
+      spy(next);
+      setBusyState(next);
+    },
+    [spy],
   );
+  return (
+    <AppContext.Provider value={{ ...props.app, online, busy, setBusy }}>
+      {props.children}
+    </AppContext.Provider>
+  );
+}
+
+/** While the wallet or the relay is in flight: busy is set and the top bar's Back does nothing. */
+export async function expectBusyBack(app: AppContextValue): Promise<void> {
+  await waitFor(() => expect(app.setBusy).toHaveBeenCalledWith(true));
+  const back = await waitFor(() => {
+    const found = screen.getByRole("button", { name: "Back" }) as HTMLButtonElement;
+    expect(found.disabled).toBe(true);
+    return found;
+  });
+  await act(async () => fireEvent.click(back));
+  expect(app.back).not.toHaveBeenCalled();
 }
 
 /** Renders a screen inside the context; setOnline flips the network as NetInfo would. */

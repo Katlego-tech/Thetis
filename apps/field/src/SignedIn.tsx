@@ -191,6 +191,10 @@ export function SignedIn(props: {
       memberships,
       organisation,
       chooseOrganisation: (organisationId) => {
+        // Cleared in the same render as the switch, so no frame shows one organisation's wallet
+        // under another's name; the effect on `chosen` then reads the new one's.
+        setWalletState(null);
+        setConnection(null);
         setChosen(organisationId);
         dispatch({ type: "reset" });
         if (organisationId) void store.setOrganisation(userId, organisationId);
@@ -208,7 +212,9 @@ export function SignedIn(props: {
       connection,
       setConnection,
       navigate: (route) => dispatch({ type: "push", route }),
-      back: () => dispatch({ type: "back" }),
+      back: () => {
+        if (!busy) dispatch({ type: "back" });
+      },
       sessionExpired: props.sessionExpired,
       signOut: props.signOut,
       tab: nav.tab,

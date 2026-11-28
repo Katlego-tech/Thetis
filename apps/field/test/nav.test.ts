@@ -84,6 +84,18 @@ describe("navigation reducer (navigation.md §4.3)", () => {
     expect(state.tab).toBe("home");
   });
 
+  it("returns the Account tab to its root when it is chosen again, keeping Home's stack", () => {
+    const state = run(
+      { type: "push", route: intake },
+      { type: "tab", tab: "account" },
+      { type: "push", route: { name: "handover", commandId: "c-1" } },
+      { type: "tab", tab: "account" },
+    );
+    expect(state.tab).toBe("account");
+    expect(state.stacks.account).toEqual([{ name: "account" }]);
+    expect(state.stacks.home).toEqual([{ name: "home" }, intake]);
+  });
+
   it("pops the current tab's stack on back", () => {
     const state = run(
       { type: "push", route: intake },

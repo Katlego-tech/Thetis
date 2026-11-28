@@ -27,7 +27,7 @@ import {
   SIGN_BEFORE,
 } from "../custody-fixtures";
 import { PROTOCOL } from "../fixtures";
-import { renderScreen, WALLET } from "./app";
+import { expectBusyBack, renderScreen, WALLET } from "./app";
 import {
   button,
   cannotPress,
@@ -261,6 +261,16 @@ describe("Prepare loading text: one text per intent (owner decision)", () => {
     expect(readOpenLoadingCommand).toHaveBeenCalledWith(app.db, PROTOCOL, INTENT_ADDRESS);
     expect(app.commands.get).not.toHaveBeenCalled();
     await enabled("Sign in your wallet");
+  });
+
+  it("marks the app busy while the signature is sending, and Back does nothing", async () => {
+    const { app } = await openLoading();
+    vi.mocked(app.commands.create).mockResolvedValue(loadingView("awaiting_signatures"));
+    vi.mocked(app.commands.get).mockResolvedValue(loadingView("awaiting_signatures"));
+    vi.mocked(app.commands.sign).mockReturnValue(new Promise(() => {}));
+    await press("Prepare loading text");
+    await press("Sign in your wallet");
+    await expectBusyBack(app);
   });
 
   it("when the check for a prepared text fails, nothing is prepared", async () => {

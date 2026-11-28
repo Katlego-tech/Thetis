@@ -27,7 +27,7 @@ import {
   SIGN_BEFORE,
 } from "../custody-fixtures";
 import { PROTOCOL } from "../fixtures";
-import { renderScreen, USER, WALLET } from "./app";
+import { expectBusyBack, renderScreen, USER, WALLET } from "./app";
 import { button, cannotPress, enabled, installWallet, phone, SIGNATURE } from "./custody-app";
 
 vi.mock("react-native", async () => (await import("./native")).reactNative);
@@ -450,6 +450,13 @@ describe("Sign and record", () => {
     expect(
       screen.getByText(`${bytes} bytes, UTF-8. SHA-256 ${sha}. Sign before ${SIGN_BEFORE}.`),
     ).toBeTruthy();
+  });
+
+  it("marks the app busy while the signature is sending, and Back does nothing", async () => {
+    const { app } = await prepared();
+    vi.mocked(app.commands.sign).mockReturnValue(new Promise(() => {}));
+    await press("Sign in your wallet");
+    await expectBusyBack(app);
   });
 
   it("signs as observer with the exact SHA-256", async () => {
