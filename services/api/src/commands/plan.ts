@@ -178,11 +178,23 @@ export interface KindSpec {
    * may enter the lookup table although they don't exist on chain. Derived from the plan, never
    * from a signer's wallet. */
   tableSigners?: readonly ProgramSignerKey[];
+  /** Plan keys of the PDAs the instruction creates, which the relay appends to the lookup table
+   * before it sends (program-custody.md §4.6 and §11.1 item 3): handover's HandoverRecord
+   * `["handover", batch, sequence]`. Each is derived from the plan's seeds, never from a wallet,
+   * and the transaction is built only once every text signature is in. */
+  tableCreated?: readonly CreatedPdaKey[];
+  /** Fields of `event` that must equal the plan's value under the same key, else the outcome is
+   * unreadable (T056r R6, PR #80 review): accept_loading's LoadingAccepted.intent and .loan. */
+  outcomeBinds?: readonly string[];
 }
 
 /** The plan keys a kind may name in `tableSigners` (field-app.md PR #69 fold 27): typed, so a
  * misspelt key does not compile. */
 export type ProgramSignerKey = "mintAuthority" | "vaultAuthority";
+
+/** The plan keys a kind may name in `tableCreated` (program-custody.md §4.6): typed as
+ * `tableSigners` is. An `attest_shortfall` kind would add its Incident here. */
+export type CreatedPdaKey = "handover";
 
 const tx = (role: SignerRole, scope: ScopeName | null, preCheckAuthority = true): SignerSpec => ({
   role,
@@ -335,6 +347,8 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     signers: [text("holder", "CARRY"), text("next_holder", "CARRY", false)],
     event: "CustodyHandedOver",
     textWindowSecs: CUSTODY_TEXT_WINDOW_SECS,
+    // program-custody.md §4.6: the HandoverRecord enters the table before the handover is sent.
+    tableCreated: ["handover"],
   },
   record_observation: {
     mode: "both",
@@ -359,6 +373,7 @@ export const KIND_SPECS: Record<CommandKind, KindSpec> = {
     // as `payer`; the lender's LEND is pre-checked.
     signers: [tx("lender", "LEND")],
     event: "LoadingAccepted",
+    outcomeBinds: ["intent", "loan"],
     textWindowSecs: TEXT_WINDOW_SECS,
   },
   record_loading: {
@@ -379,6 +394,20 @@ export function tableSignerAddresses(
 ): Set<Address> {
   return new Set(
     (KIND_SPECS[kind].tableSigners ?? []).map((key) => {
+      const value = plan[key];
+      if (!value) throw new RelayError("INTERNAL", `plan has no ${key}`);
+      return value as Address;
+    }),
+  );
+}
+
+/** The addresses of the PDAs a kind's instruction creates, read from its plan (§4.6). */
+export function createdTableAddresses(
+  kind: CommandKind,
+  plan: Readonly<Record<string, string>>,
+): Set<Address> {
+  return new Set(
+    (KIND_SPECS[kind].tableCreated ?? []).map((key) => {
       const value = plan[key];
       if (!value) throw new RelayError("INTERNAL", `plan has no ${key}`);
       return value as Address;
@@ -986,8 +1015,22 @@ const PREPARE: Record<CommandKind, Preparer> = {
       throw new RelayError("LOADING_EXPIRED", `intent: ${intentAddress}`);
     }
     if (loan.position !== intent.position) throw new RelayError("VALIDATION", "args.loan");
+    // T056r R5: the program's StaleRevision on a superseded intent and LoanUnderException,
+    // refused here so the sponsor pays no fee for a transaction that must fail.
+    const position = (await context.reader.read(
+      "position",
+      intent.position,
+      decodePosition as never,
+      "Position",
+    )) as { revision: bigint };
+    if (intent.positionRevision !== position.revision) {
+      throw new RelayError("LOADING_SUPERSEDED", `intent: ${intentAddress}`);
+    }
     if (loan.status !== LoanStatus.Active)
       throw new RelayError("LOAN_NOT_ACTIVE", `loan: ${address}`);
+    if (loan.openExceptions !== 0) {
+      throw new RelayError("LOAN_UNDER_EXCEPTION", `loan: ${address}`);
+    }
     const locked = (await context.reader.read(
       "lock",
       lock,

@@ -128,7 +128,11 @@ export async function ensureTableKeys(context: TableContext, keys: readonly Addr
   const current = await context.chain.lookupTable(table);
   if (!current) throw new Error(`lookup table ${table} is missing`);
   const missing = [...new Set(keys)].filter((key) => !current.addresses.includes(key));
-  if (missing.length === 0) return { table, addresses: current.addresses };
+  if (missing.length === 0) {
+    // PR #92 review: a key another command appended in slot S is active only from S + 1.
+    await waitForSlotAbove(context, current.lastExtendedSlot);
+    return { table, addresses: current.addresses };
+  }
   if (current.addresses.length + missing.length > MAX_TABLE_KEYS) throw new LookupTableFullError();
   const noop = createNoopSigner(sponsor);
   for (let start = 0; start < missing.length; start += PER_EXTEND) {

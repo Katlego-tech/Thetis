@@ -121,6 +121,12 @@ describe("the relay's compute price (28 Nov Solflare fix)", () => {
     const { next } = boundary();
     expect(thetisInstructionIndex(next.wire)).toBe(1);
   });
+
+  it("is null for a stored wire that does not decode (PR #84 review), never a guessed index", () => {
+    expect(thetisInstructionIndex("")).toBeNull();
+    expect(thetisInstructionIndex("AAAA")).toBeNull();
+    expect(thetisInstructionIndex("not base64 at all")).toBeNull();
+  });
 });
 
 // ------------------------------------------------------------- postTransaction (no database)

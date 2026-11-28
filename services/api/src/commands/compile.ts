@@ -16,6 +16,7 @@ import {
   pipe,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
+  type Transaction,
 } from "@solana/kit";
 import {
   getSetComputeUnitLimitInstruction,
@@ -87,15 +88,22 @@ export function tableCandidates(
 }
 
 /** The candidates that enter the table: those on chain now (fold 9), the kind's program-signer
- * PDAs from the plan (fold 25) and the fixed program and sysvar addresses. An account the
- * instruction creates and a wallet-derived account that does not exist stay static. */
+ * PDAs from the plan (fold 25), the PDAs its instruction creates that the relay appends first
+ * (program-custody.md §4.6: handover's HandoverRecord) and the fixed program and sysvar
+ * addresses. Any other account the instruction creates, and a wallet-derived account that does
+ * not exist, stay static. */
 export function admittedKeys(
   candidates: readonly Address[],
   exists: readonly boolean[],
   programSigners: ReadonlySet<Address>,
+  created: ReadonlySet<Address> = new Set(),
 ): Address[] {
   return candidates.filter(
-    (key, index) => exists[index] === true || programSigners.has(key) || FIXED_TABLE_KEYS.has(key),
+    (key, index) =>
+      exists[index] === true ||
+      programSigners.has(key) ||
+      created.has(key) ||
+      FIXED_TABLE_KEYS.has(key),
   );
 }
 
@@ -137,14 +145,23 @@ function compile(
   return compileMessage(instructions, sponsor, lifetime, table);
 }
 
+export function decodeWire(wireBase64: string): Transaction {
+  return getTransactionDecoder().decode(getBase64Encoder().encode(wireBase64));
+}
+
 /** The Thetis instruction's index in an issued transaction: always the last instruction, after
- * the limit, the price when it fitted and the Ed25519 instruction for a text kind. */
-export function thetisInstructionIndex(wireBase64: string): number {
-  const transaction = getTransactionDecoder().decode(getBase64Encoder().encode(wireBase64));
-  const message = getCompiledTransactionMessageDecoder().decode(transaction.messageBytes) as {
-    instructions?: readonly unknown[];
-  };
-  return (message.instructions?.length ?? 0) - 1;
+ * the limit, the price when it fitted and the Ed25519 instruction for a text kind. Null when the
+ * stored wire does not decode or holds no instruction. */
+export function thetisInstructionIndex(wireBase64: string): number | null {
+  try {
+    const message = getCompiledTransactionMessageDecoder().decode(
+      decodeWire(wireBase64).messageBytes,
+    ) as { instructions?: readonly unknown[] };
+    const count = message.instructions?.length ?? 0;
+    return count > 0 ? count - 1 : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The serialised size, every signature slot included, with `tableKeys` in the table. A key the
