@@ -172,6 +172,8 @@ function wire(
 }
 
 const limit = (units = 400_000) => getSetComputeUnitLimitInstruction({ units });
+/** The relay's compute price (28 Nov): 1 micro-lamport, right after the limit, when it fits. */
+const price = (microLamports = 1n) => getSetComputeUnitPriceInstruction({ microLamports });
 
 function refused(wireBase64: string, detail?: RegExp) {
   let error: unknown;
@@ -206,6 +208,13 @@ describe("sponsor allowlist", () => {
         : [limit(), thetis(name)];
       const plain = wire(instructions);
       expect(() => checkSponsorTransaction(plain, context), name).not.toThrow();
+      // The relay's price right after the limit, as it issues every transaction that fits.
+      const [first, ...after] = instructions as [Instruction, ...Instruction[]];
+      const priced = [first, price(), ...after];
+      expect(() => checkSponsorTransaction(wire(priced), context), `${name} priced`).not.toThrow();
+      expect(() =>
+        checkSponsorTransaction(wire(priced, { tables: { [table]: [filler] } }), context),
+      ).not.toThrow();
       const compressed = wire(instructions, { tables: { [table]: [filler] } });
       expect(() => checkSponsorTransaction(compressed, context), `${name} via table`).not.toThrow();
 
@@ -431,13 +440,8 @@ describe("sponsor allowlist", () => {
       ]),
       /Ed25519/,
     );
-    const price = getSetComputeUnitPriceInstruction({ microLamports: 1n });
-    refused(wire([price, thetis("close_loan")]), /compute/);
-    refused(wire([limit(), price, thetis("close_loan")]));
-    refused(wire([price, limit(), thetis("close_loan")]));
     refused(wire([limit(), thetis("close_loan"), limit()]), /instructions/);
     refused(wire([limit(), ed25519(), thetis("pledge"), ed25519()]), /instructions/);
-    refused(wire([limit(), thetis("close_loan"), price]), /instructions/);
     // Lookup-table instruction data shorter than its 4-byte tag.
     for (const length of [0, 1, 2, 3]) {
       refused(
@@ -453,6 +457,48 @@ describe("sponsor allowlist", () => {
             data: Uint8Array.from([2, 0, 0].slice(0, length)),
           },
         ]),
+      );
+    }
+  });
+  it("accepts no compute price or one at 1 micro-lamport right after the limit, and refuses two, a higher price, a price anywhere else or a malformed one (28 Nov)", () => {
+    // None (an API issued before the price, or a shape that only fits without it) and one.
+    for (const instructions of [
+      [limit(), thetis("close_loan")],
+      [limit(), price(), thetis("close_loan")],
+      [limit(), price(0n), thetis("close_loan")],
+      [limit(), ed25519(), thetis("pledge")],
+      [limit(), price(), ed25519(), thetis("pledge")],
+    ]) {
+      expect(() => checkSponsorTransaction(wire(instructions), context)).not.toThrow();
+    }
+    // Two prices: what Solflare would add to the relay's.
+    refused(wire([limit(), price(), price(), thetis("close_loan")]), /instructions/);
+    refused(wire([limit(), price(), price(100_000n), ed25519(), thetis("pledge")]), /instructions/);
+    // Above the cap.
+    refused(wire([limit(), price(2n), thetis("close_loan")]), /price/);
+    refused(wire([limit(), price(100_000n), ed25519(), thetis("pledge")]), /price/);
+    // Out of position.
+    refused(wire([price(), thetis("close_loan")]), /compute/);
+    refused(wire([price(), limit(), thetis("close_loan")]), /compute/);
+    refused(wire([limit(), ed25519(), price(), thetis("pledge")]), /instructions|program/);
+    refused(wire([limit(), thetis("close_loan"), price()]), /instructions/);
+    // A second limit where the price goes, a price naming an account, short or long price data.
+    refused(wire([limit(), limit(), thetis("close_loan")]), /compute/);
+    refused(
+      wire([
+        limit(),
+        { ...price(), accounts: [{ address: filler, role: AccountRole.READONLY }] },
+        thetis("close_loan"),
+      ]),
+      /price names accounts/,
+    );
+    for (const data of [
+      Uint8Array.from([3, 1, 0, 0, 0]),
+      Uint8Array.from([3, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+    ]) {
+      refused(
+        wire([limit(), { programAddress: price().programAddress, data }, thetis("close_loan")]),
+        /compute/,
       );
     }
   });
