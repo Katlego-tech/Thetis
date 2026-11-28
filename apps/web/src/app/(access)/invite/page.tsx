@@ -1,4 +1,7 @@
+import type { Metadata } from "next";
 import { InviteAccept } from "@/components/access/invite-accept";
+
+export const metadata: Metadata = { title: "Invitation" };
 
 export default async function InvitePage({
   searchParams,

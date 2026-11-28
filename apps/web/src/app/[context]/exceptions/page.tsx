@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { ExceptionsScreen } from "@/components/queue/exceptions-screen";
 import { LiveFailurePage } from "@/components/shell/live-read-failed";
@@ -7,6 +8,7 @@ import { requireReader } from "@/data/load-reader";
 import type { Context, ExceptionView } from "@/data/types";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Exceptions" };
 
 export default async function ExceptionsPage({ params }: { params: Promise<{ context: string }> }) {
   const { context } = await params;
@@ -30,7 +32,7 @@ export default async function ExceptionsPage({ params }: { params: Promise<{ con
   const screen = <ExceptionsScreen organisationId={context} cases={cases} />;
   if (!live) return screen;
   return (
-    <LiveShell reader={live.reader} current={live.current} segment="exceptions">
+    <LiveShell reader={live.reader} current={live.current} fallback={`/${context}/exceptions`}>
       {screen}
     </LiveShell>
   );

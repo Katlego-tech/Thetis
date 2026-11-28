@@ -1,92 +1,115 @@
-import { List } from "@phosphor-icons/react";
-import Link from "next/link";
-import { useSelectedLayoutSegment } from "next/navigation";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ThemeMenu } from "./theme-toggle";
+"use client";
 
-/** The workspace sections a live page names as its own (live-lending.md §6.9.1). */
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useId } from "react";
+
+/** The workspace sections, in rail order (navigation.md §3.1). */
 export type RailSegment = "queue" | "lots" | "releases" | "exceptions";
 
 export interface RailItem {
+  key: string; // lot id, or release address
+  label: string; // lot id
+  detail: string | null; // releases: formatTonnes(quantityKg); lots: null
+  href: string; // a path, no query
+}
+
+export interface RailSection {
   segment: RailSegment;
-  label: string;
+  label: "Work queue" | "Lots" | "Releases" | "Exceptions";
   count: number;
-  href: string | null;
+  href: string | null; // queue and exceptions: their page; lots and releases: null (a heading)
+  items: RailItem[]; // lots and releases only; [] for queue and exceptions
+  empty: "No lots yet" | "No releases yet" | null;
+}
+
+function decoded(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+/** The one href that is the current page: an exact pathname match, else the fallback, else null. */
+export function activeHref(
+  pathname: string,
+  sections: RailSection[],
+  fallback: string | null,
+): string | null {
+  const hrefs = sections.flatMap(({ href, items }) => [
+    ...(href === null ? [] : [href]),
+    ...items.map((item) => item.href),
+  ]);
+  const match = (path: string) => hrefs.find((href) => decoded(href) === decoded(path)) ?? null;
+  return match(pathname) ?? (fallback === null ? null : match(fallback));
+}
+
+function Count({ count }: { count: number }) {
+  return (
+    <span className="rail-count">
+      <span className="sr-only">,</span> {count}
+    </span>
+  );
 }
 
 export function RailNav({
-  items,
-  segment,
+  sections,
+  fallback = null,
+  label = "Workspace",
 }: {
-  items: RailItem[];
-  segment?: RailSegment | undefined;
+  sections: RailSection[];
+  fallback?: string | null;
+  label?: string;
 }) {
-  // A page passes its own segment: the layout segment is not visible from inside a page.
-  const layoutSegment = useSelectedLayoutSegment();
-  const activeSegment = segment ?? layoutSegment;
+  const pathname = usePathname() ?? "";
+  const current = activeHref(pathname, sections, fallback);
+  const id = useId();
+  const currentProp = (href: string) => (href === current ? ("page" as const) : undefined);
 
   return (
-    <>
-      <nav className="rail-nav" aria-label="Workspace">
-        {items.map(({ segment, label, count, href }) => {
-          const content = (
-            <>
+    <nav className="rail-nav" aria-label={label}>
+      {sections.map(({ segment, label, count, href, items, empty }) => {
+        if (href !== null) {
+          return (
+            <Link key={segment} className="rail-link" href={href} aria-current={currentProp(href)}>
               {label}
-              <span className="rail-count">{count}</span>
-            </>
-          );
-          return href ? (
-            <Link
-              key={segment}
-              className="rail-link"
-              href={href}
-              aria-current={activeSegment === segment ? "page" : undefined}
-            >
-              {content}
+              <Count count={count} />
             </Link>
-          ) : (
-            <span key={segment} className="rail-link" aria-disabled="true">
-              {content}
-            </span>
           );
-        })}
-      </nav>
-      <div className="rail-mobile-nav">
-        <DropdownMenu>
-          <DropdownMenuTrigger className="rail-menu-trigger" aria-label="Workspace menu">
-            <List aria-hidden="true" size={20} weight="regular" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="rail-mobile-menu">
-            {items.map(({ segment, label, count, href }) => {
-              const content = (
-                <>
-                  {label}
-                  <span className="rail-menu-count">{count}</span>
-                </>
-              );
-              return href ? (
-                <DropdownMenuItem key={segment} asChild>
-                  <Link href={href} aria-current={activeSegment === segment ? "page" : undefined}>
-                    {content}
-                  </Link>
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem key={segment} disabled>
-                  {content}
-                </DropdownMenuItem>
-              );
-            })}
-            <DropdownMenuSeparator />
-            <ThemeMenu />
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </>
+        }
+        const headingId = `${id}-${segment}`;
+        return (
+          <div key={segment} className="rail-group">
+            <h2 className="rail-heading" id={headingId}>
+              {label}
+              <Count count={count} />
+            </h2>
+            {items.length > 0 ? (
+              <ul className="rail-list" aria-labelledby={headingId}>
+                {items.map((item) => (
+                  <li key={item.key}>
+                    <Link
+                      className="rail-link rail-sub"
+                      href={item.href}
+                      aria-current={currentProp(item.href)}
+                    >
+                      <span className="rail-sub-label">{item.label}</span>
+                      {item.detail !== null && (
+                        <span className="rail-sub-detail">
+                          <span className="sr-only">,</span> {item.detail}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="rail-empty">{empty}</p>
+            )}
+          </div>
+        );
+      })}
+    </nav>
   );
 }

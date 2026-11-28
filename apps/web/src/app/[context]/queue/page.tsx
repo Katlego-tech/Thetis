@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { FacilitiesPanel } from "@/components/queue/facilities-panel";
 import { getQueueData, WorkQueueScreen } from "@/components/queue/work-queue-screen";
@@ -8,6 +9,7 @@ import { requireReader } from "@/data/load-reader";
 import type { Context } from "@/data/types";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Work queue" };
 
 export default async function WorkQueuePage({
   params,
@@ -58,7 +60,7 @@ export default async function WorkQueuePage({
   );
   if (!live) return screen;
   return (
-    <LiveShell reader={live.reader} current={live.current} segment="queue">
+    <LiveShell reader={live.reader} current={live.current} fallback={`/${context}/queue`}>
       {screen}
     </LiveShell>
   );

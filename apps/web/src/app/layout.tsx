@@ -16,7 +16,7 @@ const applyInitialTheme = `(() => {
 })();`;
 
 export const metadata: Metadata = {
-  title: "Thetis",
+  title: { default: "Thetis", template: "%s · Thetis" },
   description: "Custody, collateral and release coordination for mineral lots.",
 };
 

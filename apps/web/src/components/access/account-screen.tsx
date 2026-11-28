@@ -1,6 +1,7 @@
 "use client";
 
 import type { Session } from "@supabase/supabase-js";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/thetis/page-header";
@@ -17,6 +18,7 @@ const organisationColumns = ["Organisation", "Kind", "Role", "Member since"];
 
 type Organisation = {
   id: string;
+  slug: string;
   name: string;
   kind: string;
   synthetic: boolean;
@@ -454,7 +456,11 @@ export function AccountScreen() {
                     ({ id, member_role, created_at, organisations: org }) =>
                       org && (
                         <tr key={id}>
-                          <td data-label="Organisation">{org.name}</td>
+                          <td data-label="Organisation">
+                            <Link className="access-link" href={`/${org.slug}/queue`}>
+                              {org.name}
+                            </Link>
+                          </td>
                           <td data-label="Kind">
                             {org.kind.charAt(0).toUpperCase() + org.kind.slice(1)}
                             {org.synthetic && ", synthetic"}
