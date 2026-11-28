@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useId, useRef, useState } from "react";
 import {
   Dialog,
   DialogClose,
@@ -130,6 +130,9 @@ export function CommandForm({
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Set before the first await, so a second submit in the same tick (Enter and a click) sends
+  // nothing even before the busy state renders (T056x X2).
+  const submitting = useRef(false);
 
   function reset(next: boolean) {
     setOpen(next);
@@ -143,7 +146,7 @@ export function CommandForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || submitting.current) return;
     const parsed: Record<string, string> = {};
     const problems: Record<string, string> = {};
     for (const field of fields) {
@@ -159,6 +162,7 @@ export function CommandForm({
     setFailure(null);
     if (Object.keys(problems).length > 0) return;
 
+    submitting.current = true;
     setBusy(true);
     let succeeded = false;
     try {
@@ -197,7 +201,10 @@ export function CommandForm({
       succeeded = true;
       router.push(`/${context}/commands/${created.data.id}`);
     } finally {
-      if (!succeeded) setBusy(false);
+      if (!succeeded) {
+        submitting.current = false;
+        setBusy(false);
+      }
     }
   }
 

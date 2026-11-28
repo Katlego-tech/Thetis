@@ -69,7 +69,14 @@ export function CommandLive({
   organisations: Record<string, string>;
   lotId: string | null;
 }) {
-  const [view, setView] = useState(initial);
+  const [view, setViewState] = useState(initial);
+  // Every view this page sets itself (a signature, a transaction, a renewal) bumps the generation;
+  // a poll that started before it answers with an older view and is dropped (T056x X2).
+  const generation = useRef(0);
+  const setView = useCallback((next: CommandView) => {
+    generation.current += 1;
+    setViewState(next);
+  }, []);
   const [links, setLinks] = useState<Map<string, Set<string>> | null>(null);
   const [wallets, setWallets] = useState<SigningWallet[]>([]);
   const [connections, setConnections] = useState(new Map<string, Map<string, Connection>>());
@@ -89,16 +96,25 @@ export function CommandLive({
   useEffect(() => {
     if (!open) return;
     let stopped = false;
+    // One poll at a time: a tick while the previous request is out starts nothing (T056x X2).
+    let inFlight = false;
     const timer = setInterval(async () => {
-      const session = await browserSession().catch(() => null);
-      if (!session || stopped) return;
-      const result = await getCommand(view.id, session.token);
-      if (stopped) return;
-      if (result.ok) {
-        setView(result.data);
-        setOutcomeProblem(null);
-      } else {
-        setOutcomeProblem(failureMessage(result));
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const started = generation.current;
+        const session = await browserSession().catch(() => null);
+        if (!session || stopped) return;
+        const result = await getCommand(view.id, session.token);
+        if (stopped || generation.current !== started) return;
+        if (result.ok) {
+          setViewState(result.data);
+          setOutcomeProblem(null);
+        } else {
+          setOutcomeProblem(failureMessage(result));
+        }
+      } finally {
+        inFlight = false;
       }
     }, POLL_MS);
     return () => {

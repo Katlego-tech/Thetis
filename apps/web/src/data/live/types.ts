@@ -158,6 +158,7 @@ export interface LiveLoadingIntent {
   rows: LiveLoadingRow[]; // by loan index, then address
   accepted: number;
   required: number | null; // null when the viewer can't see every lock
+  hiddenLockedKg: bigint; // the intent's position's locked_kg minus its visible open locks
   handOffs: LiveHandOff[]; // state "recorded" only; else []
   lotLoaded: boolean; // state "recorded" only; else false
   openCommand: LiveCommandSummary | null; // an open record_loading for this intent
