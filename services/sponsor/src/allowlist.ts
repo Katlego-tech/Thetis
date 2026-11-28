@@ -32,6 +32,10 @@ const ED25519 = "Ed25519SigVerify111111111111111111111111111";
 const LOOKUP_TABLE = "AddressLookupTab1e1111111111111111111111111";
 const SYSTEM = "11111111111111111111111111111111";
 const MAX_COMPUTE_UNITS = 400_000;
+/** The relay sets a 1 micro-lamport price right after the limit when the transaction fits, so a
+ * wallet leaves the fee alone (28 Nov). None stays allowed: the widest shapes go without it, and
+ * so does an API issued before it. The cap keeps the sponsor's fee at the base fee in effect. */
+const MAX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 1n;
 
 /** The 14 Phase 2 instructions and the field kinds' (field-app.md §6.3), from packages/contracts/idl/thetis.json (checked by the tests):
  * the discriminator, the number of IDL accounts, the index of `protocol` and the slots named
@@ -296,13 +300,28 @@ export function checkSponsorTransaction(wireBase64: string, context: SponsorCont
   if ((first.accountIndices ?? []).length !== 0) refuse("the compute limit names accounts");
 
   let thetisAt = 1;
-  if (programs[1] === ED25519) {
-    if ((rest[0]?.accountIndices ?? []).length !== 0)
-      refuse("the Ed25519 instruction names accounts");
+  if (programs[1] === COMPUTE_BUDGET) {
+    const priceData = rest[0]?.data ?? new Uint8Array();
+    if (priceData.length !== 9 || priceData[0] !== 3)
+      refuse("the second compute-budget instruction is not SetComputeUnitPrice");
+    if (
+      new DataView(priceData.buffer, priceData.byteOffset, priceData.byteLength).getBigUint64(
+        1,
+        true,
+      ) > MAX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS
+    ) {
+      refuse("the compute price is above 1 micro-lamport");
+    }
+    if ((rest[0]?.accountIndices ?? []).length !== 0) refuse("the compute price names accounts");
     thetisAt = 2;
   }
+  if (programs[thetisAt] === ED25519) {
+    if ((instructions[thetisAt]?.accountIndices ?? []).length !== 0)
+      refuse("the Ed25519 instruction names accounts");
+    thetisAt += 1;
+  }
   if (instructions.length !== thetisAt + 1)
-    refuse("the instructions are not [compute limit, (Ed25519), Thetis]");
+    refuse("the instructions are not [compute limit, (compute price), (Ed25519), Thetis]");
   if (programs[thetisAt] !== context.programId) refuse("another program is invoked");
   const thetis = instructions[thetisAt];
   const data = thetis?.data ?? new Uint8Array();
