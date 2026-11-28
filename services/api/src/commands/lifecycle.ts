@@ -308,7 +308,13 @@ function placeholderWallets(p: Prepared): Partial<Record<SignerRole, Address>> {
 /** T056r R1 (PR #69 follow-up): the smallest size the command's transaction can have, known at
  * create before anyone signs. It is compiled as compileCommand compiles it, with a stand-in
  * wallet and signature per signer, and with every account the plan does not name (an account
- * derived from a signer's wallet, such as its Authority) taken as in the table. */
+ * derived from a signer's wallet, such as its Authority) taken as in the table.
+ *
+ * It is a lower bound, not the size sent: an unnamed account that is not on chain when the
+ * command is sent stays static, 31 bytes more than its table index. A handover to a next holder
+ * whose Authority was never delegated is the case ("best-case size is a lower bound" in
+ * commands.field.unit.test.ts pins it). Such a command passes here and can still end
+ * TRANSACTION_TOO_LARGE when the last signature arrives. */
 export async function bestCaseBytes(
   relay: Pick<Relay, "chain" | "sponsor" | "protocol">,
   kind: CommandKind,
@@ -795,16 +801,7 @@ async function compileCommand(
     sponsor,
     signers: Object.values(wallets),
   });
-  const onChain = await relay.chain.accounts(candidates);
-  const keys = admittedKeys(
-    candidates,
-    candidates.map((_, index) => onChain[index]?.exists === true),
-    tableSignerAddresses(row.kind, row.plan),
-    // program-custody.md §4.6: the PDAs the instruction creates go in first (the HandoverRecord).
-    createdTableAddresses(row.kind, row.plan),
-  );
-  // PR #69 fold 26: refused before the sponsor signs, the table changes or anything is stored.
-  tooLarge(measureCommand(instructions, sponsor, keys));
+  const keys = await sizedTableKeys(relay, row.kind, row.plan, candidates, instructions, sponsor);
   let table: Awaited<ReturnType<typeof ensureTableKeys>>;
   try {
     table = await ensureTableKeys({ ...relay, service: context.service }, keys);
@@ -823,6 +820,41 @@ async function compileCommand(
   );
   tooLarge(built.bytes);
   return { wire: built.wire, table: table.table, lastValidBlockHeight };
+}
+
+/** One slot: time for an account a just-confirmed command created to show at `confirmed`. */
+const REREAD_MS = 400;
+
+/** The table keys for `candidates`, the accounts read at `confirmed` (fold 9). PR #69 fold 26: a
+ * command that can't fit is refused before the sponsor signs, the table changes or anything is
+ * stored; but an account the previous command created may not be visible yet, and while it
+ * reads as absent it stays static and the measurement is too large. So a too-large measurement
+ * reads the accounts once more, a slot later, before it is TRANSACTION_TOO_LARGE. */
+export async function sizedTableKeys(
+  relay: Pick<Relay, "chain" | "sleep">,
+  kind: CommandKind,
+  plan: CommandRow["plan"],
+  candidates: Address[],
+  instructions: Parameters<typeof measureCommand>[0],
+  sponsor: Address,
+): Promise<Address[]> {
+  const admitted = async () => {
+    const onChain = await relay.chain.accounts(candidates);
+    const keys = admittedKeys(
+      candidates,
+      candidates.map((_, index) => onChain[index]?.exists === true),
+      tableSignerAddresses(kind, plan),
+      // program-custody.md §4.6: the PDAs the instruction creates go in first (the HandoverRecord).
+      createdTableAddresses(kind, plan),
+    );
+    return { keys, bytes: measureCommand(instructions, sponsor, keys) };
+  };
+  const first = await admitted();
+  if (first.bytes <= MAX_TRANSACTION_BYTES) return first.keys;
+  await relay.sleep(REREAD_MS);
+  const second = await admitted();
+  tooLarge(second.bytes);
+  return second.keys;
 }
 
 function tooLarge(bytes: number) {
