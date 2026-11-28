@@ -8,17 +8,28 @@ import {
   compressTransactionMessageUsingAddressLookupTables,
   createTransactionMessage,
   getBase64EncodedWireTransaction,
+  getBase64Encoder,
+  getCompiledTransactionMessageDecoder,
+  getTransactionDecoder,
   getTransactionEncoder,
   type Instruction,
   pipe,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
 } from "@solana/kit";
-import { getSetComputeUnitLimitInstruction } from "@solana-program/compute-budget";
+import {
+  getSetComputeUnitLimitInstruction,
+  getSetComputeUnitPriceInstruction,
+} from "@solana-program/compute-budget";
 
 /** Devnet's packet limit for one serialised transaction, signatures included. */
 export const MAX_TRANSACTION_BYTES = 1_232;
 export const COMPUTE_UNITS = 400_000;
+/** A nominal compute price, set so a wallet leaves the fee alone (28 Nov: Solflare inserted its
+ * own SetComputeUnitPrice into an issued transaction, which then no longer matched). Each issued
+ * transaction carries it right after the limit when it still fits MAX_TRANSACTION_BYTES; the few
+ * widest shapes compile without it, exactly as before. The sponsor caps it at the same value. */
+export const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 1n;
 const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111" as Address;
 const ED25519 = "Ed25519SigVerify111111111111111111111111111" as Address;
 
@@ -40,7 +51,8 @@ export const FIXED_TABLE_KEYS: ReadonlySet<Address> = new Set([
 const PLACEHOLDER_BLOCKHASH = "11111111111111111111111111111111" as Blockhash;
 const PLACEHOLDER_TABLE = "AddressLookupTab1e1111111111111111111111111" as Address;
 
-/** [SetComputeUnitLimit, (Ed25519), Thetis] (§6.5.6). */
+/** [SetComputeUnitLimit, (Ed25519), Thetis] (§6.5.6). Compiling adds the compute price right
+ * after the limit when the transaction fits with it. */
 export function commandInstructions(thetis: Instruction, ed25519: Instruction | null) {
   return [
     getSetComputeUnitLimitInstruction({ units: COMPUTE_UNITS }),
@@ -87,7 +99,7 @@ export function admittedKeys(
   );
 }
 
-function compile(
+function compileMessage(
   instructions: readonly Instruction[],
   sponsor: Address,
   lifetime: { blockhash: Blockhash; lastValidBlockHeight: bigint },
@@ -104,6 +116,35 @@ function compile(
       [table.address]: [...table.keys],
     }),
   );
+}
+
+/** [limit, price, (Ed25519), Thetis] when that fits; otherwise the instructions as given. The
+ * Ed25519 instruction stays right before Thetis, where the program looks for it. */
+function compile(
+  instructions: readonly Instruction[],
+  sponsor: Address,
+  lifetime: { blockhash: Blockhash; lastValidBlockHeight: bigint },
+  table: { address: Address; keys: readonly Address[] },
+) {
+  const [limit, ...rest] = instructions;
+  if (limit?.programAddress === COMPUTE_BUDGET) {
+    const price = getSetComputeUnitPriceInstruction({
+      microLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+    });
+    const priced = compileMessage([limit, price, ...rest], sponsor, lifetime, table);
+    if (getTransactionEncoder().encode(priced).length <= MAX_TRANSACTION_BYTES) return priced;
+  }
+  return compileMessage(instructions, sponsor, lifetime, table);
+}
+
+/** The Thetis instruction's index in an issued transaction: always the last instruction, after
+ * the limit, the price when it fitted and the Ed25519 instruction for a text kind. */
+export function thetisInstructionIndex(wireBase64: string): number {
+  const transaction = getTransactionDecoder().decode(getBase64Encoder().encode(wireBase64));
+  const message = getCompiledTransactionMessageDecoder().decode(transaction.messageBytes) as {
+    instructions?: readonly unknown[];
+  };
+  return (message.instructions?.length ?? 0) - 1;
 }
 
 /** The serialised size, every signature slot included, with `tableKeys` in the table. A key the

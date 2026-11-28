@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { releaseCases } from "@/components/release/case-switch";
 import { LiveReleaseReview } from "@/components/release/live-release-review";
@@ -9,6 +10,7 @@ import { LiveDataError, type ScreenReader } from "@/data/live/types";
 import { dataSource, requireReader } from "@/data/load-reader";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Release review" };
 
 export default async function ReleasePage({
   params,
@@ -45,7 +47,7 @@ export default async function ReleasePage({
     const release = reader.liveRelease(releaseId, context);
     if (!release) notFound();
     return (
-      <LiveShell reader={reader} current={current} segment="releases">
+      <LiveShell reader={reader} current={current} fallback={`/${context}/releases/${releaseId}`}>
         <LiveReleaseReview
           release={release}
           scenario={reader.scenario}

@@ -1,10 +1,11 @@
 import { QueueTableSkeleton } from "@/components/queue/queue-table";
 import { workQueueColumns, workQueueTitle } from "@/components/queue/work-queue-screen";
+import { WorkspaceLoading } from "@/components/shell/workspace-loading";
 import { PageHeader } from "@/components/thetis/page-header";
 
 export default function WorkQueueLoading() {
   return (
-    <>
+    <WorkspaceLoading>
       <PageHeader
         title={workQueueTitle}
         aside={<div aria-hidden="true" className="h-8 w-52 max-w-full bg-(--hair)" />}
@@ -21,6 +22,6 @@ export default function WorkQueueLoading() {
         columns={[...workQueueColumns]}
         widths={["w-28", "w-64", "ml-auto w-28", "ml-auto w-32", "w-24", "w-28"]}
       />
-    </>
+    </WorkspaceLoading>
   );
 }

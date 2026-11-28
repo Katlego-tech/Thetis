@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { ReferenceBanner } from "@/components/shell/reference-banner";
 import { SideRail } from "@/components/shell/side-rail";
+import { SkipLink } from "@/components/shell/skip-link";
 import { getReader } from "@/data/get-reader";
 import { LiveDataError } from "@/data/live/types";
 import { dataSource } from "@/data/load-reader";
@@ -32,10 +33,11 @@ export default async function ContextLayout({
 
   return (
     <>
+      <SkipLink />
       <ReferenceBanner />
       <div className="workspace-shell">
         <SideRail current={current} reader={reader} />
-        <main className="workspace-main">
+        <main id="content" tabIndex={-1} className="workspace-main">
           <div className="page-content">{children}</div>
         </main>
       </div>

@@ -30,6 +30,7 @@ import {
   MAX_TRANSACTION_BYTES,
   measureCommand,
   tableCandidates,
+  thetisInstructionIndex,
 } from "./compile.ts";
 import { sharedMessageInstruction } from "./ed25519.ts";
 import { ensureTableKeys, LookupTableFullError } from "./lookup-table.ts";
@@ -439,7 +440,12 @@ function failure(
   row: CommandRow,
   failed: unknown,
 ): { error_code: string; error_detail: string | null } {
-  const thetisIndex = row.message_base64 ? 2 : 1;
+  // Thetis is the last instruction; the compute price, present when it fitted, shifts it by one.
+  const thetisIndex = row.transaction_base64
+    ? thetisInstructionIndex(row.transaction_base64)
+    : row.message_base64
+      ? 2
+      : 1;
   const instruction = (failed as { InstructionError?: [number, unknown] })?.InstructionError;
   if (instruction) {
     const [index, inner] = instruction;

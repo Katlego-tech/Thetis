@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { LotDossier } from "@/components/dossier/lot-dossier";
 import { LiveFailurePage } from "@/components/shell/live-read-failed";
@@ -6,6 +7,15 @@ import { LiveDataError, type ScreenReader } from "@/data/live/types";
 import { requireReader } from "@/data/load-reader";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ context: string; lotId: string }>;
+}): Promise<Metadata> {
+  const { lotId } = await params;
+  return { title: `Lot ${lotId}` };
+}
 
 export default async function LotPage({
   params,
@@ -63,7 +73,11 @@ export default async function LotPage({
           }),
         };
   return (
-    <LiveShell reader={reader} current={current} segment="lots">
+    <LiveShell
+      reader={reader}
+      current={current}
+      fallback={`/${context}/lots/${encodeURIComponent(lotId)}`}
+    >
       <LotDossier
         lot={lot}
         context={context}

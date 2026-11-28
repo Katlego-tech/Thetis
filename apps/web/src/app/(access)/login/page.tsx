@@ -1,5 +1,8 @@
+import type { Metadata } from "next";
 import { LoginForm } from "@/components/access/login-form";
 import { safeNext } from "@/lib/safe-next";
+
+export const metadata: Metadata = { title: "Sign in" };
 
 type QueryValue = string | string[] | undefined;
 

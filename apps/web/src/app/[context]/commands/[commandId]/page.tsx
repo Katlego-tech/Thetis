@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, redirect, unstable_rethrow } from "next/navigation";
 import { CommandLive } from "@/components/commands/command-live";
 import { LiveFailurePage } from "@/components/shell/live-read-failed";
@@ -9,6 +10,15 @@ import { getCommand } from "@/lib/commands";
 import { supabaseServer } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ context: string; commandId: string }>;
+}): Promise<Metadata> {
+  const { commandId } = await params;
+  return { title: `Command ${commandId.slice(0, 8)}` };
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -68,7 +78,13 @@ export default async function CommandPage({
       : (reader.lots(context).find(({ lending }) => lending?.lotAddress === view.lot)?.id ?? null);
 
   return (
-    <LiveShell reader={reader} current={current} segment="queue">
+    <LiveShell
+      reader={reader}
+      current={current}
+      fallback={
+        lotId === null ? `/${context}/queue` : `/${context}/lots/${encodeURIComponent(lotId)}`
+      }
+    >
       <CommandLive
         initial={view}
         context={context}

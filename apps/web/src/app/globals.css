@@ -185,7 +185,7 @@
   .side-rail {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 20px;
     padding: 20px 16px;
     color: var(--rail-ink);
     background: var(--rail);
@@ -202,7 +202,8 @@
 
   .context-switcher,
   .theme-toggle,
-  .rail-menu-trigger {
+  .menu-button,
+  .menu-sheet-close {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -215,7 +216,8 @@
 
   .context-switcher,
   .rail-theme .theme-toggle,
-  .rail-menu-trigger {
+  .menu-button,
+  .menu-sheet-close {
     border-color: var(--rail-line);
   }
 
@@ -223,6 +225,12 @@
     justify-content: space-between;
     padding: 10px 12px;
     text-align: left;
+  }
+
+  /* One organisation: a static block, not a button (navigation.md §5.4). */
+  .context-static {
+    border-style: dashed;
+    cursor: default;
   }
 
   .context-description {
@@ -247,17 +255,59 @@
     flex-shrink: 0;
   }
 
+  .context-menu {
+    min-width: 240px;
+  }
+
+  .context-option small {
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .context-option[aria-current] {
+    border-inline-start-color: var(--act);
+    background: var(--hair);
+  }
+
+  .rail-nav,
+  .rail-group,
+  .rail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .rail-nav {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   .rail-link {
     display: flex;
     justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
     padding: 8px 10px 8px 8px;
     border-inline-start: 2px solid transparent;
     border-radius: var(--radius);
+    font-size: 14px;
+    text-align: start;
   }
 
-  .rail-count,
-  .rail-link[aria-disabled="true"] {
+  button.rail-link {
+    cursor: pointer;
+  }
+
+  button.rail-link:disabled {
     color: var(--rail-mute);
+    cursor: not-allowed;
+  }
+
+  .rail-count {
+    color: var(--rail-mute);
+    font-variant-numeric: tabular-nums;
   }
 
   .rail-link[aria-current="page"] {
@@ -266,28 +316,90 @@
     border-inline-start-color: var(--act);
   }
 
-  .rail-link[href]:hover,
-  .context-switcher:hover,
+  .rail-link:is([href], button:enabled):hover,
+  .context-switcher:is(button):hover,
   .rail-theme .theme-toggle:hover,
-  .rail-menu-trigger:hover {
+  .menu-button:hover,
+  .menu-sheet-close:hover {
     background: var(--rail-on);
   }
 
-  .rail-mobile-nav {
-    display: none;
+  /* "Lots" and "Releases" are headings over their sub-links, not links (navigation.md §5.2). */
+  .rail-heading {
+    display: flex;
+    justify-content: space-between;
+    padding: 14px 10px 4px;
+    color: var(--rail-mute);
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
-  .rail-mobile-menu {
-    min-width: 232px;
+  .rail-group + .rail-link {
+    margin-top: 6px;
   }
 
-  .rail-menu-count {
-    margin-inline-start: auto;
-    color: var(--ink-2);
+  .rail-sub {
+    margin-inline-start: 12px;
+    width: calc(100% - 12px);
+    padding: 6px 10px 6px 8px;
+  }
+
+  .rail-sub-label {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+
+  .rail-sub-detail {
+    color: var(--rail-mute);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .rail-sub[aria-current="page"] .rail-sub-detail {
+    color: var(--rail-ink);
+  }
+
+  .rail-empty {
+    margin-inline-start: 12px;
+    padding: 4px 10px 6px;
+    color: var(--rail-mute);
+    font-size: 12.5px;
+  }
+
+  .rail-account {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px solid var(--rail-line);
+  }
+
+  .rail-account .rail-link {
+    padding: 6px 10px;
+  }
+
+  .rail-email {
+    display: block;
+    overflow: hidden;
+    padding: 0 10px 6px;
+    color: var(--rail-mute);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .rail-theme {
     margin-top: auto;
+  }
+
+  .rail-account ~ .rail-theme {
+    margin-top: -10px;
   }
 
   .rail-theme .theme-toggle {
@@ -296,6 +408,54 @@
 
   .theme-toggle svg:last-child {
     margin-inline-start: auto;
+  }
+
+  .menu-button {
+    display: none;
+    gap: 6px;
+    color: var(--rail-ink);
+    font-size: 13px;
+  }
+
+  /* Visually hidden until focused, then at the top left (navigation.md §5.8). */
+  .skip-link {
+    position: absolute;
+    top: 44px;
+    left: 268px;
+    z-index: 60;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    background: var(--sheet);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 600;
+    outline: 2px solid var(--act);
+    outline-offset: 2px;
+  }
+
+  .skip-link:not(:focus) {
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .workspace-main:focus {
+    outline: none;
+  }
+
+  /* WorkspaceLoading: the live shell's structure, with no names and no counts. */
+  .rail-skeleton {
+    display: block;
+    height: 16px;
+    border-radius: var(--radius);
+    background: var(--rail-line);
+  }
+
+  .rail-skeleton-switcher {
+    height: 56px;
   }
 
   .page-aside .theme-toggle:hover {
@@ -612,6 +772,54 @@
     font-variation-settings: "wdth" 110;
   }
 
+  /* The menu sheet: the shadcn Dialog docked to the right on the rail ground (navigation.md §5.5). */
+  body:has(.menu-sheet) .form-overlay {
+    background: color-mix(in srgb, var(--rail) 50%, transparent);
+  }
+
+  .form-dialog.menu-sheet {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    gap: 12px;
+    width: min(320px, calc(100vw - 48px));
+    max-height: none;
+    padding: 16px;
+    border: 0;
+    border-radius: 0;
+    background: var(--rail);
+    color: var(--rail-ink);
+    translate: none;
+    box-shadow: none;
+  }
+
+  .menu-sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .menu-sheet-title {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .menu-sheet-close {
+    padding: 6px 10px;
+    color: var(--rail-ink);
+    font-size: 13px;
+  }
+
+  .menu-sheet .rail-account {
+    margin-top: 8px;
+  }
+
+  .menu-sheet .rail-theme {
+    margin-top: 0;
+  }
+
   .form-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -734,13 +942,25 @@
 
     .context-description .context-prefix,
     .context-description .context-role,
-    .rail-nav,
-    .rail-theme {
+    .side-rail > .rail-nav,
+    .side-rail > .rail-account,
+    .side-rail > .rail-theme,
+    .side-rail > .rail-skeleton-row {
       display: none;
     }
 
-    .rail-mobile-nav {
-      display: block;
+    .menu-button {
+      display: flex;
+    }
+
+    .skip-link {
+      top: 8px;
+      left: 8px;
+    }
+
+    .rail-skeleton-switcher {
+      width: 160px;
+      height: 38px;
     }
   }
 
@@ -838,4 +1058,20 @@
       display: none;
     }
   }
+}
+
+/* Unlayered, so it wins over the dropdown item's layout utilities: name above role, left aligned. */
+.context-option {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 8px 10px;
+  border-inline-start: 2px solid transparent;
+  border-radius: var(--radius);
+}
+
+/* Unlayered too, or the transparent edge above would win over the layered current-option rule. */
+.context-option[aria-current] {
+  border-inline-start-color: var(--act);
+  background: var(--hair);
 }

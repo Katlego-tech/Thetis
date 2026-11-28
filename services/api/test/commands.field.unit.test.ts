@@ -40,6 +40,7 @@ import {
   normaliseTicket,
 } from "../src/commands/texts.ts";
 import type { SignerRole } from "../src/commands/views.ts";
+import { expectPriced, expectUnpriced, issued } from "./compute-price.ts";
 
 const PROGRAM = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -302,6 +303,7 @@ async function commandSize(
     keys,
     candidates,
     bytes: measureCommand(commandInstructions(thetis, ed25519), sponsor, keys),
+    wire: issued(commandInstructions(thetis, ed25519), sponsor, keys).wire,
   };
 }
 
@@ -452,8 +454,11 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
       custodian: DEMO.custodian,
       origin: true,
     });
-    expect(plain.bytes).toBe(1_162);
-    expect(origin.bytes).toBe(1_219);
+    // Each carries the relay's 1 micro-lamport compute price (12 bytes) right after the limit.
+    expect(plain.bytes).toBe(1_174);
+    expect(origin.bytes).toBe(1_231);
+    expectPriced(expect, plain.wire, "demo issue_lot");
+    expectPriced(expect, origin.wire, "demo issue_lot with origin");
     expect(MAX_TRANSACTION_BYTES).toBe(1_232);
   });
 
@@ -464,14 +469,17 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
       custodian: name(48),
       origin: false,
     });
-    expect(plain.bytes).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+    expect(plain.bytes).toBe(1_228);
+    expectPriced(expect, plain.wire, "48 + 48 without origin");
     const fits = await issueSize({
       ...DEMO_FIELDS,
       owner: name(27),
       custodian: name(28),
       origin: true,
     });
+    // It fits only without the price, so the relay leaves the price out (28 Nov decision).
     expect(fits.bytes).toBe(MAX_TRANSACTION_BYTES);
+    expectUnpriced(expect, fits.wire, "27 + 28 with origin");
     const over = await issueSize({
       ...DEMO_FIELDS,
       owner: name(28),
@@ -498,7 +506,7 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
   it("fits every handover with 48-character names and a 16-character lot ID", async () => {
     for (const stage of ["Departure", "Transfer", "Arrival"] as const) {
       for (const nextHolderAuthority of [true, false]) {
-        const { bytes } = await handoverSize({
+        const { bytes, wire } = await handoverSize({
           lotId: "L".repeat(16),
           from: name(48),
           to: name(48),
@@ -506,6 +514,12 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
           nextHolderAuthority,
         });
         expect(bytes, `${stage} ${nextHolderAuthority}`).toBeLessThanOrEqual(MAX_TRANSACTION_BYTES);
+        // With the next holder's Authority static, the widest handover fits only without the price.
+        (nextHolderAuthority ? expectPriced : expectUnpriced)(
+          expect,
+          wire,
+          `${stage} ${nextHolderAuthority}`,
+        );
       }
     }
     const widest = await handoverSize({
@@ -516,6 +530,7 @@ describe("transaction size (field-app.md PR #69 review folds)", () => {
       nextHolderAuthority: false,
     });
     expect(widest.bytes).toBe(1_228);
+    expectUnpriced(expect, widest.wire, "widest handover");
   });
 
   it("never admits a wallet-derived key that is not on chain: the undelegated next holder's Authority stays static", async () => {

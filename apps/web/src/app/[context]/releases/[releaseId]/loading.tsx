@@ -1,4 +1,5 @@
 import { waterfallColumns } from "@/components/release/waterfall-table";
+import { WorkspaceLoading } from "@/components/shell/workspace-loading";
 import { ResultTable } from "@/components/thetis/result-table";
 
 export default function LoadingRelease() {
@@ -9,7 +10,7 @@ export default function LoadingRelease() {
   }));
 
   return (
-    <>
+    <WorkspaceLoading>
       <p role="status" className="sr-only">
         Loading release review
       </p>
@@ -31,6 +32,6 @@ export default function LoadingRelease() {
           </div>
         </div>
       </div>
-    </>
+    </WorkspaceLoading>
   );
 }
