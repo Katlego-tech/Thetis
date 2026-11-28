@@ -1,0 +1,228 @@
+name: deploy
+
+# Deploys the judge profile's Worker, Web and Ops stacks after the checks workflow passes on a
+# push to main. Secrets, Budget and Release stay manual: Release changes the role this job runs
+# as. Hosted database migrations stay manual too; the guard below refuses to deploy ahead of them.
+# Rollback: run this workflow by hand with the last good commit. Freeze: set DEPLOY_ENABLED false.
+on:
+  workflow_run:
+    workflows: [checks]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to deploy (full 40-character SHA)
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+# One deploy at a time, and a running deploy is never cancelled half way through CloudFormation.
+concurrency:
+  group: deploy-judge
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # The kill switch comes first. No GitHub environment: it would change the OIDC subject the
+    # release role trusts (the main branch only).
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AVAILABILITY_ZONES: ${{ vars.AVAILABILITY_ZONES }}
+      THETIS_CDK_INSTANCE: ${{ vars.THETIS_CDK_INSTANCE }}
+      THETIS_PROTOCOL: ${{ vars.THETIS_PROTOCOL }}
+      THETIS_FIRST_SIGNATURE: ${{ vars.THETIS_FIRST_SIGNATURE }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+      BUDGET_MONTHLY_USD: ${{ vars.BUDGET_MONTHLY_USD }}
+      GITHUB_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.event.workflow_run.head_sha }}
+          # Two commits for the path filter; the whole history for a rollback's ancestry check.
+          fetch-depth: ${{ github.event_name == 'workflow_dispatch' && '0' || '2' }}
+          persist-credentials: false
+
+      - name: Check a rollback commit is on main
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be a full 40-character commit SHA."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$SHA is not an ancestor of origin/main."
+            exit 1
+          fi
+
+      - name: Decide whether this merge touches a deployed surface
+        id: changes
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pattern='^(apps/web/|services/worker/|infra/|supabase/migrations/|packages/|pnpm-lock\.yaml$)'
+          if git diff --name-only HEAD^ HEAD | grep -Eq "$pattern"; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing to deploy"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Migrations are pushed to the hosted project by hand. A commit whose newest migration is
+      # later than the last one pushed would deploy a worker or web that needs it, so stop here.
+      - name: Refuse to deploy ahead of the hosted migrations
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        env:
+          HOSTED_MIGRATIONS_THROUGH: ${{ vars.HOSTED_MIGRATIONS_THROUGH }}
+        run: |
+          set -euo pipefail
+          newest=$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | LC_ALL=C sort | tail -n 1)
+          if [[ -z "$HOSTED_MIGRATIONS_THROUGH" ]]; then
+            echo "::error::HOSTED_MIGRATIONS_THROUGH is not set."
+            exit 1
+          fi
+          if [[ "$(printf '%s\n%s\n' "$newest" "$HOSTED_MIGRATIONS_THROUGH" | LC_ALL=C sort | tail -n 1)" != "$HOSTED_MIGRATIONS_THROUGH" ]]; then
+            echo "::error::$newest is not on the hosted project (HOSTED_MIGRATIONS_THROUGH is $HOSTED_MIGRATIONS_THROUGH). Run supabase db push, update the variable, then re-run this job."
+            exit 1
+          fi
+          echo "Hosted migrations cover $newest."
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        if: steps.changes.outputs.deploy == 'true'
+        with:
+          node-version: "24"
+
+      - name: Install (frozen lockfile)
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      # Both images are ARM64 and the runner is x86.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        if: steps.changes.outputs.deploy == 'true'
+        with:
+          platforms: arm64
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
+        if: steps.changes.outputs.deploy == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+
+      - name: Build the worker and the judge web image tree
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        env:
+          # Next inlines public variables at build time; the Lambda receives the same values.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          THETIS_SITE_MODE: judge
+        run: |
+          set -euo pipefail
+          pnpm --filter @thetis/worker build
+          pnpm --filter @thetis/web build:judge
+
+      - name: Deploy Worker, Web and Ops
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: |
+          set -euo pipefail
+          prefix="Thetis-$THETIS_CDK_INSTANCE"
+          # --exclusively: Secrets, Budget and Release are never deployed from here.
+          pnpm --filter @thetis/infra exec cdk deploy \
+            -c profile=judge \
+            -c account="$AWS_ACCOUNT_ID" \
+            -c region="$AWS_REGION" \
+            -c availabilityZones="$AVAILABILITY_ZONES" \
+            -c instance="$THETIS_CDK_INSTANCE" \
+            -c githubRepo="$GITHUB_REPO" \
+            -c budgetMonthlyUsd="$BUDGET_MONTHLY_USD" \
+            -c alertEmail="$ALERT_EMAIL" \
+            -c supabaseUrl="$SUPABASE_URL" \
+            -c supabaseAnonKey="$SUPABASE_ANON_KEY" \
+            -c thetisProtocol="$THETIS_PROTOCOL" \
+            -c thetisFirstSignature="$THETIS_FIRST_SIGNATURE" \
+            --exclusively \
+            --require-approval never \
+            --outputs-file "$RUNNER_TEMP/cdk-outputs.json" \
+            "$prefix-Worker" "$prefix-Web" "$prefix-Ops"
+
+      - name: Smoke-check the page
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        env:
+          JUDGE_URL: ${{ vars.JUDGE_URL }}
+        run: |
+          set -euo pipefail
+          function_url=$(jq -er --arg stack "Thetis-$THETIS_CDK_INSTANCE-Web" '.[$stack].FunctionUrl' "$RUNNER_TEMP/cdk-outputs.json")
+          # The function URL is uncached, so this reads what was just deployed.
+          page=$(curl --retry 3 --retry-all-errors -fsS "${function_url%/}/run")
+          state=$(grep -oE 'data-state="[a-z]+"' <<<"$page" | head -n 1 | cut -d '"' -f 2 || true)
+          steps=$(grep -oE 'data-step-count="[0-9]+"' <<<"$page" | head -n 1 | cut -d '"' -f 2 || true)
+          echo "data-state=$state data-step-count=$steps"
+          if [[ "$state" != "loaded" && "$state" != "indexing" ]]; then
+            echo "::error::/run answered data-state \"$state\", expected loaded or indexing."
+            exit 1
+          fi
+          if [[ -z "$steps" || "$steps" -lt 1 ]]; then
+            echo "::error::/run answered data-step-count \"$steps\", expected at least 1."
+            exit 1
+          fi
+          if [[ -z "$JUDGE_URL" ]]; then
+            echo "::error::JUDGE_URL is not set."
+            exit 1
+          fi
+          curl --retry 3 --retry-all-errors -fsS -o /dev/null "$JUDGE_URL"
+
+      # The release role holds no ECS permission; the CDK lookup role is read-only.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
+        if: steps.changes.outputs.deploy == 'true'
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/cdk-hnb659fds-lookup-role-${{ vars.AWS_ACCOUNT_ID }}-${{ vars.AWS_REGION }}
+          role-chaining: true
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+
+      - name: Smoke-check the worker
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          running=$(aws ecs describe-services \
+            --cluster "thetis-$THETIS_CDK_INSTANCE-worker" \
+            --services worker \
+            --query 'services[0].runningCount' --output text)
+          echo "worker runningCount=$running"
+          if [[ ! "$running" =~ ^[0-9]+$ || "$running" -lt 1 ]]; then
+            echo "::error::the worker service has no running task."
+            exit 1
+          fi

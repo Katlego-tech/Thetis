@@ -5,6 +5,7 @@ import { BudgetStack } from "./budget.ts";
 import { OpsStack } from "./ops.ts";
 import { ReleaseStack } from "./release.ts";
 import { SecretsStack } from "./secrets.ts";
+import { WebStack } from "./web.ts";
 import { WorkerStack } from "./worker.ts";
 
 const budgetRegion = "us-east-1";
@@ -18,7 +19,20 @@ function required(app: App, key: string, valid: (value: string) => boolean, expe
   return value;
 }
 
-export function createStacks(app: App) {
+const base58 = "[1-9A-HJ-NP-Za-km-z]";
+
+export interface CreateStacksOptions {
+  /** The staged web build directory; defaults to apps/web/.lambda. */
+  webLambdaDirectory?: string;
+}
+
+export function createStacks(app: App, options: CreateStacksOptions = {}) {
+  const rawProfile: unknown = app.node.tryGetContext("profile");
+  const profile = rawProfile === undefined ? "full" : rawProfile;
+  if (profile !== "full" && profile !== "judge") {
+    throw new Error('Invalid CDK context "profile": expected full or judge');
+  }
+  const judge = profile === "judge";
   const account = required(
     app,
     "account",
@@ -78,6 +92,29 @@ export function createStacks(app: App) {
     "a hosted Supabase project URL, https://<20 lowercase letters>.supabase.co",
   );
 
+  const thetisProtocol = required(
+    app,
+    "thetisProtocol",
+    (value) => new RegExp(`^${base58}{32,44}$`).test(value),
+    "a base58 protocol address",
+  );
+  const thetisFirstSignature = required(
+    app,
+    "thetisFirstSignature",
+    (value) => new RegExp(`^${base58}{64,88}$`).test(value),
+    "a base58 transaction signature",
+  );
+  const supabaseAnonKey = judge
+    ? required(
+        app,
+        "supabaseAnonKey",
+        (value) =>
+          /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value) ||
+          /^sb_publishable_[A-Za-z0-9_-]+$/.test(value),
+        "a Supabase anon JWT or sb_publishable_ key",
+      )
+    : undefined;
+
   const createProvider: unknown = app.node.tryGetContext("createGithubOidcProvider");
   if (
     createProvider !== undefined &&
@@ -91,26 +128,48 @@ export function createStacks(app: App) {
 
   const settings = { env: { account, region }, tags: { project: "thetis", instance } };
   const stackPrefix = `Thetis-${instance}`;
-  const secrets = new SecretsStack(app, `${stackPrefix}-Secrets`, { ...settings, instance });
-  const api = new ApiStack(app, `${stackPrefix}-Api`, {
+  const secrets = new SecretsStack(app, `${stackPrefix}-Secrets`, {
     ...settings,
     instance,
-    sponsorKeyArn: secrets.sponsorKey.secretArn,
+    includeSponsorKey: !judge,
   });
+  const api =
+    !judge && secrets.sponsorKey
+      ? new ApiStack(app, `${stackPrefix}-Api`, {
+          ...settings,
+          instance,
+          sponsorKeyArn: secrets.sponsorKey.secretArn,
+        })
+      : undefined;
   const worker = new WorkerStack(app, `${stackPrefix}-Worker`, {
     ...settings,
     instance,
     availabilityZones,
     supabaseUrl,
+    thetisProtocol,
+    thetisFirstSignature,
     supabaseServiceRole: secrets.supabaseServiceRole,
     solanaRpcUrl: secrets.solanaRpcUrl,
   });
+  const web =
+    supabaseAnonKey === undefined
+      ? undefined
+      : new WebStack(app, `${stackPrefix}-Web`, {
+          ...settings,
+          instance,
+          supabaseUrl,
+          supabaseAnonKey,
+          ...(options.webLambdaDirectory === undefined
+            ? {}
+            : { lambdaDirectory: options.webLambdaDirectory }),
+        });
   const ops = new OpsStack(app, `${stackPrefix}-Ops`, {
     ...settings,
     instance,
     alertEmail,
-    api,
     worker,
+    ...(api ? { api } : {}),
+    ...(web ? { web } : {}),
   });
   const budget = new BudgetStack(app, `${stackPrefix}-Budget`, {
     ...settings,
@@ -127,5 +186,13 @@ export function createStacks(app: App) {
     bootstrapRegions: [...new Set([region, budgetRegion])],
   });
 
-  return { secrets, api, worker, ops, budget, release };
+  return {
+    secrets,
+    ...(api ? { api } : {}),
+    worker,
+    ...(web ? { web } : {}),
+    ops,
+    budget,
+    release,
+  };
 }
