@@ -1069,3 +1069,9 @@
   border-inline-start: 2px solid transparent;
   border-radius: var(--radius);
 }
+
+/* Unlayered too, or the transparent edge above would win over the layered current-option rule. */
+.context-option[aria-current] {
+  border-inline-start-color: var(--act);
+  background: var(--hair);
+}

@@ -18,7 +18,8 @@ export function TestBanner() {
 export function TopBar() {
   const router = useRouter();
   const session = useAccessSession();
-  const [signedOut, setSignedOut] = useState(false);
+  // The session signed out from; a later session (signing back in) shows the links again.
+  const [signedOutToken, setSignedOutToken] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
   async function signOut() {
@@ -28,7 +29,7 @@ export function TopBar() {
     } catch {
       // Return to the sign-in screen even if the service is unreachable.
     } finally {
-      setSignedOut(true);
+      setSignedOutToken(session?.access_token ?? null);
       setSigningOut(false);
       router.replace("/login");
     }
@@ -36,7 +37,7 @@ export function TopBar() {
 
   return (
     <header className="access-topbar">
-      {session && !signedOut ? (
+      {session && session.access_token !== signedOutToken ? (
         <>
           <Link className="access-wordmark" href="/account">
             THETIS
