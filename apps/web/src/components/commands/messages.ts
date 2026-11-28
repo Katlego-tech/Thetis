@@ -47,6 +47,9 @@ export const apiMessages: Record<ApiErrorCode | "NETWORK", string> = {
   LOADING_NOT_OPEN: "This loading intent is no longer open.",
   LOADING_EXPIRED: "This loading intent has expired.",
   TOO_MANY_LOANS: "More than four loans hold locks on this lot; one loading takes at most four.",
+  LOADING_SUPERSEDED:
+    "The position changed after this loading intent was created. Create a new loading intent.",
+  LOAN_UNDER_EXCEPTION: "A payment correction is open on this loan, so it can't accept a loading.",
   NETWORK: "Thetis could not reach its API. Nothing was changed.",
 };
 
@@ -98,6 +101,11 @@ export function commandFailureMessage(
       return `This loading intent is no longer open, so there is nothing to accept. ${sent}`;
     if (result.code === "LOADING_EXPIRED")
       return `This loading intent has expired. Ask ${names.owner ?? "the owner"} to create a new one. ${sent}`;
+    // T056r driver decisions 2: the chain's StaleRevision and LoanUnderException, refused at create.
+    if (result.code === "LOADING_SUPERSEDED")
+      return `The position changed after this loading intent was created, so it can't be accepted. Ask ${names.owner ?? "the owner"} to create a new one. ${sent}`;
+    if (result.code === "LOAN_UNDER_EXCEPTION")
+      return `A payment correction is open on ${index === undefined ? "this loan" : `loan ${index}`}, so it can't accept a loading until the correction is settled. ${sent}`;
     if (result.code === "VALIDATION" && result.detail === "args.loan")
       return `${loan} has no lock on the position this intent loads, so it has nothing to accept. ${sent}`;
   }

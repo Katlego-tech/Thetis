@@ -12,6 +12,13 @@ import {
 } from "./snapshot";
 
 const server = vi.hoisted(() => ({ client: null as unknown, calls: 0 }));
+
+// The workspace layout now holds the voice session (voice.md §5.1), whose client tools navigate:
+// the pages render under a stand-in app router.
+vi.mock("next/navigation", async (original) => ({
+  ...(await original<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
+}));
 vi.mock("@/lib/supabase-server", () => ({
   supabaseServer: async () => {
     server.calls += 1;
@@ -230,7 +237,10 @@ describe("routes", () => {
     expect(queuePage.container.querySelector(".reference-banner")).toHaveTextContent(
       liveBannerText,
     );
-    expect(screen.getByRole("status").textContent).toMatch(currentLine);
+    // The freshness line; the rail's voice block has its own status line (voice.md §5.1).
+    const freshness = screen.getAllByRole("status").filter((node) => !node.closest(".rail-voice"));
+    expect(freshness).toHaveLength(1);
+    expect(freshness[0]?.textContent).toMatch(currentLine);
     expect(rail().getByText("Khunou Ore Exports")).toBeInTheDocument();
     expect(rail().getByRole("link", { name: /^Work queue/, current: "page" })).toHaveAttribute(
       "href",
@@ -276,7 +286,12 @@ describe("routes", () => {
     ];
     render(await dossier("khunou", "CR-0001", "overview"));
     expect(reads()).toBe(4);
-    expect(screen.getAllByRole("status").map((node) => node.textContent)).toEqual([
+    expect(
+      screen
+        .getAllByRole("status")
+        .filter((node) => !node.closest(".rail-voice"))
+        .map((node) => node.textContent),
+    ).toEqual([
       "Indexing stopped 26 Nov 2026, 02:05 SAST: the program sent something this version of Thetis does not recognise. What you see may be out of date; the chain itself is unaffected.",
       "Indexing has stopped, so this lot may have changed since. The figures below may be out of date.",
     ]);
