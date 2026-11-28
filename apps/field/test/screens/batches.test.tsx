@@ -20,6 +20,7 @@ import {
 import { PROTOCOL } from "../fixtures";
 import { renderScreen } from "./app";
 import { button, enabled, phone, rowText } from "./custody-app";
+import { pressBack } from "./native";
 
 vi.mock("react-native", async () => (await import("./native")).reactNative);
 vi.mock("react-native-safe-area-context", async () => (await import("./native")).safeArea);
@@ -172,14 +173,48 @@ describe("Batch detail", () => {
     expect(rowText("Destination")).toContain("Port Terminal T1");
   });
 
-  it("Back returns to the list first, then leaves the screen", async () => {
+  it("Back returns to the list, which is the Batches tab root with the tab bar and no Back", async () => {
     const { app } = await kopanoWithBatch();
+    expect(screen.getByRole("tablist")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     await openDetail();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Back" })));
     await screen.findByText("Batch 1 of 1, 5,000.000 t");
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     expect(app.back).not.toHaveBeenCalled();
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Back" })));
-    expect(app.back).toHaveBeenCalledOnce();
+  });
+
+  it("Android Back on a batch returns to the list, and on the list is left to the tabs", async () => {
+    await kopanoWithBatch();
+    await openDetail();
+    let handled = false;
+    await act(async () => {
+      handled = pressBack();
+    });
+    expect(handled).toBe(true);
+    await screen.findByText("Batch 1 of 1, 5,000.000 t");
+    await act(async () => {
+      handled = pressBack();
+    });
+    expect(handled).toBe(false);
+  });
+});
+
+describe("Record border crossing", () => {
+  it("a transporter starts a border crossing from its batches", async () => {
+    const app = phone("mosela");
+    vi.mocked(app.field.batches).mockResolvedValue([
+      fieldBatch({ holder: MOSELA_CHAIN, holderName: "Mosela Haulage", stage: "InTransit" }),
+    ]);
+    await renderScreen(<Batches />, app);
+    await screen.findByText("In transit");
+    await act(async () => fireEvent.click(await enabled("Record border crossing")));
+    expect(app.navigate).toHaveBeenCalledWith({ name: "observation" });
+  });
+
+  it("a custodian is not offered one", async () => {
+    await kopanoWithBatch();
+    expect(button("Record border crossing")).toBeNull();
   });
 });
 
@@ -241,6 +276,37 @@ describe("Start handover", () => {
     expect(app.navigate).not.toHaveBeenCalled();
     await act(async () => answer(handoverView("awaiting_signatures")));
     await waitFor(() => expect(app.navigate).toHaveBeenCalled());
+  });
+
+  it("a second tap while the first is in flight sends nothing", async () => {
+    const { app } = await kopanoWithBatch();
+    let answer: (view: CommandView) => void = () => {};
+    vi.mocked(app.commands.create).mockReturnValue(
+      new Promise<CommandView>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await openDetail();
+    const start = await enabled("Start handover");
+    await act(async () => {
+      fireEvent.click(start);
+      fireEvent.click(start);
+    });
+    await waitFor(() => expect(app.commands.create).toHaveBeenCalledOnce());
+    expect(readOrganisationAt).toHaveBeenCalledOnce();
+    await act(async () => answer(handoverView("awaiting_signatures")));
+    await waitFor(() => expect(app.navigate).toHaveBeenCalledOnce());
+    expect(app.commands.create).toHaveBeenCalledOnce();
+  });
+
+  it("marks the relay call as in flight, so the tabs and Back wait", async () => {
+    const { app } = await kopanoWithBatch();
+    vi.mocked(app.commands.create).mockReturnValue(new Promise<CommandView>(() => {}));
+    await openDetail();
+    await act(async () => fireEvent.click(await enabled("Start handover")));
+    await waitFor(() => expect(app.setBusy).toHaveBeenCalledWith(true));
+    const back = screen.getByRole("button", { name: "Back" }) as HTMLButtonElement;
+    expect(back.disabled).toBe(true);
   });
 
   it("an organisation that is not set up: says so and sends nothing", async () => {
