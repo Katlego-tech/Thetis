@@ -3,7 +3,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { createHash, verify as ed25519Verify } from "node:crypto";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { previewRelease } from "@thetis/domain";
 import { getWallets } from "@wallet-standard/app";
 import bs58 from "bs58";
@@ -680,6 +680,9 @@ describe("command page", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       `Waiting for 1 of 2 signatures. The text expires at ${clock}.`,
     );
+    // Before devnet confirms, neither the lot nor the release is offered as recorded.
+    expect(screen.queryByRole("link", { name: "Open the lot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open the release" })).not.toBeInTheDocument();
     cleanup();
 
     const failed = view({
@@ -698,6 +701,9 @@ describe("command page", () => {
       "https://explorer",
     );
     expect(screen.getByText("What this command would have recorded")).toBeInTheDocument();
+    // Before devnet confirms, neither the lot nor the release is offered as recorded.
+    expect(screen.queryByRole("link", { name: "Open the lot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open the release" })).not.toBeInTheDocument();
     cleanup();
 
     renderCommand(
@@ -724,6 +730,9 @@ describe("command page", () => {
       "The text expired before everyone signed. Nothing was sent.",
     );
     expect(screen.getByRole("button", { name: "Prepare a new text" })).toBeInTheDocument();
+    // Before devnet confirms, neither the lot nor the release is offered as recorded.
+    expect(screen.queryByRole("link", { name: "Open the lot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open the release" })).not.toBeInTheDocument();
   });
 
   test("signing posts the text's own hash and the wallet's signature, and a cancelled wallet posts nothing", async () => {
@@ -875,6 +884,66 @@ describe("command page", () => {
       await screen.findByRole("button", { name: "Sign the transaction with Solflare" }),
     ).toBeDisabled();
     expect(screen.getByText("Sign the text first: 0 of 1 signed.")).toBeInTheDocument();
+  });
+});
+
+describe("command page poll", () => {
+  test("the command page never starts a poll while one is in flight, and a poll that answers after a signature never reverts the view", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const pending: ((response: Response) => void)[] = [];
+      replies.push((call) =>
+        call.method === "GET"
+          ? (new Promise<Response>((resolve) => {
+              pending.push(resolve);
+            }) as unknown as Response)
+          : undefined,
+      );
+      const solflare = register(fakeWallet("Solflare"));
+      mocks.links = [{ wallet: solflare.account.address, organisation_id: orgId("lender-one") }];
+      const signedView = view({
+        signers: [
+          ...(view().signers.slice(0, 1) as CommandView["signers"]),
+          {
+            role: "lender",
+            organisationId: orgId("lender-one"),
+            method: "text",
+            signed: { wallet: solflare.account.address, signedAt: "2026-11-26T00:00:09.000Z" },
+          },
+        ],
+        updatedAt: "2026-11-26T00:00:09.000Z",
+      });
+      replies.push((call) =>
+        call.url.endsWith("/signatures") ? json(200, { data: signedView }) : undefined,
+      );
+      renderCommand(view());
+      const gets = () => calls.filter(({ method }) => method === "GET");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(1));
+      // The first poll has not answered: three more ticks start no second request.
+      await vi.advanceTimersByTimeAsync(6_000);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(gets()).toHaveLength(1);
+
+      // The lender signs while that poll is still out; its late answer (unsigned) is dropped.
+      fireEvent.click(await screen.findByRole("button", { name: "Connect Solflare" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Sign with Solflare" }));
+      const signers = screen.getByRole("region", { name: "Signers" });
+      const signedLine = `Signed by ${solflare.account.address.slice(0, 4)}…${solflare.account.address.slice(-4)}`;
+      await waitFor(() => expect(signers.textContent).toContain(signedLine));
+      await act(async () => {
+        pending[0]?.(json(200, { data: view() }));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(signers.textContent).toContain(signedLine);
+
+      // Once answered, the next tick polls again.
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(2));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1050,18 +1119,77 @@ describe("lending forms", () => {
     });
     cleanup();
 
-    // Any failed upload step: the message, and no command.
-    for (const step of ["insert evidence_objects", "upload"]) {
+    // Any failed upload step, the API's finalize included: the message, and no command.
+    for (const step of ["insert evidence_objects", "upload", "finalize"]) {
       mocks.failStep = step;
       mocks.log = [];
       calls.length = 0;
+      if (step === "finalize")
+        replies.unshift((call) =>
+          call.url.endsWith("/finalize")
+            ? json(409, { error: { code: "EVIDENCE_INVALID", message: "not stored" } })
+            : undefined,
+        );
       render(form);
       const dialog = fill();
       expect(await within(dialog).findByRole("alert")).toHaveTextContent(
         "Thetis could not store the bank confirmation. Nothing was recorded.",
       );
       expect(calls.some(({ url }) => url.endsWith("/v1/commands"))).toBe(false);
+      if (step === "finalize")
+        expect(mocks.log).toEqual([
+          "insert evidence_objects",
+          "insert evidence_versions",
+          "upload",
+          "POST /v1/evidence/32000000-0000-4000-8000-000000000001/finalize",
+        ]);
       cleanup();
     }
+  });
+
+  test("a second submit while the first is in flight sends nothing", async () => {
+    let answer: (response: Response) => void = () => {};
+    replies.push((call) =>
+      call.url.endsWith("/v1/commands")
+        ? (new Promise<Response>((resolve) => {
+            answer = resolve;
+          }) as unknown as Response)
+        : undefined,
+    );
+    render(
+      <CommandForm
+        action="Accept loading"
+        kind="accept_loading"
+        organisationId={orgId("lender-one")}
+        context="lender-one"
+        args={{ intent: INTENT, loan: LOAN_ONE }}
+        confirm="Accept the loading?"
+        primary
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Accept loading" }));
+    const dialog = screen.getByRole("dialog", { name: "Accept loading" });
+    const submit = within(dialog).getByRole("button", { name: "Accept loading" });
+    const form = submit.closest("form") as HTMLFormElement;
+    // Two submits in one tick (Enter and a click together), then a click while the first is pending.
+    act(() => {
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+    });
+    await waitFor(() =>
+      expect(calls.filter(({ url }) => url.endsWith("/v1/commands"))).toHaveLength(1),
+    );
+    fireEvent.click(submit);
+    fireEvent.submit(form);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls.filter(({ url }) => url.endsWith("/v1/commands"))).toHaveLength(1);
+    answer(json(201, { data: view({ id: COMMAND_ID }) }));
+    await waitFor(() =>
+      expect(mocks.push).toHaveBeenCalledWith(`/lender-one/commands/${COMMAND_ID}`),
+    );
+    // Created: the form stays busy until the route changes, and a further click sends nothing.
+    fireEvent.click(submit);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls.filter(({ url }) => url.endsWith("/v1/commands"))).toHaveLength(1);
   });
 });
