@@ -340,7 +340,8 @@ afterAll(() => {
     );
   }
   vi.unstubAllEnvs();
-});
+  // One supabase CLI call per table: a cold CLI takes seconds each, past the 10 s default.
+}, 60_000);
 
 async function get(path: string, org: OrgKey, as: OrgKey = org) {
   const response = await route(
