@@ -10,7 +10,7 @@ import { RegistryMark } from "../components/RegistryMark";
 import { SignedText } from "../components/SignedText";
 import { SigningNotes } from "../components/SigningNotes";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useBusy } from "../context";
 import { relayErrorCopy } from "../copy";
 import {
   batchLine,
@@ -122,6 +122,7 @@ export function Handover(props: { commandId: string }) {
     accepts: (candidate) => candidate.kind === "handover",
   });
   const { view, phase, problem } = signing;
+  useBusy(phase.kind === "wallet" || phase.kind === "sending");
 
   // The batch list gives the names and quantity the text is checked against; it is read once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: one read per screen, when online

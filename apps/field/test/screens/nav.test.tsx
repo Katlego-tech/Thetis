@@ -217,10 +217,14 @@ describe("tab bar and per-tab stacks (navigation.md §4)", () => {
   it("shows the wallet, the organisation and Sign out on Account", async () => {
     await start({ two: true });
     await press(tab("Account"));
-    await screen.findByText(NAV_COPY.accountTitle, { selector: "span" });
+    await screen.findByText(NAV_COPY.signedInTitle);
+    // The h1 and the selected tab both read "Account".
+    expect(screen.getAllByText(NAV_COPY.accountTitle)).toHaveLength(2);
+    expect(selected()).toEqual(["Account"]);
     expect(screen.getAllByText("Wallet").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Connect wallet" })).toBeTruthy();
-    expect(screen.getByText(NAV_COPY.organisationTitle)).toBeTruthy();
+    // The section title and its first row's label.
+    expect(screen.getAllByText(NAV_COPY.organisationTitle)).toHaveLength(2);
     expect(screen.getAllByText("Kopano Stockyard Custody").length).toBeGreaterThan(0);
     expect(await screen.findByText("Custodian")).toBeTruthy();
     expect(screen.getByRole("button", { name: NAV_COPY.switchOrganisation })).toBeTruthy();

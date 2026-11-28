@@ -1,18 +1,21 @@
 // The app once a person is signed in: memberships, the organisation, the Thetis instance, then
-// the route stack.
+// the tabs with their route stacks (navigation.md §4).
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Session } from "@supabase/supabase-js";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppState, BackHandler } from "react-native";
 import { createApiClient } from "./api/client";
 import { commandsApi } from "./api/commands";
 import { evidenceApi } from "./api/evidence";
 import { fieldApi } from "./api/field";
 import { walletLinksApi } from "./api/walletLinks";
+import { Picker } from "./components/Picker";
 import type { FieldConfig } from "./config";
-import { AppContext, type AppContextValue, type Route } from "./context";
+import { AppContext, type AppContextValue } from "./context";
+import { NAV_COPY } from "./copy";
 import { type Membership, ReadError, readMemberships, readProtocol } from "./data/reads";
 import { createDraftStore, type StoredWallet } from "./drafts/store";
+import { currentRoute, initialNav, isTabRoot, navReducer, onBack, tabsFor } from "./nav";
 import { createOfflineCache } from "./offline-cache";
 import type { ProtocolContext } from "./protocol";
 import { Batches } from "./screens/Batches";
@@ -69,7 +72,9 @@ export function SignedIn(props: {
   const [protocolError, setProtocolError] = useState(false);
   const [wallet, setWalletState] = useState<StoredWallet | null>(null);
   const [connection, setConnection] = useState<WalletConnection | null>(null);
-  const [routes, setRoutes] = useState<Route[]>([{ name: "home" }]);
+  const [nav, dispatch] = useReducer(navReducer, undefined, initialNav);
+  const [busy, setBusy] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [tick, setTick] = useState(0);
   // Set while the gates run on what this phone read before (offline cold start); cleared by the
   // next successful read.
@@ -155,14 +160,18 @@ export function SignedIn(props: {
     void store.wallet(userId, chosen).then(setWalletState);
   }, [userId, chosen]);
 
+  // Android Back (navigation.md §4.3): an open Picker closes itself first (its Modal); then a call
+  // in flight consumes the press; then onBack, which leaves only the Home root to Android.
+  const latest = useRef({ nav, busy });
+  latest.current = { nav, busy };
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (routes.length <= 1) return false;
-      setRoutes((stack) => stack.slice(0, -1));
-      return true;
+      const { handled } = onBack(latest.current.nav, latest.current.busy);
+      if (handled && !latest.current.busy) dispatch({ type: "back" });
+      return handled;
     });
     return () => subscription.remove();
-  }, [routes.length]);
+  }, []);
 
   const organisation = memberships?.find((m) => m.organisationId === chosen) ?? null;
 
@@ -183,7 +192,7 @@ export function SignedIn(props: {
       organisation,
       chooseOrganisation: (organisationId) => {
         setChosen(organisationId);
-        setRoutes([{ name: "home" }]);
+        dispatch({ type: "reset" });
         if (organisationId) void store.setOrganisation(userId, organisationId);
       },
       protocol,
@@ -198,11 +207,22 @@ export function SignedIn(props: {
       },
       connection,
       setConnection,
-      navigate: (route) =>
-        setRoutes((stack) => (route.name === "home" ? [{ name: "home" }] : [...stack, route])),
-      back: () => setRoutes((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack)),
+      navigate: (route) => dispatch({ type: "push", route }),
+      back: () => dispatch({ type: "back" }),
       sessionExpired: props.sessionExpired,
       signOut: props.signOut,
+      tab: nav.tab,
+      // The chain role is read per screen (useSigning); tabsFor gives every role the same two
+      // tabs in this build, so SignedIn does not read it again here.
+      tabs: tabsFor(null),
+      openTab: (tab) => {
+        if (!busy) dispatch({ type: "tab", tab });
+      },
+      busy,
+      setBusy,
+      switchOrganisation: () => {
+        if (memberships.length > 1 && !busy && isTabRoot(nav)) setChoosing(true);
+      },
     };
   }, [
     memberships,
@@ -220,6 +240,8 @@ export function SignedIn(props: {
     connection,
     props.sessionExpired,
     props.signOut,
+    nav,
+    busy,
   ]);
 
   if (membershipError) {
@@ -253,28 +275,44 @@ export function SignedIn(props: {
     return <NoInstance organisation={organisation.name} onRetry={loadProtocol} />;
   if (!value) return <Loading />;
 
-  const route = routes.at(-1) ?? { name: "home" };
+  const route = currentRoute(nav);
+  const depth = nav.stacks[nav.tab].length;
   return (
     <AppContext.Provider value={value}>
       {route.name === "home" ? (
         <Home key={organisation.organisationId} />
-      ) : route.name === "wallet" ? (
-        <Wallet />
+      ) : route.name === "account" ? (
+        <Wallet key={organisation.organisationId} />
       ) : route.name === "intake" ? (
         <Intake key={route.draftId} draftId={route.draftId} />
       ) : route.name === "issue" ? (
-        <IssueReview key={`${route.draftId}-${routes.length}`} draftId={route.draftId} />
+        <IssueReview key={`${route.draftId}-${depth}`} draftId={route.draftId} />
       ) : route.name === "batches" ? (
-        <Batches key={routes.length} />
+        <Batches key={depth} />
       ) : route.name === "handover" ? (
-        <Handover key={`${route.commandId}-${routes.length}`} commandId={route.commandId} />
+        <Handover key={`${route.commandId}-${depth}`} commandId={route.commandId} />
       ) : route.name === "loadings" ? (
-        <Loadings key={routes.length} />
+        <Loadings key={depth} />
       ) : route.name === "loading" ? (
-        <LoadingIntent key={`${route.intent}-${routes.length}`} intent={route.intent} />
+        <LoadingIntent key={`${route.intent}-${depth}`} intent={route.intent} />
       ) : (
-        <Observation key={routes.length} />
+        <Observation key={depth} />
       )}
+      <Picker
+        visible={choosing}
+        title="Which organisation are you working for?"
+        options={memberships.map((m) => ({
+          key: m.organisationId,
+          title: m.name,
+          lines: [m.synthetic ? `${m.kind}, synthetic` : m.kind],
+        }))}
+        footnote={NAV_COPY.pickerFootnote}
+        onPick={(key) => {
+          setChoosing(false);
+          value.chooseOrganisation(key);
+        }}
+        onClose={() => setChoosing(false)}
+      />
     </AppContext.Provider>
   );
 }
