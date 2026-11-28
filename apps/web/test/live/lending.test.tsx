@@ -592,6 +592,8 @@ const organisations = {
 type Call = { url: string; method: string; body: unknown };
 const calls: Call[] = [];
 let replies: ((call: Call) => Response | undefined)[] = [];
+/** The AbortSignal each fetch was given, by call index (undefined when none). */
+const signals: (AbortSignal | undefined)[] = [];
 const unregister: (() => void)[] = [];
 
 function json(status: number, body: unknown) {
@@ -612,6 +614,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_API_URL", API);
   calls.length = 0;
+  signals.length = 0;
   replies = [];
   mocks.links = [];
   mocks.inserts = [];
@@ -628,6 +631,7 @@ beforeEach(() => {
         body: init.body ? JSON.parse(String(init.body)) : null,
       };
       calls.push(call);
+      signals.push(init.signal ?? undefined);
       if (call.method !== "GET") mocks.log.push(`${call.method} ${url.replace(API, "")}`);
       for (const reply of replies) {
         const response = reply(call);
@@ -888,6 +892,87 @@ describe("command page", () => {
 });
 
 describe("command page poll", () => {
+  const gets = () => calls.filter(({ method }) => method === "GET");
+  const flush = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("a poll that never answers times out at twice the interval, and polling resumes", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const timeouts: number[] = [];
+    const controllers: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      timeouts.push(ms);
+      const controller = new AbortController();
+      controllers.push(controller);
+      return controller.signal;
+    });
+    try {
+      let first = true;
+      replies.push((call) => {
+        if (call.method !== "GET" || !first) return undefined;
+        first = false;
+        const signal = signals.at(-1);
+        // The first poll never settles on its own: only its signal ends it.
+        return new Promise<Response>((_, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("timed out", "TimeoutError")),
+          );
+        }) as unknown as Response;
+      });
+      renderCommand(view());
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(1));
+      expect(timeouts).toEqual([4_000]);
+      expect(signals.at(-1)).toBe(controllers[0]?.signal);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flush();
+      expect(gets()).toHaveLength(1);
+      // The timeout fires: the guard is released and the next tick polls again.
+      await act(async () => controllers[0]?.abort(new DOMException("timed out", "TimeoutError")));
+      await flush();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(2));
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("a poll whose fetch throws releases the guard, and the next tick polls again", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let first = true;
+      replies.push((call) => {
+        if (call.method !== "GET" || !first) return undefined;
+        first = false;
+        throw new TypeError("Failed to fetch");
+      });
+      renderCommand(view());
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(1));
+      await flush();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("after the page unmounts it sends no more polls", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { unmount } = renderCommand(view());
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitFor(() => expect(gets()).toHaveLength(1));
+      await flush();
+      unmount();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flush();
+      expect(gets()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("the command page never starts a poll while one is in flight, and a poll that answers after a signature never reverts the view", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
@@ -1145,6 +1230,45 @@ describe("lending forms", () => {
         ]);
       cleanup();
     }
+  });
+
+  test("a refused create releases the form, so the next submit sends", async () => {
+    let refuse = true;
+    replies.push((call) => {
+      if (!call.url.endsWith("/v1/commands")) return undefined;
+      if (refuse) {
+        refuse = false;
+        return json(409, { error: { code: "LOAN_NOT_ACTIVE", message: "refused" } });
+      }
+      return json(201, { data: view({ id: COMMAND_ID }) });
+    });
+    render(
+      <CommandForm
+        action="Accept loading"
+        kind="accept_loading"
+        organisationId={orgId("lender-one")}
+        context="lender-one"
+        args={{ intent: INTENT, loan: LOAN_ONE }}
+        confirm="Accept the loading?"
+        primary
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Accept loading" }));
+    const dialog = screen.getByRole("dialog", { name: "Accept loading" });
+    const form = within(dialog)
+      .getByRole("button", { name: "Accept loading" })
+      .closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+    expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+    expect(calls.filter(({ url }) => url.endsWith("/v1/commands"))).toHaveLength(1);
+    expect(mocks.push).not.toHaveBeenCalled();
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(calls.filter(({ url }) => url.endsWith("/v1/commands"))).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(mocks.push).toHaveBeenCalledWith(`/lender-one/commands/${COMMAND_ID}`),
+    );
   });
 
   test("a second submit while the first is in flight sends nothing", async () => {

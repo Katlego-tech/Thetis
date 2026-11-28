@@ -31,6 +31,9 @@ import { OPEN_STATUSES, statusLine } from "./status";
 // connects wallets, and posts exactly the bytes the API issued with the wallet's signature.
 
 const POLL_MS = 2000;
+// A poll that has not answered after two intervals is abandoned, so a request that never settles
+// can't hold the in-flight guard and stop polling (T056x review).
+const POLL_TIMEOUT_MS = 2 * POLL_MS;
 const textChanged = "The text changed. Reload the page.";
 const blockhashExpired = "The transaction took too long to sign. Sign it again.";
 const cancelled = (wallet: string) => `You cancelled in ${wallet}. Nothing was signed.`;
@@ -105,7 +108,9 @@ export function CommandLive({
         const started = generation.current;
         const session = await browserSession().catch(() => null);
         if (!session || stopped) return;
-        const result = await getCommand(view.id, session.token);
+        const result = await getCommand(view.id, session.token, {
+          signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+        });
         if (stopped || generation.current !== started) return;
         if (result.ok) {
           setViewState(result.data);

@@ -22,8 +22,9 @@ import {
 } from "./lending-copy";
 
 // The Financing tab's Loading section (live-lending.md §6.10, loading.html): the loading intents of
-// the shown position (and, fold 10, of the viewer's other positions on the lot), each lender's acceptance and the owner's and lenders' actions. Every mark and
-// line comes from chain rows and the render clock; a command never marks anything done here.
+// the shown position (and, fold 10, of the viewer's other positions on the lot), each lender's
+// acceptance and the owner's and lenders' actions. Every mark and line comes from chain rows and
+// the render clock; a command never marks anything done here.
 
 const UPLOAD_HINT =
   "The bill of lading or loading record. PDF, JPEG or PNG, at most 20 MiB. Its SHA-256 goes into the signed text.";
