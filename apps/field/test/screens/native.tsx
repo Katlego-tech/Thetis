@@ -10,7 +10,13 @@ const appStateListeners = new Set<(state: string) => void>();
 const backListeners: (() => boolean)[] = [];
 
 /** What the microphone permission prompt answers; a test sets it before Talk. */
-export const microphone = { answer: "granted" as "granted" | "denied" | "never_ask_again" };
+export const microphone = {
+  answer: "granted" as "granted" | "denied" | "never_ask_again",
+  /** Every permission the app asked for, in order. */
+  requested: [] as string[],
+  /** Runs while the system dialog is open (Android pauses the activity then). */
+  duringRequest: null as (() => void) | null,
+};
 
 /** Presses Android Back: the newest listener first, as React Native does. True when consumed. */
 export function pressBack(): boolean {
@@ -98,7 +104,11 @@ export const reactNative = {
   PermissionsAndroid: {
     PERMISSIONS: { RECORD_AUDIO: "android.permission.RECORD_AUDIO" },
     RESULTS: { GRANTED: "granted", DENIED: "denied", NEVER_ASK_AGAIN: "never_ask_again" },
-    request: async () => microphone.answer,
+    request: async (permission: string) => {
+      microphone.requested.push(permission);
+      microphone.duringRequest?.();
+      return microphone.answer;
+    },
   },
   Platform: { OS: "android", select: (options: Record<string, unknown>) => options.android },
 };
