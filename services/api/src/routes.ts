@@ -11,6 +11,7 @@ import {
 import { SponsorUnavailableError } from "./commands/sponsor.ts";
 import { RELAY_ERRORS, RelayError } from "./commands/views.ts";
 import { decodeBase58, verifyEd25519 } from "./ed25519.ts";
+import { type FieldStore, fieldRoute, isFieldPath, supabaseFieldStore } from "./field.ts";
 import type { AccessClients } from "./supabase.ts";
 import { ID_PATTERN } from "./voice/agent.ts";
 
@@ -324,6 +325,7 @@ export async function route(
   event: APIGatewayProxyEventV2,
   clients: AccessClients,
   commands: () => Promise<CommandDependencies> = defaultDependencies,
+  fieldStore: (service: SupabaseClient) => FieldStore = supabaseFieldStore,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const { rawPath, requestContext } = event;
   const { method } = requestContext.http;
@@ -356,8 +358,10 @@ export async function route(
     const isSession = method === "POST" && rawPath === "/v1/conversations/session";
     const isLotEvidence = method === "GET" && /^\/v1\/voice\/lots\/[^/]+\/evidence$/.test(rawPath);
     const isCommand = isCommandPath(rawPath);
+    const isField = isFieldPath(rawPath);
     if (
       !isCommand &&
+      !isField &&
       !isInvitation &&
       !isChallenge &&
       !isComplete &&
@@ -391,6 +395,18 @@ export async function route(
         commands,
       );
       return json(result.status, { data: result.data }, cors);
+    }
+    if (isField) {
+      const rows = await fieldRoute(
+        method,
+        rawPath,
+        event.rawQueryString,
+        () => requestBody(event, []),
+        user.id,
+        commands,
+        fieldStore(clients.service),
+      );
+      return json(200, { data: rows }, cors);
     }
     if (isInvitation) {
       data = await createInvitation(event, caller, clients);
