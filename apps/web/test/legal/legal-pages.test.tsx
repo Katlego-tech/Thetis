@@ -60,9 +60,13 @@ test("the privacy notice names each kind of data the app handles", () => {
     expect(screen.getByRole("heading", { level: 3, name: heading })).toBeVisible();
   }
   expect(screen.getByText(/ElevenLabs/, { selector: "p" })).toBeVisible();
+  // The to-do marker itself is covered by the gate's placeholder sweep.
+  expect(screen.queryByText(/lorem|example\.com/i)).not.toBeInTheDocument();
 });
 
 test("the terms say the demo is not a custody, lending or payment service", () => {
   show("terms");
   expect(screen.getByText(/not a custody, lending, payment or brokerage service/)).toBeVisible();
+  // The to-do marker itself is covered by the gate's placeholder sweep.
+  expect(screen.queryByText(/lorem|example\.com/i)).not.toBeInTheDocument();
 });
