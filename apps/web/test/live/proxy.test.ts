@@ -65,9 +65,7 @@ const passesThrough = (response: Response) =>
   expect(response.headers.get("x-middleware-next")).toBe("1");
 
 test("the proxy redirects to /login with path and query when there is no session, passes through in reference mode and on bad config, and carries refreshed cookies", async () => {
-  expect(config.matcher).toEqual([
-    "/((?!_next/|reference(?:/|$)|login(?:/|$)|invite(?:/|$)|account(?:/|$)|favicon\\.ico$|.*\\..*).*)",
-  ]);
+  expect(config.matcher).toEqual(["/((?!_next/|favicon\\.ico$|.*\\..*).*)"]);
 
   // Reference mode, unset or explicit: no Supabase client at all.
   passesThrough(await proxy(request("/khunou/queue")));
@@ -183,4 +181,45 @@ test("the proxy redirects to /login with path and query when there is no session
   expect(failed.cookies.get("sb-127-auth-token")?.value).toBe("fresh");
   ssr.getUser = () => Promise.reject(new TypeError("fetch failed"));
   passesThrough(await proxy(request("/khunou/queue")));
+});
+
+const PATHS = ["/", "/login", "/khunou/queue", "/reference/states"];
+
+test("in judge mode every path but /run answers 307 to /run, and no session is read", async () => {
+  liveEnvironment();
+  vi.stubEnv("THETIS_SITE_MODE", "judge");
+  ssr.getUser = () => Promise.reject(new Error("judge mode must not read a session"));
+  for (const path of [...PATHS, "/invite/abc", "/account", "/khunou/lots/CR-0001?tab=custody"]) {
+    const response = await proxy(request(path));
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://localhost:3100/run");
+  }
+  passesThrough(await proxy(request("/run")));
+  expect(ssr.created).toHaveLength(0);
+});
+
+test("without judge mode /run needs no session, and the old public paths still pass through", async () => {
+  liveEnvironment();
+  ssr.getUser = async () => ({
+    data: { user: null },
+    error: { name: "AuthSessionMissingError", status: 400 },
+  });
+  for (const path of ["/run", "/login", "/reference/states", "/invite/abc", "/account"])
+    passesThrough(await proxy(request(path)));
+  expect(ssr.created).toHaveLength(0);
+  // Every other path keeps today's result: a signed-out visitor is sent to sign in.
+  for (const path of ["/", "/khunou/queue"]) {
+    const response = await proxy(request(path));
+    expect(response.headers.get("location")).toBe(
+      `http://localhost:3100/login?next=${encodeURIComponent(path)}`,
+    );
+  }
+  // A path that only starts like a public one is not public.
+  expect((await proxy(request("/runner"))).headers.get("location")).toBe(
+    "http://localhost:3100/login?next=%2Frunner",
+  );
+  // Any other site mode value is not judge mode.
+  vi.stubEnv("THETIS_SITE_MODE", "public");
+  expect((await proxy(request("/khunou/queue"))).status).toBe(307);
+  expect((await proxy(request("/khunou/queue"))).headers.get("location")).toContain("/login");
 });
