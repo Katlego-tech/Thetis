@@ -2223,6 +2223,8 @@ fn attest_shortfall_tolerance_boundary_pinned() {
     let incident = w.attest_ok(&at_edge);
     let stored: Incident = w.f.read(incident);
     assert_eq!(stored.expected_kg, 5_000_000);
+    assert_eq!(stored.observed_kg, 4_975_000);
+    assert_eq!(stored.tolerance_bps, 50);
     assert!(stored.within_tolerance);
     assert_eq!(stored.restriction_after, Restriction::Normal);
     assert_eq!(w.lot_state().restriction, Restriction::Normal);
@@ -2233,6 +2235,9 @@ fn attest_shortfall_tolerance_boundary_pinned() {
     };
     let incident = w.attest_ok(&past_edge);
     let stored: Incident = w.f.read(incident);
+    assert_eq!(stored.expected_kg, 5_000_000);
+    assert_eq!(stored.observed_kg, 4_974_999);
+    assert_eq!(stored.tolerance_bps, 50);
     assert!(!stored.within_tolerance);
     assert_eq!(stored.restriction_after, Restriction::ReviewRequired);
     assert_eq!(w.lot_state().restriction, Restriction::ReviewRequired);

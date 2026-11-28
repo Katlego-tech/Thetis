@@ -170,6 +170,14 @@ export const RELAY_ERRORS = {
   ],
   LOADING_NOT_OPEN: [409, "This loading intent is no longer open."],
   LOADING_EXPIRED: [409, "This loading intent has expired."],
+  LOADING_SUPERSEDED: [
+    409,
+    "The position changed after this loading intent was created. Create a new loading intent.",
+  ],
+  LOAN_UNDER_EXCEPTION: [
+    409,
+    "A payment correction is open on this loan, so it can't accept a loading.",
+  ],
   TOO_MANY_LOANS: [
     409,
     "More than four loans hold locks on this lot; one loading takes at most four.",

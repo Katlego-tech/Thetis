@@ -34,7 +34,8 @@ const SYSTEM = "11111111111111111111111111111111";
 const MAX_COMPUTE_UNITS = 400_000;
 /** The relay sets a 1 micro-lamport price right after the limit when the transaction fits, so a
  * wallet leaves the fee alone (28 Nov). None stays allowed: the widest shapes go without it, and
- * so does an API issued before it. The cap keeps the sponsor's fee at the base fee in effect. */
+ * so does an API issued before it. The cap keeps a priced transaction's fee within one lamport of
+ * the base fee: 400,000 units at 1 micro-lamport is a 0.4-lamport priority fee, rounded up to 1. */
 const MAX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 1n;
 
 /** The 14 Phase 2 instructions and the field kinds' (field-app.md §6.3), from packages/contracts/idl/thetis.json (checked by the tests):

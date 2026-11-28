@@ -45,10 +45,12 @@ import {
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   DocumentKind,
+  decodeAuthority,
   decodeCustodianClass,
   decodeHandoffAcceptance,
   decodeLoadingIntent,
   decodeLoan,
+  decodeLockAllocation,
   decodeLot,
   decodeManifestBatch,
   decodePaymentAttestation,
@@ -58,6 +60,7 @@ import {
   findAuthorityPda,
   findHandoverPda,
   findIntakePda,
+  findLockPda,
   findMintAuthorityPda,
   findMintPda,
   findOrganisationPda,
@@ -69,11 +72,15 @@ import {
   getAccreditCustodianClassInstruction,
   getAccreditOrganisationInstruction,
   getAttestDocumentInstruction,
+  getAuthorityEncoder,
   getCancelShipmentInstruction,
   getDelegateAuthorityInstruction,
   getInitializeProtocolInstruction,
   getIssueLotInstruction,
+  getLoanEncoder,
+  getLockAllocationEncoder,
   getOpenPoolInstruction,
+  getPositionEncoder,
   getPrepareShipmentInstructionAsync,
   getRegisterBatchInstructionAsync,
   getRegisterClassInstruction,
@@ -2295,6 +2302,11 @@ describe("handover on the real program", () => {
     const after = decodeManifestBatch(w.svm.getAccount(batch) as never).data;
     expect(after.holder).toBe(w.orgs.mosela);
     expect(after.sequence).toBe(1n);
+    // T056r R7 (program-custody.md §4.6): the relay appended the HandoverRecord to the table
+    // before sending, and the handover that created it landed.
+    const [{ address: table }] = (await lookupTableRows(w)) as [{ address: string }];
+    expect(lookupTableAddresses(w.svm, table as Address)).toContain(handover);
+    expect(w.svm.getAccount(handover).exists).toBe(true);
   });
 
   it("the refused driver: a linked carrier wallet with no Authority reaches the chain and fails as Anchor3012", async () => {
@@ -2485,6 +2497,15 @@ async function attestOrigin(
   return document;
 }
 
+async function commandCount(w: World) {
+  const { count, error } = await service
+    .from("commands")
+    .select("id", { count: "exact", head: true })
+    .eq("protocol", w.protocol);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 async function lookupTableRows(w: World) {
   return mustSucceed(
     await service.from("relay_lookup_tables").select("address").eq("protocol", w.protocol),
@@ -2492,9 +2513,10 @@ async function lookupTableRows(w: World) {
 }
 
 describe("PR #69 review folds on the real program", () => {
-  it("an issue_lot above 1,232 bytes is TRANSACTION_TOO_LARGE before the sponsor signs, the table grows or anything is sent, and the command ends expired with the byte count", async () => {
+  it("an issue_lot above 1,232 bytes is TRANSACTION_TOO_LARGE at create (T056r R1): no command is stored, so the custodian never signs a text that cannot be sent, the table does not grow and nothing is sent", async () => {
     // Every field at its widest (48-character names, 16-character lot ID and site, 8-character
-    // class code and grade), no origin: 1,251 bytes after the PR #69 folds.
+    // class code and grade), no origin: 1,251 bytes after the PR #69 folds. The custodian's
+    // Authority is taken as in the table, the best case, so the estimate is that exact size.
     const w = await world("fiat", {
       names: {
         khunou: "Khunou Ore Exports".padEnd(48, "-"),
@@ -2520,30 +2542,29 @@ describe("PR #69 review folds on the real program", () => {
       },
     };
     const lotId = "CR-0000000000002";
-    const created = await create(w, "kopano", "issue_lot", {
-      custodianClass,
-      owner: orgIds.khunou,
-      lotId,
-      grade: "GRADE-A1",
-      quantityKg: "1000000",
-      weighbridgeTicket: "WB2611-0099",
-    });
+    const commandsBefore = await commandCount(w);
     const before = w.chain.sent.length;
-    const response = await signText(w, "kopano", created, "custodian", wallets.kopanoField);
+    const response = await call(w, "POST", "/v1/commands", people.kopano, {
+      kind: "issue_lot",
+      organisationId: orgIds.kopano,
+      args: {
+        custodianClass,
+        owner: orgIds.khunou,
+        lotId,
+        grade: "GRADE-A1",
+        quantityKg: "1000000",
+        weighbridgeTicket: "WB2611-0099",
+      },
+    });
     expect(response.statusCode, response.body).toBe(422);
     expect(errorOf(response)).toMatchObject({
       code: "TRANSACTION_TOO_LARGE",
       detail: "1251 bytes",
     });
+    expect(await commandCount(w)).toBe(commandsBefore);
     expect(signed).toHaveLength(0);
     expect(w.chain.sent.length).toBe(before);
     expect(await lookupTableRows(w)).toStrictEqual([]);
-    const view = data<CommandView>(
-      await call(w, "GET", `/v1/commands/${created.id}`, people.kopano),
-    );
-    expect(view.status).toBe("expired");
-    expect(view.error).toStrictEqual({ code: "TRANSACTION_TOO_LARGE", detail: "1251 bytes" });
-    expect(view.transaction).toBeNull();
     expect(w.svm.getAccount(await lotPda(w.protocol, lotId)).exists).toBe(false);
   });
 
@@ -3606,6 +3627,209 @@ describe("accept_loading on the real program", () => {
     expect(response.statusCode, response.body).toBe(409);
     expect(errorOf(response)).toMatchObject({
       code: "LOADING_NOT_OPEN",
+      detail: `intent: ${intent}`,
+    });
+    expect(w.chain.sent.length).toBe(before);
+  }, 240_000);
+});
+
+// ---------------------------------------------------------------- T056r relay follow-ups
+
+/** Rewrites a Thetis account in place with `change` applied: a fixture for a state the relay
+ * must refuse before signing. */
+function rewrite<T extends object>(
+  w: World,
+  key: Address,
+  decode: (account: never) => { data: T },
+  encode: (value: T) => ArrayLike<number>,
+  change: Partial<T>,
+) {
+  const account = w.svm.getAccount(key);
+  if (!account.exists) throw new Error(`${key} does not exist`);
+  const value = { ...decode(account as never).data, ...change };
+  w.svm.setAccount({
+    address: key,
+    programAddress: account.programAddress,
+    lamports: account.lamports,
+    executable: false,
+    space: account.space,
+    data: new Uint8Array(encode(value)),
+  } as never);
+}
+
+describe("T056r relay follow-ups on the real program", () => {
+  it("R2: a transaction-signed kind that can't fit is TRANSACTION_TOO_LARGE and ends expired with the error, nothing signed by the sponsor or sent", async () => {
+    const w = await world();
+    const { loan } = await pledgedLoan(w);
+    const created = await create(w, "lenderOne", "record_advance", {
+      loan,
+      amountMinor: "60000000",
+    });
+    const signedText = data<CommandView>(
+      await signText(w, "khunou", created, "borrower", wallets.khunou),
+    );
+    expect(signedText.status).toBe("awaiting_signatures");
+    // A stored text this long can't fit one transaction with its Ed25519 instruction.
+    mustSucceed(
+      await service
+        .from("commands")
+        .update({ message_base64: Buffer.alloc(1_100, 0x41).toString("base64") })
+        .eq("id", created.id)
+        .select("id"),
+    );
+    const sponsor = w.deps.sponsor;
+    const signed: string[] = [];
+    w.deps = {
+      ...w.deps,
+      sponsor: {
+        address: () => sponsor.address(),
+        sign: async (wire, table) => {
+          signed.push(wire);
+          return sponsor.sign(wire, table);
+        },
+      },
+    };
+    const before = w.chain.sent.length;
+    const response = await call(
+      w,
+      "POST",
+      `/v1/commands/${created.id}/transaction-request`,
+      people.lenderOne,
+      { wallet: wallets.lenderOne.address },
+    );
+    expect(response.statusCode, response.body).toBe(422);
+    expect(errorOf(response).code).toBe("TRANSACTION_TOO_LARGE");
+    expect(errorOf(response).detail).toMatch(/^\d+ bytes$/);
+    expect(signed).toHaveLength(0);
+    expect(w.chain.sent.length).toBe(before);
+    const view = data<CommandView>(
+      await call(w, "GET", `/v1/commands/${created.id}`, people.lenderOne),
+    );
+    expect(view.status).toBe("expired");
+    expect(view.error).toStrictEqual({
+      code: "TRANSACTION_TOO_LARGE",
+      detail: errorOf(response).detail,
+    });
+    expect(view.transaction).toBeNull();
+  }, 180_000);
+
+  it("R3: a holder Authority owned by another program is AUTHORITY_INVALID before decoding, and nothing is sent", async () => {
+    const w = await world();
+    const { batch } = await shippedBatch(w);
+    const created = await create(w, "kopano", "handover", { batch, to: orgIds.mosela });
+    const [authority] = await findAuthorityPda({
+      protocol: w.protocol,
+      wallet: wallets.kopanoField.address,
+    });
+    const real = w.svm.getAccount(authority);
+    if (!real.exists) throw new Error("no authority");
+    w.svm.setAccount({
+      address: authority,
+      programAddress: (await signer()).address,
+      lamports: real.lamports,
+      executable: false,
+      space: real.space,
+      data: real.data,
+    } as never);
+    const before = w.chain.sent.length;
+    const response = await signText(w, "kopano", created, "holder", wallets.kopanoField);
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "AUTHORITY_INVALID",
+      detail: `${authority}: not an Authority`,
+    });
+    expect(w.chain.sent.length).toBe(before);
+  });
+
+  it("R4: accept_loading refuses a loan on another position and a zero lock (VALIDATION args.loan) at create, and a lender wallet without LEND (AUTHORITY_INVALID) before anything is sent", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["3000000", "2000000"]);
+    const [first, second] = loans as [Address, Address];
+    const { intent } = await createIntent(w);
+    const post = (loan: Address) =>
+      call(w, "POST", "/v1/commands", people.lenderOne, {
+        kind: "accept_loading",
+        organisationId: orgIds.lenderOne,
+        args: { intent, loan },
+      });
+    const before = w.chain.sent.length;
+
+    rewrite(w, first, decodeLoan, (v) => getLoanEncoder().encode(v), {
+      position: (await signer()).address,
+    });
+    const elsewhere = await post(first);
+    expect(elsewhere.statusCode, elsewhere.body).toBe(400);
+    expect(errorOf(elsewhere)).toMatchObject({ code: "VALIDATION", detail: "args.loan" });
+
+    const [lock] = await findLockPda({ loan: second });
+    rewrite(w, lock, decodeLockAllocation, (v) => getLockAllocationEncoder().encode(v), {
+      quantityKg: 0n,
+    });
+    const zero = await post(second);
+    expect(zero.statusCode, zero.body).toBe(400);
+    expect(errorOf(zero)).toMatchObject({ code: "VALIDATION", detail: "args.loan" });
+    expect(w.chain.sent.length).toBe(before);
+  }, 240_000);
+
+  it("R4: a lender wallet whose Authority lacks LEND is AUTHORITY_INVALID at the transaction request, and nothing is signed or sent", async () => {
+    const w = await world();
+    const { loans } = await lotAtTerminal(w, ["5000000"]);
+    const [loan] = loans as [Address];
+    const { intent } = await createIntent(w);
+    const created = await create(w, "lenderOne", "accept_loading", { intent, loan });
+    const [authority] = await findAuthorityPda({
+      protocol: w.protocol,
+      wallet: wallets.lenderOne.address,
+    });
+    const held = decodeAuthority(w.svm.getAccount(authority) as never).data;
+    rewrite(w, authority, decodeAuthority, (v) => getAuthorityEncoder().encode(v), {
+      scopes: held.scopes & ~(1 << 7),
+    });
+    const before = w.chain.sent.length;
+    const response = await call(
+      w,
+      "POST",
+      `/v1/commands/${created.id}/transaction-request`,
+      people.lenderOne,
+      { wallet: wallets.lenderOne.address },
+    );
+    expect(response.statusCode, response.body).toBe(409);
+    expect(errorOf(response)).toMatchObject({
+      code: "AUTHORITY_INVALID",
+      detail: "scope LEND missing",
+    });
+    expect(w.chain.sent.length).toBe(before);
+  }, 240_000);
+
+  it("R5: accept_loading refuses a superseded intent (LOADING_SUPERSEDED) and a loan under an open exception (LOAN_UNDER_EXCEPTION) at create, sending nothing", async () => {
+    const w = await world();
+    const { loans, position } = await lotAtTerminal(w, ["3000000", "2000000"]);
+    const [first, second] = loans as [Address, Address];
+    const { intent } = await createIntent(w);
+    const post = (loan: Address) =>
+      call(w, "POST", "/v1/commands", people.lenderOne, {
+        kind: "accept_loading",
+        organisationId: orgIds.lenderOne,
+        args: { intent, loan },
+      });
+    const before = w.chain.sent.length;
+
+    rewrite(w, first, decodeLoan, (v) => getLoanEncoder().encode(v), { openExceptions: 1 });
+    const excepted = await post(first);
+    expect(excepted.statusCode, excepted.body).toBe(409);
+    expect(errorOf(excepted)).toMatchObject({
+      code: "LOAN_UNDER_EXCEPTION",
+      detail: `loan: ${first}`,
+    });
+
+    const held = decodePosition(w.svm.getAccount(position) as never).data;
+    rewrite(w, position, decodePosition, (v) => getPositionEncoder().encode(v), {
+      revision: held.revision + 1n,
+    });
+    const superseded = await post(second);
+    expect(superseded.statusCode, superseded.body).toBe(409);
+    expect(errorOf(superseded)).toMatchObject({
+      code: "LOADING_SUPERSEDED",
       detail: `intent: ${intent}`,
     });
     expect(w.chain.sent.length).toBe(before);
