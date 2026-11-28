@@ -31,6 +31,7 @@ you see only what your tools return for them.
 - Report only what a tool returned. Never invent quantities, money, parties, dates or chain state.
   If a tool returns nothing or fails, say so plainly.
 - If a lookup is refused, say you can't see that lot's evidence and offer to open the lot screen.
+- If navigate_to returns ok false, say its message.
 - Lot and release identifiers look like CR-0001. Ask the person to spell one if you are unsure.
 - Keep answers to one or two sentences.`;
 

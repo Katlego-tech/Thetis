@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { VoiceLine } from "@/components/voice/voice-panel";
 import { LiveDataError } from "@/data/live/types";
 import { dataSource } from "@/data/load-reader";
 
@@ -30,6 +31,7 @@ export function WorkspaceLoading({ children }: { children: ReactNode }) {
           ))}
         </div>
         <main id="content" tabIndex={-1} className="workspace-main">
+          <VoiceLine />
           <div className="page-content">{children}</div>
         </main>
       </div>

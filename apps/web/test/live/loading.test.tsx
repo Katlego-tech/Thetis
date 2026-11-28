@@ -114,7 +114,7 @@ vi.mock("@/lib/supabase-server", () => ({ supabaseServer: async () => server.cli
 
 const { LoadingSection } = await import("@/components/dossier/loading-section");
 const { CommandLive } = await import("@/components/commands/command-live");
-const { commandFailureMessage } = await import("@/components/commands/messages");
+const { commandFailureMessage, failureMessage } = await import("@/components/commands/messages");
 const { statusLine } = await import("@/components/commands/status");
 const { getQueueData } = await import("@/components/queue/work-queue-screen");
 const { default: CommandPage } = await import("@/app/[context]/commands/[commandId]/page");
@@ -1286,6 +1286,64 @@ describe("loading actions", () => {
     expect(await within(accept).findByRole("alert")).toHaveTextContent(
       "Loan 0 has no lock on the position this intent loads, so it has nothing to accept. Nothing was sent.",
     );
+  });
+
+  test("the relay's create-time refusals of a superseded intent and a loan under exception read their loading lines on the Accept loading dialog", async () => {
+    const names = {
+      lenders: { [LOAN_ONE]: { name: "Lender One Bank", index: "0" } },
+      owner: "Khunou Ore Exports",
+    };
+    const accepting = { intent: LOADING_INTENT, loan: LOAN_ONE };
+    expect(
+      commandFailureMessage(
+        "accept_loading",
+        { code: "LOADING_SUPERSEDED", detail: `intent: ${LOADING_INTENT}` },
+        names,
+        accepting,
+      ),
+    ).toBe(
+      "The position changed after this loading intent was created, so it can't be accepted. Ask Khunou Ore Exports to create a new one. Nothing was sent.",
+    );
+    expect(
+      commandFailureMessage(
+        "accept_loading",
+        { code: "LOAN_UNDER_EXCEPTION", detail: `loan: ${LOAN_ONE}` },
+        names,
+        accepting,
+      ),
+    ).toBe(
+      "A payment correction is open on loan 0, so it can't accept a loading until the correction is settled. Nothing was sent.",
+    );
+    // Any other kind reads the relay's own message for each code.
+    expect(failureMessage({ code: "LOADING_SUPERSEDED" })).toBe(
+      "The position changed after this loading intent was created. Create a new loading intent.",
+    );
+    expect(failureMessage({ code: "LOAN_UNDER_EXCEPTION" })).toBe(
+      "A payment correction is open on this loan, so it can't accept a loading.",
+    );
+
+    for (const [code, detail, text] of [
+      [
+        "LOADING_SUPERSEDED",
+        `intent: ${LOADING_INTENT}`,
+        "The position changed after this loading intent was created, so it can't be accepted. Ask Khunou Ore Exports to create a new one. Nothing was sent.",
+      ],
+      [
+        "LOAN_UNDER_EXCEPTION",
+        `loan: ${LOAN_ONE}`,
+        "A payment correction is open on loan 0, so it can't accept a loading until the correction is settled. Nothing was sent.",
+      ],
+    ] as const) {
+      replies = [];
+      renderSection(loadingSnapshot(["lender-one"]), "lender-one");
+      refusedWith(code, detail);
+      fireEvent.click(screen.getByRole("button", { name: "Accept loading" }));
+      const dialog = screen.getByRole("dialog", { name: "Accept loading" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Accept loading" }));
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent(text);
+      expect(mocks.push).not.toHaveBeenCalled();
+      cleanup();
+    }
   });
 
   test("the chain's loading refusals read their loading explanations, and every other kind keeps its own", () => {

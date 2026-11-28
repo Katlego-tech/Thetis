@@ -40,6 +40,9 @@ const apiErrorCodes = [
   "LOADING_NOT_OPEN",
   "LOADING_EXPIRED",
   "TOO_MANY_LOANS",
+  // live-lending.md "T056r driver decisions" 2: accept_loading's create-time refusals
+  "LOADING_SUPERSEDED",
+  "LOAN_UNDER_EXCEPTION",
 ] as const;
 
 export type ApiErrorCode = (typeof apiErrorCodes)[number];
