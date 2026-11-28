@@ -24,7 +24,7 @@ import {
   tableCandidates,
 } from "../src/commands/compile.ts";
 import { sharedMessageInstruction } from "../src/commands/ed25519.ts";
-import { bestCaseBytes } from "../src/commands/lifecycle.ts";
+import { bestCaseBytes, sizedTableKeys } from "../src/commands/lifecycle.ts";
 import {
   buildInstruction,
   createdTableAddresses,
@@ -310,6 +310,7 @@ async function commandSize(
     absentKeys: missing,
     keys,
     candidates,
+    instructions: commandInstructions(thetis, ed25519),
     bytes: measureCommand(commandInstructions(thetis, ed25519), sponsor, keys),
     wire: issued(commandInstructions(thetis, ed25519), sponsor, keys).wire,
   };
@@ -643,6 +644,106 @@ describe("best-case size at create (T056r R1)", () => {
       // as it is once a delegated custodian signs.
       expect(estimate).toBe(expected);
     }
+  });
+});
+
+describe("best-case size is a lower bound", () => {
+  it("takes an unnamed next-holder Authority as in the table: an undelegated next holder's handover sends 31 bytes above the estimate", async () => {
+    const size = await handoverSize({
+      lotId: "L".repeat(16),
+      from: name(48),
+      to: name(48),
+      stage: "Departure",
+      nextHolderAuthority: false,
+    });
+    expect(size.bytes).toBe(MEASURED_HANDOVER_NO_AUTHORITY);
+    const estimate = await bestCaseBytes(
+      {
+        protocol: size.protocol,
+        sponsor: { address: async () => size.sponsor, sign: async () => "" },
+        chain: {
+          accounts: async (keys: Address[]) =>
+            keys.map((key) => ({ exists: !size.absentKeys.has(key), address: key })),
+        },
+      } as never,
+      "handover",
+      {
+        plan: size.plan,
+        text: size.text,
+        signers: KIND_SPECS.handover.signers.map((s) => ({
+          ...s,
+          organisationId: "6f1c4a52-0d3e-4c4b-9b7e-2a1f0c9d8e7a",
+        })) as never,
+      },
+    );
+    // The Authority is static in the sent transaction (32 bytes) but a 1-byte table index in
+    // the estimate.
+    expect(estimate).toBe(MEASURED_HANDOVER_NO_AUTHORITY - 31);
+  });
+});
+
+describe("a too-large measurement reads the accounts once more before it is terminal", () => {
+  /** The widest handover (1,224 B with every key in the table), whose lot is not visible on the
+   * first `hidden` reads: static, the lot pushes it past 1,232 bytes. */
+  async function widestWithLateLot(hidden: number) {
+    const size = await handoverSize({
+      lotId: "L".repeat(16),
+      from: "Kopano Stockyard Custody And Allied Yards Pty 01",
+      to: "Mosela Haulage And Allied Bulk Transport Pty 001",
+      stage: "Departure",
+      nextHolderAuthority: true,
+      widest: true,
+    });
+    const reads = { accounts: 0, sleeps: 0 };
+    const relay = {
+      chain: {
+        accounts: async (keys: Address[]) => {
+          const visible = reads.accounts++ >= hidden;
+          return keys.map((key) => ({
+            address: key,
+            exists: !size.absentKeys.has(key) && (visible || key !== size.plan.lot),
+          }));
+        },
+      },
+      sleep: async () => {
+        reads.sleeps++;
+      },
+    } as never;
+    const sized = () =>
+      sizedTableKeys(
+        relay,
+        "handover",
+        size.plan,
+        size.candidates,
+        size.instructions,
+        size.sponsor,
+      );
+    return { size, reads, sized };
+  }
+
+  it("sends once the account shows on the second read", async () => {
+    const { size, reads, sized } = await widestWithLateLot(1);
+    const keys = await sized();
+    expect(keys).toContain(size.plan.lot);
+    expect(measureCommand(size.instructions, size.sponsor, keys)).toBe(1_224);
+    expect(reads.accounts).toBe(2);
+    expect(reads.sleeps).toBe(1);
+  });
+
+  it("is TRANSACTION_TOO_LARGE when the second read still does not fit, after exactly two reads", async () => {
+    const { reads, sized } = await widestWithLateLot(2);
+    await expect(sized()).rejects.toMatchObject({
+      code: "TRANSACTION_TOO_LARGE",
+      detail: expect.stringMatching(/^\d+ bytes$/),
+    });
+    expect(reads.accounts).toBe(2);
+  });
+
+  it("reads once when the first read fits", async () => {
+    const { reads, sized } = await widestWithLateLot(0);
+    await sized();
+    expect(reads.accounts).toBe(1);
+    expect(reads.sleeps).toBe(0);
   });
 });
 
