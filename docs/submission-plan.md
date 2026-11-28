@@ -53,25 +53,25 @@ The rule behind every step: a first-pass grader only scores what it can find on 
 
 **Done when:** the link plays logged out and the player shows under 3:00.
 
-## 5. Host the read-only judge page
+## 5. Host the public judge page
 
 **Why:** `RUBRIC.md` lists a live demo link among the requirements for Best App Overall, and stage 2 includes "live demo verification". A judge cannot play four organisations on two phones, so today they can only watch us. The strongest competing entry lets anyone open a link and see real devnet steps in about 90 seconds. This page is our answer to that, and it is the step most likely to change the result.
 
-**What it is:** one public URL. A judge signs in as a read-only role, with no wallet and no signing authority, and sees one real devnet run from issue to loading. Each step shows who signed, its state as the program confirmed it, and a link to its transaction. The refusals are on the page too, each with its error name.
+**What it is:** one public URL with no sign-in and no wallet. A judge opens it and sees one real devnet run from issue to loading. Each step shows who signed, its state as the program confirmed it, and a link to its transaction. The refusals are on the page too, each with its error name.
 
 **Do:**
-- [ ] Decide the hosting today. The page needs the web app and the read model reachable from the internet, so it needs the AWS account and region, and a hosted Supabase. Both are still open owner decisions.
-- [ ] Add the page to the web design document first, in its own pull request: the route, the judge role, what each step row shows, and the visual reference. Build nothing before that is agreed.
-- [ ] Give the judge role read access only: no command can be sent from it, and the access rules let it read the one judged instance and nothing else.
+- [ ] Hosting is decided (28 November): AWS in `us-east-1`, a hosted Supabase project, a budget of USD 25 a month, and no API or fee sponsor deployed. The page is public because the account's email service can only send sign-in codes to verified addresses. Still needed from the owner: the Supabase project and the devnet RPC address for the hosted indexer.
+- [ ] Agree the design first: the route, how a visitor with no account reads one run and nothing else, what each step row shows, the visual reference, and the deploy runbook. Build nothing before that is agreed.
+- [ ] The public page can read the one judged instance and nothing else, and no command can be sent from it. Every existing access rule stays as it is.
+- [ ] Deploy by hand once, then let merges to `main` deploy automatically after the checks pass, with a check that the page still loads and a switch to turn deploys off.
 - [ ] Run one clean rehearsal on a fresh instance and keep it as the judged run. Never reset that instance afterwards. The same run supplies the transaction table in step 3.
 - [ ] Show only what the chain confirms. A step with no confirmed transaction is not shown as done. A refusal that failed in simulation has no transaction: name the error and say so.
 - [ ] Label the page devnet and synthetic, and show the program address.
-- [ ] Put the sign-in details a judge needs in the README and the submission form, with nothing secret in them.
 - [ ] Put the URL in `event.toml` `demo_url`, the README's "See it" line and the submission form.
 - [ ] Remove the "no hosted demo" bullet from the README's Limits.
 - [ ] If hosting cannot be ready before the video is recorded, say so in Limits and submit the video and the transaction table as the proof. Do not submit a link that depends on a laptop staying on.
 
-**Done when:** with every local service stopped, the URL opens on a phone outside the home network, a judge sign-in shows the run, and every step's link opens on the explorer.
+**Done when:** with every local service stopped, the URL opens on a phone outside the home network, shows the run without signing in, and every step's link opens on the explorer.
 
 ## 6. Write `docs/dev3pack-submission.md`
 

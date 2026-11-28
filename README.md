@@ -294,6 +294,8 @@ Merged during the window (27–28 November 2026):
 | [#92](https://github.com/Katlego-tech/Thetis/pull/92) | 28 Nov | relay: lookup table and size refusals |
 | [#94](https://github.com/Katlego-tech/Thetis/pull/94) | 28 Nov | web: voice navigation with typed fallback |
 | [#95](https://github.com/Katlego-tech/Thetis/pull/95) | 28 Nov | relay, web: shared contracts package |
+| [#96](https://github.com/Katlego-tech/Thetis/pull/96) | 28 Nov | relay: size-refusal follow-ups |
+| [#97](https://github.com/Katlego-tech/Thetis/pull/97) | 28 Nov | field: voice navigation |
 
 ## Design documents
 
