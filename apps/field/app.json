@@ -5,9 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
     "platforms": ["android"],
     "android": {
       "package": "dev.thetis.field",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B2023"
+      },
       "predictiveBackGestureEnabled": false
     },
     "plugins": [
@@ -21,7 +26,8 @@
           "microphonePermission": false
         }
       ],
-      ["expo-document-picker"]
+      ["expo-document-picker"],
+      "./plugins/release-signing.js"
     ]
   }
 }
