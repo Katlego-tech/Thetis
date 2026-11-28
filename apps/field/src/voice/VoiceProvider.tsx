@@ -69,6 +69,7 @@ function VoiceSession(props: { onTabRoot: boolean; children: ReactNode }) {
   const [state, setStateValue] = useState<VoiceState>({ phase: "idle" });
   const stateRef = useRef<VoiceState>(state);
   const generation = useRef(0);
+  const prompting = useRef(false);
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
   const appRef = useRef(app);
@@ -213,7 +214,12 @@ function VoiceSession(props: { onTabRoot: boolean; children: ReactNode }) {
     const id = generation.current;
     setState({ phase: "connecting", attempt: 1 });
     void (async () => {
-      const granted = await microphoneGranted();
+      // Android's permission dialog pauses the activity (AppState "background"); that is not the
+      // person leaving the app, so the foreground rule below skips it while the prompt is open.
+      prompting.current = true;
+      const granted = await microphoneGranted().finally(() => {
+        prompting.current = false;
+      });
       if (id !== generation.current) return;
       if (!granted) {
         retire();
@@ -232,7 +238,7 @@ function VoiceSession(props: { onTabRoot: boolean; children: ReactNode }) {
   // Leaving the foreground ends it too: a live microphone only ever sits behind a visible End.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
-      if (next !== "active") stop();
+      if (next !== "active" && !prompting.current) stop();
     });
     return () => subscription.remove();
   }, [stop]);

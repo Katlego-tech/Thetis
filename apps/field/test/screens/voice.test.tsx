@@ -210,6 +210,8 @@ beforeEach(() => {
   api.evidence = null;
   wallet.refuse = null;
   microphone.answer = "granted";
+  microphone.requested = [];
+  microphone.duringRequest = null;
 });
 afterEach(cleanup);
 
@@ -443,6 +445,18 @@ describe("Talk on the phone (voice.md §5.1)", () => {
     ).toBeTruthy();
     expect(sessionCalls()).toEqual([]);
     expect(voiceSdk.starts).toEqual([]);
+  });
+
+  it("starts on the first Talk although the permission dialog pauses the app", async () => {
+    microphone.duringRequest = () => {
+      emitAppState("background");
+      emitAppState("active");
+    };
+    await start();
+    await press(button("Talk to the Thetis navigator") as HTMLElement);
+    await waitFor(() => expect(voiceSdk.starts).toHaveLength(1));
+    expect(microphone.requested).toEqual(["android.permission.RECORD_AUDIO"]);
+    expect(sessionCalls()).toHaveLength(1);
   });
 
   it("ends a live session when a pushed screen opens or the app leaves the foreground", async () => {
