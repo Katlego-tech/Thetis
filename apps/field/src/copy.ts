@@ -261,3 +261,35 @@ export const NAV_COPY = {
   pickerFootnote:
     "Drafts and wallets are kept per organisation. You can switch later from Account.",
 } as const;
+
+/** Talk, the voice strip and the voice refusals (voice.md §5.1, §5.2), field strings only. */
+export const VOICE_COPY = {
+  talk: "Talk",
+  connecting: "Connecting",
+  end: "End",
+  names: {
+    talk: "Talk to the Thetis navigator",
+    connecting: "Connecting to voice",
+    end: "End voice session",
+    retry: "Try voice again",
+  },
+  status: {
+    starting: "Starting voice.",
+    newSession: "Getting a new voice session.",
+    listening: "Listening.",
+    speaking: "Speaking.",
+    unavailable: "Voice is unavailable. Use the controls below.",
+    microphone:
+      "Microphone access is off for Thetis field. Allow it in Android settings, then press Talk.",
+  },
+  refusals: {
+    UNKNOWN_SCREEN: "That screen is not in Thetis.",
+    BAD_ID: "That is not a lot id. Lot ids look like CR-0001.",
+    NOT_ON_PHONE: {
+      exceptions: "Exceptions are on the web workbench, not on this phone.",
+      lot: "The lot dossier is on the web workbench, not on this phone.",
+      release: "Release review is on the web workbench, not on this phone.",
+    },
+    BUSY: "Your wallet is signing. The screen stays as it is until it finishes.",
+  },
+} as const;

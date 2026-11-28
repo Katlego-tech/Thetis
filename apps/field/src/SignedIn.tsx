@@ -35,6 +35,7 @@ import { Loadings } from "./screens/Loadings";
 import { Observation } from "./screens/Observation";
 import { Wallet } from "./screens/Wallet";
 import { type createSupabase, sessionStorage } from "./supabase";
+import { VoiceProvider } from "./voice/VoiceProvider";
 import type { WalletConnection } from "./wallet";
 
 const store = createDraftStore(AsyncStorage);
@@ -285,40 +286,43 @@ export function SignedIn(props: {
   const depth = nav.stacks[nav.tab].length;
   return (
     <AppContext.Provider value={value}>
-      {route.name === "home" ? (
-        <Home key={organisation.organisationId} />
-      ) : route.name === "account" ? (
-        <Wallet key={organisation.organisationId} />
-      ) : route.name === "intake" ? (
-        <Intake key={route.draftId} draftId={route.draftId} />
-      ) : route.name === "issue" ? (
-        <IssueReview key={`${route.draftId}-${depth}`} draftId={route.draftId} />
-      ) : route.name === "batches" ? (
-        <Batches key={depth} />
-      ) : route.name === "handover" ? (
-        <Handover key={`${route.commandId}-${depth}`} commandId={route.commandId} />
-      ) : route.name === "loadings" ? (
-        <Loadings key={depth} />
-      ) : route.name === "loading" ? (
-        <LoadingIntent key={`${route.intent}-${depth}`} intent={route.intent} />
-      ) : (
-        <Observation key={depth} />
-      )}
-      <Picker
-        visible={choosing}
-        title="Which organisation are you working for?"
-        options={memberships.map((m) => ({
-          key: m.organisationId,
-          title: m.name,
-          lines: [m.synthetic ? `${m.kind}, synthetic` : m.kind],
-        }))}
-        footnote={NAV_COPY.pickerFootnote}
-        onPick={(key) => {
-          setChoosing(false);
-          value.chooseOrganisation(key);
-        }}
-        onClose={() => setChoosing(false)}
-      />
+      {/* Keyed by organisation: a switch ends the voice session (voice.md §5.1). */}
+      <VoiceProvider key={organisation.organisationId} onTabRoot={isTabRoot(nav)}>
+        {route.name === "home" ? (
+          <Home key={organisation.organisationId} />
+        ) : route.name === "account" ? (
+          <Wallet key={organisation.organisationId} />
+        ) : route.name === "intake" ? (
+          <Intake key={route.draftId} draftId={route.draftId} />
+        ) : route.name === "issue" ? (
+          <IssueReview key={`${route.draftId}-${depth}`} draftId={route.draftId} />
+        ) : route.name === "batches" ? (
+          <Batches key={depth} />
+        ) : route.name === "handover" ? (
+          <Handover key={`${route.commandId}-${depth}`} commandId={route.commandId} />
+        ) : route.name === "loadings" ? (
+          <Loadings key={depth} />
+        ) : route.name === "loading" ? (
+          <LoadingIntent key={`${route.intent}-${depth}`} intent={route.intent} />
+        ) : (
+          <Observation key={depth} />
+        )}
+        <Picker
+          visible={choosing}
+          title="Which organisation are you working for?"
+          options={memberships.map((m) => ({
+            key: m.organisationId,
+            title: m.name,
+            lines: [m.synthetic ? `${m.kind}, synthetic` : m.kind],
+          }))}
+          footnote={NAV_COPY.pickerFootnote}
+          onPick={(key) => {
+            setChoosing(false);
+            value.chooseOrganisation(key);
+          }}
+          onClose={() => setChoosing(false)}
+        />
+      </VoiceProvider>
     </AppContext.Provider>
   );
 }
