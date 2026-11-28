@@ -25,6 +25,8 @@ import {
   getObservationRecordedEventDecoder,
   getObservationRecordedEventEncoder,
   getRecordObservationInstruction,
+  getRestrictionSetEventDecoder,
+  getRestrictionSetEventEncoder,
   getShipmentCancelledEventDecoder,
   getShipmentCancelledEventEncoder,
   getShipmentDecoder,
@@ -42,6 +44,7 @@ import {
 } from "@thetis/contracts";
 import { describe, expect, it } from "vitest";
 import { HANDLED_EVENTS, HANDLED_INSTRUCTIONS } from "../../src/indexer/decode.ts";
+import { accountColumns, type Resolver, UnknownEnumError } from "../../src/indexer/project.ts";
 import { type ApplyBatch, memoryStore, type ReadModelStore } from "../../src/indexer/store.ts";
 import {
   batchLeaf,
@@ -1322,6 +1325,107 @@ describe("Phase 3 custody, the shipment part", () => {
     expect((await second.checkpoint())?.indexedThroughSlot).toBe(lastSlot(repeated.history) - 1000);
   });
 
+  it("19a. indexes a batch registered, departed and observed in one slot, from observation base 0", async () => {
+    // registerB2, departB2 and observeB2 in observeB2's slot, with their accounts (the slot's state
+    // is the state after all three): the batch has no stored row, so both bases come from the
+    // registration of the slot.
+    const scenario = await routeHistory();
+    const { s2 } = scenario.shipments;
+    const { b2 } = scenario.batches;
+    const merged = (["registerB2", "departB2", "observeB2"] as const).map((name) =>
+      slotOf(scenario.history, step(scenario, name).signature),
+    );
+    expect(new Set(merged).size).toBe(3);
+    const target = merged[2] as (typeof merged)[number];
+    target.transactions = merged.flatMap((entry) => entry.transactions);
+    target.accounts = Object.assign({}, ...merged.map((entry) => entry.accounts));
+    for (const entry of merged.slice(0, 2)) {
+      scenario.history.splice(scenario.history.indexOf(entry), 1);
+    }
+
+    const h = await harness(scenario.history);
+    await h.pollUntilLive();
+    expect(allCounts(h.store)).toMatchObject({ chain_transactions: 27, chain_events: 26 });
+    expect(row(h.store, "chain_batches", b2)).toMatchObject({
+      stage: "Arrived",
+      sequence: "2",
+      event_sequence: "2",
+      observation_count: 1,
+      event_observations: 1,
+    });
+    expect(keysOf(h.store, "batch", "batch_sequence", b2)).toEqual(["0", "1"]);
+    expect(
+      events(h.store)
+        .filter((entry) => entry.event === "ObservationRecorded")
+        .map((entry) => [entry.shipment, entry.batch, entry.observation_index]),
+    ).toEqual([[s2, b2, 0]]);
+  });
+
+  it("19b. halts with EVENT_GAP when ObservationRecorded names a batch neither stored nor registered", async () => {
+    const scenario = await routeHistory();
+    const { s2 } = scenario.shipments;
+    const mosela = scenario.org("mosela");
+    const unregistered = (await syntheticSigner(99)).address;
+    const sponsor = await syntheticSigner(30);
+    const [observerAuthority] = await findAuthorityPda({
+      protocol: scenario.protocol as Address,
+      wallet: (await syntheticSigner(46)).address,
+    });
+    const fields = {
+      kind: ObservationKind.Checkpoint,
+      locationCode: "CHECKPOINT-1",
+      evidenceDigest: new Uint8Array(32).fill(0x78),
+      observedAt: 1n,
+    };
+    const observation = thetisTransaction({
+      signature: syntheticSignature(254),
+      feePayer: sponsor.address,
+      name: "RecordObservation",
+      instruction: getRecordObservationInstruction({
+        sponsor,
+        protocol: scenario.protocol as Address,
+        observerOrg: mosela as Address,
+        observerAuthority,
+        holderOrg: mosela as Address,
+        shipment: s2 as Address,
+        batch: unregistered,
+        lot: scenario.lot as Address,
+        ...fields,
+        expectedObservation: 0,
+        validUntil: 1_800_000_000n,
+      }),
+      events: [
+        bytesOf(getObservationRecordedEventEncoder(), {
+          batch: unregistered,
+          shipment: s2,
+          lot: scenario.lot,
+          observer: mosela,
+          holder: mosela,
+          ...fields,
+          index: 0,
+        }),
+      ],
+    });
+    const through = lastSlot(scenario.history);
+    scenario.history.push({
+      slot: through + 1000,
+      blockTime: "2026-11-28T00:01:00.000Z",
+      transactions: [observation],
+      accounts: {},
+    });
+    const h = await harness(scenario.history);
+    expect(await pollToHalt(() => h.poll())).toBe("halted");
+    await expectHalt(h, "halted", "EVENT_GAP", {
+      step: "sequence",
+      signature: null,
+      mentions: [`batch ${unregistered}`, "observed"],
+    });
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(through);
+    expect(rows(h.store, "chain_transactions").map((entry) => entry.signature)).not.toContain(
+      observation.signature,
+    );
+  });
+
   it("21. indexes the loading: units burned, the loan handed off with its debt, the intent executed", async () => {
     const scenario = await loadingHistory();
     const h = await harness(scenario.history);
@@ -2216,5 +2320,118 @@ describe("Phase 3 custody, the shipment part", () => {
       });
       expect((await h.checkpoint())?.indexedThroughSlot).toBe(step(scenario, name).slot - 1000);
     }
+  });
+  it("28c. halts with UNKNOWN_ENUM and writes nothing when ShortfallAttested.restriction or RestrictionSet.from or .to names no variant", async () => {
+    // Restriction has variants 0-3. ShortfallAttested ends with restriction (u8) then lotRevision
+    // (u64); RestrictionSet is discriminator (8), lot (32), from, to.
+    const cases: { name: CustodyStep; offset: (bytes: Uint8Array) => number }[] = [
+      { name: "shortfallWithin", offset: (bytes) => bytes.length - 9 },
+      { name: "restrictFrozen", offset: () => 40 },
+      { name: "restrictFrozen", offset: () => 41 },
+    ];
+    for (const { name, offset } of cases) {
+      const scenario = await shortfallHistory();
+      const tx = stepTx(scenario, name);
+      editEvent(tx, 0, (bytes) => {
+        const edited = bytes.slice();
+        edited[offset(edited)] = 9;
+        return edited;
+      });
+      const h = await harness(scenario.history);
+      expect(await pollToHalt(() => h.poll())).toBe("halted");
+      await expectHalt(h, "halted", "UNKNOWN_ENUM", { step: "decode", signature: tx.signature });
+      expect((await h.checkpoint())?.indexedThroughSlot).toBe(step(scenario, name).slot - 1000);
+      expect(rows(h.store, "chain_transactions").map((entry) => entry.signature)).not.toContain(
+        tx.signature,
+      );
+      if (name === "shortfallWithin") expect(rows(h.store, INCIDENT_TABLE).length).toBe(0);
+    }
+  });
+
+  it("28d. halts with UNKNOWN_ENUM and writes nothing when an Incident's restriction_after names no variant", async () => {
+    // The account side: Incident ends with restrictionAfter, status, bump (one byte each).
+    const scenario = await shortfallHistory();
+    const within = step(scenario, "shortfallWithin");
+    const incident = (scenario.incidents as { within: string }).within;
+    const slot = slotOf(scenario.history, within.signature);
+    const state = slot.accounts[incident];
+    if (!state) throw new Error("the shortfall slot does not write its incident");
+    const data = state.data.slice();
+    data[data.length - 3] = 9;
+    slot.accounts[incident] = { ...state, data };
+    const h = await harness(scenario.history);
+    expect(await pollToHalt(() => h.poll())).toBe("halted");
+    await expectHalt(h, "halted", "UNKNOWN_ENUM", {
+      step: "fetch",
+      signature: null,
+      mentions: [incident],
+    });
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(within.slot - 1000);
+    expect(rows(h.store, INCIDENT_TABLE).length).toBe(0);
+    expect(rows(h.store, "chain_transactions").map((entry) => entry.signature)).not.toContain(
+      within.signature,
+    );
+
+    // Past the codec, the row builder names the enum itself (UnknownEnumError, then UNKNOWN_ENUM).
+    const resolver: Resolver = {
+      organisationId: () => INSPECTOR_ORG_ID,
+      custodianOf: () => {
+        throw new Error("not read");
+      },
+      facility: () => {
+        throw new Error("not read");
+      },
+      loanFacility: () => {
+        throw new Error("not read");
+      },
+      pool: () => {},
+    };
+    const columns = (restrictionAfter: number) =>
+      accountColumns(
+        {
+          kind: "Incident",
+          data: {
+            incidentId: new Uint8Array(16).fill(0x88),
+            lot: scenario.lot,
+            batch: none(),
+            inspector: scenario.inspector,
+            methodCode: "WEIGH",
+            expectedKg: 5_000_000n,
+            observedKg: 4_990_000n,
+            toleranceBps: 50,
+            withinTolerance: true,
+            evidenceDigest: new Uint8Array(32).fill(0x99),
+            observedAt: 0n,
+            restrictionAfter,
+            status: 0,
+          },
+        } as never,
+        resolver,
+      );
+    expect(columns(0)).toMatchObject({ restriction_after: "Normal" });
+    expect(() => columns(9)).toThrow(UnknownEnumError);
+    expect(() => columns(9)).toThrow("Restriction has no variant numbered 9");
+  });
+
+  it("28e. halts with EVENT_MISMATCH when RestrictionSet.to is not the set_restriction argument", async () => {
+    // restrictFrozen's instruction sets Frozen; its event claims Disputed.
+    const scenario = await shortfallHistory();
+    const tx = stepTx(scenario, "restrictFrozen");
+    rewriteEvent(
+      tx,
+      0,
+      getRestrictionSetEventDecoder(),
+      getRestrictionSetEventEncoder(),
+      (value) => ({ ...value, to: Restriction.Disputed }),
+    );
+    const h = await harness(scenario.history);
+    await expectHalt(h, await h.poll(), "EVENT_MISMATCH", {
+      step: "decode",
+      signature: tx.signature,
+      mentions: ["RestrictionSet.to", "Disputed", "Frozen"],
+    });
+    expect((await h.checkpoint())?.indexedThroughSlot).toBe(
+      step(scenario, "restrictFrozen").slot - 1000,
+    );
   });
 });

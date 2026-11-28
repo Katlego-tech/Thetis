@@ -572,6 +572,8 @@ export type Invocation = {
   accounts: Record<string, string | undefined>;
   /** The addresses after the IDL-named accounts, in order (live-lending.md §4.1.2). */
   remaining: string[];
+  /** The parsed instruction arguments (the generated parser's data). */
+  args: Record<string, unknown>;
   events: DecodedEvent[];
 };
 
@@ -937,7 +939,8 @@ export function decodeTransaction(
       named[account] = meta?.address;
     }
     const remaining = accounts.slice(entries.length).map((meta) => meta.address);
-    return [{ position, instruction: name, accounts: named, remaining }];
+    const args = result.data as unknown as Record<string, unknown>;
+    return [{ position, instruction: name, accounts: named, remaining, args }];
   });
 
   // Events first, for every invocation, then pairing.
@@ -993,6 +996,17 @@ export function decodeTransaction(
       if (event.name === "ShortfallAttested") {
         const inconsistency = shortfallInconsistency(event.value);
         if (inconsistency !== null) throw halt("EVENT_MISMATCH", signature, inconsistency);
+      }
+      if (event.name === "RestrictionSet" && event.value.to !== entry.args.restriction) {
+        // The restriction the instruction sets is the one the event reports (live-custody.md §4.1.2).
+        const named = (value: unknown) =>
+          (Restriction as unknown as Record<number, string>)[value as number] ?? String(value);
+        throw halt(
+          "EVENT_MISMATCH",
+          signature,
+          "RestrictionSet.to is not the SetRestriction argument restriction",
+          [named(event.value.to), named(entry.args.restriction)],
+        );
       }
       if (event.name === "LoadingRecorded") {
         const k = entry.remaining.length / 3;

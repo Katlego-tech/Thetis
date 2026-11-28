@@ -3,7 +3,6 @@
 
 import type { Address } from "@solana/kit";
 import {
-  type Account,
   getAddressDecoder,
   isSolanaError,
   type MaybeEncodedAccount,
@@ -13,36 +12,37 @@ import {
 } from "@solana/kit";
 import {
   type Authority,
+  assertThetisAccount,
   BatchStage,
   type ClassPolicy,
   type CustodianClass,
   type DocumentAttestation,
   DocumentKind,
-  decodeAuthority,
-  decodeClassPolicy,
-  decodeCustodianClass,
-  decodeDocumentAttestation,
-  decodeFacility,
-  decodeHandoffAcceptance,
-  decodeHandoverRecord,
-  decodeIncident,
-  decodeIntakeIdentity,
-  decodeLoadingIntent,
-  decodeLoan,
-  decodeLockAllocation,
-  decodeLot,
-  decodeManifestBatch,
-  decodeOrganisation,
-  decodePaymentAttestation,
-  decodePoolShare,
-  decodePosition,
-  decodeProtocol,
-  decodeReleaseIntent,
-  decodeShipment,
-  decodeSimulationPool,
-  decodeValuation,
   type Facility,
   findPositionPda,
+  getAuthorityDecoder,
+  getClassPolicyDecoder,
+  getCustodianClassDecoder,
+  getDocumentAttestationDecoder,
+  getFacilityDecoder,
+  getHandoffAcceptanceDecoder,
+  getHandoverRecordDecoder,
+  getIncidentDecoder,
+  getIntakeIdentityDecoder,
+  getLoadingIntentDecoder,
+  getLoanDecoder,
+  getLockAllocationDecoder,
+  getLotDecoder,
+  getManifestBatchDecoder,
+  getOrganisationDecoder,
+  getPaymentAttestationDecoder,
+  getPoolShareDecoder,
+  getPositionDecoder,
+  getProtocolDecoder,
+  getReleaseIntentDecoder,
+  getShipmentDecoder,
+  getSimulationPoolDecoder,
+  getValuationDecoder,
   type HandoffAcceptance,
   type HandoverRecord,
   HandoverStage,
@@ -74,6 +74,7 @@ import {
   type Shipment,
   ShipmentStatus,
   type SimulationPool,
+  ThetisAccount,
   ThetisAccountError,
   toI64String,
   toU64String,
@@ -168,32 +169,33 @@ export type AccountData =
   | { kind: "HandoffAcceptance"; data: HandoffAcceptance }
   | { kind: "Incident"; data: Incident };
 
-type GuardedDecoder = (account: MaybeEncodedAccount) => { exists: boolean; data?: unknown };
-
-const DECODERS: Record<Kind, GuardedDecoder> = {
-  Protocol: decodeProtocol as unknown as GuardedDecoder,
-  ClassPolicy: decodeClassPolicy as unknown as GuardedDecoder,
-  Organisation: decodeOrganisation as unknown as GuardedDecoder,
-  Authority: decodeAuthority as unknown as GuardedDecoder,
-  CustodianClass: decodeCustodianClass as unknown as GuardedDecoder,
-  DocumentAttestation: decodeDocumentAttestation as unknown as GuardedDecoder,
-  IntakeIdentity: decodeIntakeIdentity as unknown as GuardedDecoder,
-  Lot: decodeLot as unknown as GuardedDecoder,
-  Position: decodePosition as unknown as GuardedDecoder,
-  Facility: decodeFacility as unknown as GuardedDecoder,
-  Valuation: decodeValuation as unknown as GuardedDecoder,
-  Loan: decodeLoan as unknown as GuardedDecoder,
-  LockAllocation: decodeLockAllocation as unknown as GuardedDecoder,
-  PaymentAttestation: decodePaymentAttestation as unknown as GuardedDecoder,
-  ReleaseIntent: decodeReleaseIntent as unknown as GuardedDecoder,
-  SimulationPool: decodeSimulationPool as unknown as GuardedDecoder,
-  PoolShare: decodePoolShare as unknown as GuardedDecoder,
-  Shipment: decodeShipment as unknown as GuardedDecoder,
-  ManifestBatch: decodeManifestBatch as unknown as GuardedDecoder,
-  HandoverRecord: decodeHandoverRecord as unknown as GuardedDecoder,
-  LoadingIntent: decodeLoadingIntent as unknown as GuardedDecoder,
-  HandoffAcceptance: decodeHandoffAcceptance as unknown as GuardedDecoder,
-  Incident: decodeIncident as unknown as GuardedDecoder,
+// The codec of each kind. Kit's decodeAccount rethrows a codec error as a generic "failed to decode"
+// error and drops its cause, so the guarded decode checks the owner and the discriminator with
+// assertThetisAccount and runs the codec itself: an out-of-range enum stays UNKNOWN_ENUM.
+const DECODERS: Record<Kind, () => { decode: (bytes: ReadonlyUint8Array) => unknown }> = {
+  Protocol: getProtocolDecoder,
+  ClassPolicy: getClassPolicyDecoder,
+  Organisation: getOrganisationDecoder,
+  Authority: getAuthorityDecoder,
+  CustodianClass: getCustodianClassDecoder,
+  DocumentAttestation: getDocumentAttestationDecoder,
+  IntakeIdentity: getIntakeIdentityDecoder,
+  Lot: getLotDecoder,
+  Position: getPositionDecoder,
+  Facility: getFacilityDecoder,
+  Valuation: getValuationDecoder,
+  Loan: getLoanDecoder,
+  LockAllocation: getLockAllocationDecoder,
+  PaymentAttestation: getPaymentAttestationDecoder,
+  ReleaseIntent: getReleaseIntentDecoder,
+  SimulationPool: getSimulationPoolDecoder,
+  PoolShare: getPoolShareDecoder,
+  Shipment: getShipmentDecoder,
+  ManifestBatch: getManifestBatchDecoder,
+  HandoverRecord: getHandoverRecordDecoder,
+  LoadingIntent: getLoadingIntentDecoder,
+  HandoffAcceptance: getHandoffAcceptanceDecoder,
+  Incident: getIncidentDecoder,
 };
 
 export type DecodeFailure = { address: string; enumError: boolean; message: string };
@@ -214,8 +216,8 @@ export function decodeAccountAs(
     return { failure: { address, enumError: false, message: "the account does not exist" } };
   }
   try {
-    const decoded = DECODERS[kind](account) as unknown as Account<{ protocol?: string }>;
-    const data = decoded.data;
+    assertThetisAccount(account, ThetisAccount[kind]);
+    const data = DECODERS[kind]().decode(account.data) as { protocol?: string };
     if (kind !== "Protocol" && kind !== "PoolShare" && data.protocol !== protocol) {
       return {
         failure: {
