@@ -435,7 +435,7 @@ describe("custodyOutcomeView: a confirmed handover", () => {
     ]);
   });
 
-  it("Arrival confirmed: the terminal holds the batch, the lot is Stored once all have arrived", () => {
+  it("Arrival confirmed: the terminal holds the batch, and nothing is said about the lot", () => {
     const ctx: HandoverOutcomeContext = {
       ...handoverCtx,
       org: "Port Terminal T1",
@@ -453,9 +453,7 @@ describe("custodyOutcomeView: a confirmed handover", () => {
       ctx,
     );
     expect(view.title).toBe("Port Terminal T1 holds batch 1 of 1");
-    expect(view.lines).toStrictEqual([
-      "Arrival confirmed on devnet in slot 526,890,114. The lot is Stored at the terminal once every batch has arrived.",
-    ]);
+    expect(view.lines).toStrictEqual(["Arrival confirmed on devnet in slot 526,890,114."]);
     expect(view.primary).toBe("back_home");
     expect(view.issued).toBe(true);
   });

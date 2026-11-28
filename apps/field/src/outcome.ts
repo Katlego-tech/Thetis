@@ -297,11 +297,9 @@ export function custodyOutcomeView(command: CommandView, ctx: CustodyOutcomeCont
           const arrival = slot
             ? `Arrival ${verb.toLowerCase()} on devnet in slot ${formatSlot(BigInt(slot))}.`
             : `Arrival ${verb.toLowerCase()} on devnet.`;
-          return {
-            ...done,
-            title,
-            lines: [`${arrival} The lot is Stored at the terminal once every batch has arrived.`],
-          };
+          // Only what the confirmed command proves: who holds the batch now. The lot's own
+          // state is the indexer's to show, and the phone has not read it here.
+          return { ...done, title, lines: [arrival] };
         }
         return {
           ...done,

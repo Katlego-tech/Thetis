@@ -111,6 +111,14 @@ describe("Loadings at your terminal", () => {
     expect(app.field.loadingIntents).toHaveBeenCalledWith(PORT_ORG);
   });
 
+  it("is the Loadings tab root: the tab bar, and no Back", async () => {
+    const app = phone("port");
+    await renderScreen(<Loadings />, app);
+    await screen.findByText(/^No open loading intents at/);
+    expect(screen.getByRole("tablist")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
   it("an intent with no lenders reads 0 of 0 lenders accepted", async () => {
     const app = phone("port");
     vi.mocked(app.field.loadingIntents).mockResolvedValue([loadingIntent({ acceptances: [] })]);
