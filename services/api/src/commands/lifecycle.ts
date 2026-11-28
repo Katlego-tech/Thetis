@@ -4,11 +4,11 @@
 import { createHash } from "node:crypto";
 import {
   type Address,
+  getAddressDecoder,
   getBase58Decoder,
   getBase58Encoder,
   getBase64Decoder,
   getBase64Encoder,
-  getTransactionDecoder,
   type Transaction,
 } from "@solana/kit";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -19,6 +19,7 @@ import {
   findOrganisationPda,
   identifyThetisEvent,
   PaymentPurpose,
+  THETIS_PROGRAM_ADDRESS,
   ThetisEvent,
 } from "@thetis/contracts";
 import { verifyEd25519 } from "../ed25519.ts";
@@ -27,6 +28,7 @@ import {
   admittedKeys,
   commandInstructions,
   compileCommandWire,
+  decodeWire,
   MAX_TRANSACTION_BYTES,
   measureCommand,
   tableCandidates,
@@ -36,6 +38,7 @@ import { sharedMessageInstruction } from "./ed25519.ts";
 import { ensureTableKeys, LookupTableFullError } from "./lookup-table.ts";
 import {
   buildInstruction,
+  createdTableAddresses,
   type EvidenceExpectation,
   KIND_SPECS,
   type Prepared,
@@ -228,6 +231,10 @@ async function checkSigner(
     });
     const [account] = await relay.chain.accounts([authorityAddress]);
     if (!account?.exists) throw new RelayError("AUTHORITY_INVALID", "no authority for this wallet");
+    // T056r R3 (PR #69 fold 29 applied here too): the owner is checked whatever the decoder checks.
+    if (account.programAddress !== THETIS_PROGRAM_ADDRESS) {
+      throw new RelayError("AUTHORITY_INVALID", `${authorityAddress}: not an Authority`);
+    }
     let authority: {
       organisation: Address;
       revokedAt: { __option: string };
@@ -290,6 +297,63 @@ async function prepared(
   });
 }
 
+/** A stand-in wallet per signer role for the estimate: distinct, fixed, never a real key. */
+function placeholderWallets(p: Prepared): Partial<Record<SignerRole, Address>> {
+  const decoder = getAddressDecoder();
+  return Object.fromEntries(
+    p.signers.map((s, index) => [s.role, decoder.decode(new Uint8Array(32).fill(index + 1))]),
+  );
+}
+
+/** T056r R1 (PR #69 follow-up): the smallest size the command's transaction can have, known at
+ * create before anyone signs. It is compiled as compileCommand compiles it, with a stand-in
+ * wallet and signature per signer, and with every account the plan does not name (an account
+ * derived from a signer's wallet, such as its Authority) taken as in the table. */
+export async function bestCaseBytes(
+  relay: Pick<Relay, "chain" | "sponsor" | "protocol">,
+  kind: CommandKind,
+  p: Pick<Prepared, "plan" | "signers" | "text">,
+): Promise<number> {
+  const sponsor = await relay.sponsor.address();
+  const wallets = placeholderWallets(p as Prepared);
+  const thetis = await buildInstruction({
+    kind,
+    plan: p.plan,
+    protocol: relay.protocol,
+    sponsor,
+    wallets,
+  });
+  const textRoles = p.signers.filter((s) => s.method === "text");
+  const ed25519 = p.text
+    ? sharedMessageInstruction(
+        textRoles.map((s) => ({
+          wallet: wallets[s.role] as Address,
+          signature: new Uint8Array(64),
+        })),
+        p.text,
+      )
+    : null;
+  const candidates = tableCandidates(thetis, {
+    protocol: relay.protocol,
+    sponsor,
+    signers: Object.values(wallets),
+  });
+  const onChain = await relay.chain.accounts(candidates);
+  const planned = new Set<string>(Object.values(p.plan));
+  const keys = admittedKeys(
+    candidates,
+    candidates.map((key, index) => onChain[index]?.exists === true || !planned.has(key)),
+    tableSignerAddresses(kind, p.plan),
+    createdTableAddresses(kind, p.plan),
+  );
+  return measureCommand(commandInstructions(thetis, ed25519), sponsor, keys);
+}
+
+/** R1: a text that can never be sent is refused before anyone signs it or anything is stored. */
+async function refuseOversized(relay: Relay, kind: CommandKind, p: Prepared) {
+  if (p.text) tooLarge(await bestCaseBytes(relay, kind, p));
+}
+
 function textColumns(p: Prepared, version: number) {
   return p.text
     ? {
@@ -321,6 +385,7 @@ export async function createCommand(
     throw new RelayError("NOT_AUTHORISED", "the caller is not a member of the organisation");
   }
   const p = await prepared(relay, context, kind, organisationId, args);
+  await refuseOversized(relay, kind, p);
   const parties = [...new Set([organisationId, ...p.signers.map((s) => s.organisationId)])].sort();
   const { data, error } = await context.service
     .from("commands")
@@ -365,6 +430,7 @@ export async function renewCommand(
     throw new RelayError("NOT_AUTHORISED", "only the initiator renews");
   }
   const p = await prepared(relay, context, row.kind, row.initiator_org, row.args);
+  await refuseOversized(relay, row.kind, p);
   const renewed = await update(context, row, {
     status: "awaiting_signatures",
     plan: p.plan,
@@ -440,17 +506,16 @@ function failure(
   row: CommandRow,
   failed: unknown,
 ): { error_code: string; error_detail: string | null } {
-  // Thetis is the last instruction; the compute price, present when it fitted, shifts it by one.
+  // Thetis is the last instruction of the stored transaction; the compute price, present when it
+  // fitted, shifts it by one. A failure is only read for a submitted command, which stores it.
   const thetisIndex = row.transaction_base64
     ? thetisInstructionIndex(row.transaction_base64)
-    : row.message_base64
-      ? 2
-      : 1;
+    : null;
   const instruction = (failed as { InstructionError?: [number, unknown] })?.InstructionError;
   if (instruction) {
     const [index, inner] = instruction;
     const custom = (inner as { Custom?: number } | null)?.Custom;
-    if (index === thetisIndex && typeof custom === "number") {
+    if (thetisIndex !== null && index === thetisIndex && typeof custom === "number") {
       return { error_code: errorName(custom), error_detail: null };
     }
   }
@@ -618,12 +683,17 @@ function parseEvent(line: string): { name: string; data: Record<string, unknown>
  * (field-app.md T067r.3 fold 42) the event, then one trailing event per item of the plan's `k`,
  * gathered under `loanHandOffs`, each naming the plan's loan of its triple. Anything else is
  * unreadable (null). */
-function outcomeData(row: CommandRow, lines: string[]): Record<string, unknown> | null {
+export function outcomeData(
+  row: Pick<CommandRow, "kind" | "plan">,
+  lines: string[],
+): Record<string, unknown> | null {
   const spec = KIND_SPECS[row.kind];
   const trailing = spec.trailingEvent ? Number(row.plan.k ?? Number.NaN) : 0;
   if (!Number.isInteger(trailing) || lines.length !== 1 + trailing) return null;
   const [head, ...rest] = lines.map(parseEvent);
   if (!head || head.name !== spec.event) return null;
+  // T056r R6: the event names the plan's accounts (accept_loading: LoadingAccepted.intent, .loan).
+  if ((spec.outcomeBinds ?? []).some((key) => head.data[key] !== row.plan[key])) return null;
   if (!spec.trailingEvent) return head.data;
   if (head.data.loansAccepted !== trailing) return null;
   if (rest.some((event) => !event || event.name !== spec.trailingEvent)) return null;
@@ -730,6 +800,8 @@ async function compileCommand(
     candidates,
     candidates.map((_, index) => onChain[index]?.exists === true),
     tableSignerAddresses(row.kind, row.plan),
+    // program-custody.md §4.6: the PDAs the instruction creates go in first (the HandoverRecord).
+    createdTableAddresses(row.kind, row.plan),
   );
   // PR #69 fold 26: refused before the sponsor signs, the table changes or anything is stored.
   tooLarge(measureCommand(instructions, sponsor, keys));
@@ -762,8 +834,9 @@ function isTooLarge(error: unknown): error is RelayError {
   return error instanceof RelayError && error.code === "TRANSACTION_TOO_LARGE";
 }
 
-/** PR #69 fold 26: a text command that can't fit one transaction ends expired with the error,
- * nothing signed by the sponsor and nothing sent; renew clears the error. */
+/** PR #69 fold 26: a command that can't fit one transaction ends expired with the error, nothing
+ * signed by the sponsor and nothing sent; renew clears the error (T056r R2: transaction-signed
+ * kinds too). */
 function tooLargePatch(error: RelayError, signatures?: StoredSignature[]): Partial<CommandRow> {
   return {
     status: "expired",
@@ -781,10 +854,6 @@ async function sponsorSign(relay: Relay, wire: string, table: Address): Promise<
       throw new RelayError("SPONSOR_UNAVAILABLE", error.detail);
     throw new RelayError("SPONSOR_UNAVAILABLE");
   }
-}
-
-function decodeWire(wire: string): Transaction {
-  return getTransactionDecoder().decode(getBase64Encoder().encode(wire));
 }
 
 function feePayerSignature(wire: string, sponsor: Address): string {
@@ -949,12 +1018,20 @@ export async function requestTransaction(
     const [account] = await relay.chain.accounts([token]);
     if (!account?.exists) throw new RelayError("TOKEN_ACCOUNT_MISSING", token);
   }
-  const built = await compileCommand(
-    relay,
-    context,
-    row,
-    walletsOf(row, { role: signer.role, wallet }),
-  );
+  let built: Awaited<ReturnType<typeof compileCommand>>;
+  try {
+    built = await compileCommand(
+      relay,
+      context,
+      row,
+      walletsOf(row, { role: signer.role, wallet }),
+    );
+  } catch (error) {
+    // T056r R2: a transaction-signed kind that can't fit ends as a text kind does (fold 26):
+    // expired with the error, nothing signed by the sponsor and nothing sent.
+    if (isTooLarge(error)) await update(context, row, tooLargePatch(error));
+    throw error;
+  }
   const messageBytes = decodeWire(built.wire).messageBytes;
   for (let attempt = 0; attempt < 5; attempt++) {
     const next = await update(context, row, {
