@@ -10,6 +10,8 @@ __pycache__/
 dist/
 build/
 .next/
+# The staged Lambda image context of the web app (build:judge)
+.lambda/
 
 # Machine files
 .DS_Store

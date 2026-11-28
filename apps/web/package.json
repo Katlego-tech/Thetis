@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev --port 3100",
     "build": "next build",
+    "build:judge": "THETIS_WEB_OUTPUT=standalone THETIS_SITE_MODE=judge next build && node scripts/stage-lambda.mjs",
     "start": "next start --port 3100",
     "typecheck": "next typegen && tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && next typegen && tsc -p tsconfig.json --noEmit",

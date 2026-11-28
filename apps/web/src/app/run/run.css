@@ -1,0 +1,373 @@
+/* The public run page (judge-page.md §8; reference web-reference/judge.html). Tokens of web.md §7.1
+   only: --act on links, --refuse on refusals and errors. */
+
+.judge-banner {
+  background: var(--banner);
+  color: var(--banner-ink);
+  font-size: 12px;
+  padding: 8px 36px;
+}
+
+.judge-main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px 36px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.judge-main a {
+  color: var(--act);
+  text-underline-offset: 2px;
+}
+
+.judge-main h1 {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 600;
+  font-variation-settings: "wdth" 118;
+}
+
+.judge-mono {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.judge-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: end;
+  padding-bottom: 20px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.judge-head p {
+  max-width: 64ch;
+  margin-top: 10px;
+  color: var(--ink-2);
+}
+
+.judge-cert {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.judge-cert b {
+  display: block;
+  margin-bottom: 2px;
+  font-family: var(--font-sans), sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.judge-short {
+  display: none;
+}
+
+.judge-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.judge-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+/* The custody spine: one 2px ink line; each step's mark is pinned to it. */
+.judge-spine {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding-left: 28px;
+  list-style: none;
+}
+
+.judge-spine::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--ink);
+}
+
+.judge-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 16px;
+  margin-bottom: 10px;
+  padding: 14px 16px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.judge-step::before {
+  content: "";
+  position: absolute;
+  left: -25px;
+  top: 18px;
+  width: 12px;
+  height: 12px;
+  background: var(--sheet);
+  border: 2px solid var(--ink);
+  border-radius: 2px;
+}
+
+.judge-step[data-kind="refusal"] {
+  margin-left: 18px;
+  border-color: var(--refuse);
+}
+
+.judge-step[data-kind="refusal"]::before {
+  left: -43px;
+  border-color: var(--refuse);
+}
+
+.judge-step[data-kind="refusal"]::after {
+  content: "";
+  position: absolute;
+  left: -31px;
+  top: 23px;
+  width: 18px;
+  height: 2px;
+  background: var(--refuse);
+}
+
+.judge-step h3 {
+  font-size: 15px;
+  line-height: 1.25;
+  font-weight: 600;
+  font-variation-settings: "wdth" 108;
+}
+
+.judge-who {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.judge-facts {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.judge-facts dt {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.judge-facts dd {
+  font-variant-numeric: tabular-nums;
+}
+
+.judge-error {
+  font-family: var(--font-mono), monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--refuse);
+}
+
+.judge-tx {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hair);
+  font-size: 13px;
+}
+
+.judge-tx span {
+  color: var(--ink-2);
+}
+
+.judge-setup {
+  position: relative;
+  margin-bottom: 10px;
+  padding: 12px 16px;
+  background: var(--sheet);
+  border: 1px dashed var(--ink-2);
+  border-radius: 4px;
+}
+
+.judge-setup::before {
+  content: "";
+  position: absolute;
+  left: -25px;
+  top: 16px;
+  width: 12px;
+  height: 12px;
+  background: var(--paper);
+  border: 2px solid var(--ink-2);
+  border-radius: 2px;
+}
+
+.judge-setup summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.judge-setup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.judge-setup-list ul {
+  padding-left: 18px;
+  list-style: circle;
+}
+
+.judge-aside {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* With no checkpoint the spine is absent; the aside keeps its column. */
+.judge-aside:only-child {
+  grid-column: 2;
+}
+
+.judge-panel h2 {
+  margin-bottom: 2px;
+}
+
+.judge-parties {
+  display: flex;
+  flex-direction: column;
+}
+
+.judge-parties li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hair);
+  font-size: 13px;
+}
+
+.judge-parties li:last-child {
+  border-bottom: none;
+}
+
+.judge-parties span {
+  color: var(--ink-2);
+  text-align: right;
+}
+
+.judge-plain,
+.judge-refuses ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 13px;
+}
+
+.judge-refuses {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ink);
+}
+
+.judge-center {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  padding: 28px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.judge-center[data-tone="error"] {
+  border-color: var(--refuse);
+}
+
+.judge-center[data-tone="error"] h2 {
+  color: var(--refuse);
+}
+
+.judge-note {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+@media (max-width: 720px) {
+  .judge-banner {
+    padding: 8px 16px;
+  }
+
+  .judge-main {
+    padding: 20px 16px 32px;
+    gap: 18px;
+  }
+
+  .judge-head,
+  .judge-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .judge-full {
+    display: none;
+  }
+
+  .judge-short {
+    display: inline;
+  }
+
+  .judge-facts {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .judge-aside,
+  .judge-aside:only-child {
+    position: static;
+    grid-column: auto;
+  }
+}

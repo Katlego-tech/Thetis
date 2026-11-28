@@ -6,6 +6,10 @@ import { dataSource } from "@/data/load-reader";
 
 type Cookie = { name: string; value: string; options: CookieOptions };
 
+/** Paths that never need a session: the reference screens, sign-in, invitations, the account
+ * page and the public run page. */
+const PUBLIC_PATH = /^\/(run|reference|login|invite|account)(\/|$)/;
+
 /**
  * In live mode, refreshes the Supabase session cookies before a page renders and sends a caller
  * without a session to sign in. Reference mode, an invalid data source and a missing Supabase URL
@@ -14,6 +18,13 @@ type Cookie = { name: string; value: string; options: CookieOptions };
  * and never sees a read failure.
  */
 export async function proxy(request: NextRequest): Promise<NextResponse> {
+  const { pathname } = request.nextUrl;
+  // The hosted judge site serves the public run page only, and reads no session at all.
+  if (process.env.THETIS_SITE_MODE === "judge") {
+    if (pathname === "/run") return NextResponse.next();
+    return NextResponse.redirect(new URL("/run", request.url), 307);
+  }
+  if (PUBLIC_PATH.test(pathname)) return NextResponse.next();
   try {
     if (dataSource() !== "live") return NextResponse.next();
   } catch (error) {
@@ -51,7 +62,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     await requireUser(supabase);
   } catch (error) {
     if (error instanceof LiveDataError && error.code === "NO_SESSION") {
-      const { pathname, search } = request.nextUrl;
+      const { search } = request.nextUrl;
       const expired = error.path === "auth.getUser:rejected" ? "&reason=expired" : "";
       const login = new URL(
         `/login?next=${encodeURIComponent(pathname + search)}${expired}`,
@@ -66,7 +77,5 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/|reference(?:/|$)|login(?:/|$)|invite(?:/|$)|account(?:/|$)|favicon\\.ico$|.*\\..*).*)",
-  ],
+  matcher: ["/((?!_next/|favicon\\.ico$|.*\\..*).*)"],
 };
