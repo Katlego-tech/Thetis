@@ -9,7 +9,8 @@
     "build": "expo export --platform android --output-dir dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "store:assets": "node store/render.mjs"
   },
   "dependencies": {
     "@config-plugins/react-native-webrtc": "15.0.2",

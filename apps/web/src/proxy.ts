@@ -67,6 +67,6 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
 export const config = {
   matcher: [
-    "/((?!_next/|reference(?:/|$)|login(?:/|$)|invite(?:/|$)|account(?:/|$)|favicon\\.ico$|.*\\..*).*)",
+    "/((?!_next/|reference(?:/|$)|login(?:/|$)|invite(?:/|$)|account(?:/|$)|terms(?:/|$)|privacy(?:/|$)|favicon\\.ico$|.*\\..*).*)",
   ],
 };

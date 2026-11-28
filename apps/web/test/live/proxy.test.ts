@@ -66,7 +66,7 @@ const passesThrough = (response: Response) =>
 
 test("the proxy redirects to /login with path and query when there is no session, passes through in reference mode and on bad config, and carries refreshed cookies", async () => {
   expect(config.matcher).toEqual([
-    "/((?!_next/|reference(?:/|$)|login(?:/|$)|invite(?:/|$)|account(?:/|$)|favicon\\.ico$|.*\\..*).*)",
+    "/((?!_next/|reference(?:/|$)|login(?:/|$)|invite(?:/|$)|account(?:/|$)|terms(?:/|$)|privacy(?:/|$)|favicon\\.ico$|.*\\..*).*)",
   ]);
 
   // Reference mode, unset or explicit: no Supabase client at all.
