@@ -1,38 +1,75 @@
 # Thetis
 
-Design baseline 18 November 2026 · Phase 0's non-UI work is built and tested (domain package, receipt and signing spikes, AWS definition, data layer, access and voice APIs, web visual reference); Phase 1, the Thetis program, has started. Nothing is deployed except the two signing spikes, on devnet only
+**Every handover signed. Every registered pledge checked.**
 
-Thetis coordinates evidence, collateral locks, payment-confirmed releases and custody of mineral lots on the inland journey from stockpile to port. The initial transaction network is one exporter, an independent custodian, a terminal and a professional lender. Chrome leads; manganese demonstrates configurable policies.
+Thetis is a shared record, on Solana, of who holds a lot of export minerals and what is pledged against it, on the inland journey from stockpile to port. An exporter, an independent custodian, a terminal and a lender each sign their own step, and the program refuses the steps that should not happen.
 
-This package develops the revised project and the combined research **including Claude's 18 November addendum**. The revised project controls product scope; research informs commercial hypotheses and trust boundaries. Proposed implementation decisions are identified in [decisions](docs/decisions.md). No source research or project documents were edited.
+> Dev3Pack Global Hackathon, 27–29 November 2026 · Best App Overall on Solana · devnet only, synthetic organisations
 
-## Read in order
+### In 30 seconds
 
-1. [Product and workflows](docs/product.md): roles, screens, mobile interactions and pilot measurement.
-2. [System design](DESIGN.md): architecture, authority, deployment boundaries and technical decisions.
-3. [Domain and transaction contracts](docs/domain.md): quantities, states, settlement and custody invariants.
-4. [Data and integration contracts](docs/contracts.md): authentication, evidence, API, indexing, voice and jobs.
-5. [Build and verification](docs/build.md): all ten phases, acceptance scenarios and reproducible demo.
-6. [Decision register](docs/decisions.md): adopted scope, proposed refinements, unresolved production conditions.
-7. [Research-to-design traceability](docs/traceability.md): evidence, implications and retained qualifications.
+- **What:** a custodian records a lot of chrome ore and signs it onto devnet. A lender locks it as collateral and records an advance. Each handover on the road is signed by both the party giving and the party receiving. A buyer's release happens only after the lender confirms payment.
+- **The new part: refusals enforced by the program.** A second lender asking to pledge units that are already pledged is refused (`InsufficientAvailable`). A driver whose wallet holds no authority for the receiving organisation cannot sign a handover. The same intake ticket cannot issue a second lot. These are program checks, not app checks.
+- **See it:** the program is live on devnet at [`jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3`](https://explorer.solana.com/address/jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3?cluster=devnet), with its [seed transactions](#seed-transactions) below. The web app and the Android field app run from this repository ([Run it](#run-it)).
 
-## What this delivers
+## The problem
 
-A reviewable specification and the first phase-0 code. It is not a deployed app, a security audit, a legal opinion or evidence of customer demand. Architecture, account names and API contracts are proposed implementation contracts. Device integration (D27) and the Thetis program's account layout (D29) still need phase-0 proof before they are treated as verified.
+Lenders do put goods in transit into borrowing bases, but keep that share "typically kept small" because of diversion, carrier liens and jurisdiction risk ([Mayer Brown, Sept 2023](https://www.mayerbrown.com/de/insights/publications/2023/09/mbitesize-goods-in-transit)). Ore on a truck between a stockyard and a port passes through organisations that do not report to each other, so a lender cannot easily see who holds it or whether the same tonnes were pledged elsewhere. Thetis checks pledges registered in Thetis. It cannot rule out a pledge made outside it or a false duplicate intake identity (see [build and verification](docs/build.md) and decision D22 in the [decision register](docs/decisions.md)).
 
-## Built so far
+## What it does
+
+The organisations and figures below are synthetic. Each step says what a party does and what the program enforces.
+
+1. The custodian records lot CR-0001 (5,000 t of chrome, intake ticket WB2611-0042, three files) and signs the issue.
+2. The exporter pledges the lot to a lender. The lender locks it as collateral and records an advance of USD600,000. Settlement is a lender-attested "test bank confirmation"; no money moves.
+3. A second lender asks to pledge the same units and is refused (`InsufficientAvailable`). The first lender's record does not change.
+4. The custodian and the haulier each sign the handover on their own phone. The program verifies both signatures in one transaction.
+5. A driver whose wallet holds no authority for the receiving organisation tries to sign the same handover and is refused.
+6. The haulier records a border observation. It is an observation, never a change of holder.
+7. The terminal signs the arrival at the port.
+8. The owner creates a release of 2,000 t for USD400,000. The lender confirms payment, then the buyer accepts. The debt falls to USD200,000 on 3,000 t.
+9. The terminal, the owner and the lender sign the loading hand-off. The loan stays recorded as an external hand-off.
+10. The same intake ticket is submitted again and is refused. No second lot exists.
+
+| | |
+|---|---|
+| **Program** | [`jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3`](https://explorer.solana.com/address/jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3?cluster=devnet) on devnet. 39 instructions, 24 account types, 40 events, 73 error codes. Anchor 1.2.2, Rust 1.89.0. Last upgraded 28 Nov 2026, devnet slot 527006254. |
+| **Protocol instances** | `fiat-attestation`: [`G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3`](https://explorer.solana.com/address/G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3?cluster=devnet). `token-simulation`: [`7fQ15qzKyWGX1dfXG78tS3pEWjPDsDbaYVHNUgi3HoGa`](https://explorer.solana.com/address/7fQ15qzKyWGX1dfXG78tS3pEWjPDsDbaYVHNUgi3HoGa?cluster=devnet). |
+| **Tests** | 525 Rust tests in `programs/thetis`, 493 database assertions (pgTAP) and over 1,200 TypeScript test cases across the packages, services and apps. All run in CI on every pull request. |
+| **Refusal suites** | The Token-2022 receipt spike refuses 34 direct bypass attempts and 4 unauthorised or invalid program-level moves ([ADR 0001](docs/adr/0001-receipt-enforcement.md)). The signing spike refuses 11 attacks ([ADR 0002](docs/adr/0002-two-party-signing.md)). The Phase 3 bypass sweep covers foreign-protocol custody accounts (PR #86, `programs/thetis/tests/bypass_custody.rs`). |
+| **Signing** | Each party signs a readable intent message. The program verifies the Ed25519 signatures itself, two for a handover, in one transaction (decision D32, [ADR 0003](docs/adr/0003-inhouse-intent-verification.md)). Verified on two Android phones with Solflare and Phantom on devnet. Not tested on a Solana Seeker. |
+| **Fees** | A fee sponsor pays for every transaction a user signs, from an allowlist of Thetis instructions, so a driver or yard clerk needs no SOL. The relay sends v0 transactions with a per-instance address lookup table. |
+| **Solana libraries** | `anchor-lang` and `anchor-spl` (Token-2022) in `programs/thetis`; LiteSVM in the `programs/thetis` tests; `@solana/kit` in `packages/contracts`, `services/api`, `services/sponsor`, `services/worker` and `apps/field`; `@solana-program/token`, `@solana-program/compute-budget` and `@solana-program/address-lookup-table` in `services/api`; Wallet Standard packages in `apps/web`; Mobile Wallet Adapter (`@solana-mobile/mobile-wallet-adapter-protocol`) in `apps/field`. |
+| **Why Solana** | Four organisations that do not report to each other need one record of who holds a lot and what is pledged against it. None of them can keep that record for the others. On Solana the lot, its positions, the pledge and every handover are accounts owned by the program: a second pledge on the same units is refused by the program, and a handover needs both parties' signatures in one transaction. Fees are low enough to record every handover and observation, and the fee sponsor means field staff never hold SOL. |
+| **Licence** | Apache-2.0 ([LICENSE](LICENSE)). |
+
+## What is in the repository
 
 | Area | Where | State |
 |---|---|---|
+| Thetis program | `programs/thetis` | Lots, positions, locks and loans, payment-confirmed release, shipments, two-signature handover, observations, loading, shortfall and restriction. Deployed on devnet. |
+| Shared contracts | `packages/contracts` | Instruction builders and account decoders used by the relay and the web app, with an IDL drift check in CI. |
 | Domain calculations | `packages/domain` | Exact-integer available quantity, storage capacity, payment-confirmed release preview with the residual-limit top-up, and simple-interest accrual. Tested against the synthetic examples in [domain](docs/domain.md) §4 (`fixtures/domain/release-examples.json`). |
-| Receipt enforcement | `programs/receipt-spike`, [ADR 0001](docs/adr/0001-receipt-enforcement.md) | Phase-0 spike only, not the Thetis program. 34 direct Token-2022 bypass attempts and 4 unauthorised or invalid program-level moves are refused, so D25 is confirmed. |
-| AWS infrastructure | `infra`, `services/{api,sponsor,worker}` | CDK definitions for the API, the fee sponsor and the worker, plus secrets, alarms, budget and the release role (D33). Each service is a health endpoint for now. **Not deployed.** |
-| Data layer | `supabase/` | Invitation-only membership, access rules scoped by membership and per-document grants, write-once private originals whose fingerprint only the server sets, one-time wallet-link challenges and an audit log. Proved by 102 database tests (pgTAP) in CI. A hosted Supabase project comes later. |
-| Access API | `services/api` (PR #26) | Invitations, wallet-link challenge and completion (checked against the exact signed message), evidence finalize and short-lived download links. Every read runs under the caller's own access rules. Tested against a local Supabase in CI. The login, invitation and account screens are not built yet. |
-| Voice | `services/api` (PRs #25, #27) | A private ElevenLabs agent defined as code, a server-issued conversation token for signed-in callers, and a lot-evidence lookup that returns only what the caller's access rules allow. The web and Android talk clients are not built yet. |
-| Web visual reference | `apps/web` (PR #17) | Work queue, exception queue, lot dossier and release review screens on labelled synthetic data. |
-| Two-party signing | `programs/signing-spike` (PR #10) | Phase-0 spike: two parties authorise one handover through the Ed25519 Programmatic Signer, the fee sponsor pays, and 11 attacks are refused. These results come from offline tests against the Programmatic Signer's **devnet-only, not yet fully audited** binaries; they do not validate it for production. On real phones (Phantom and Solflare on Android, 18 November 2026) neither wallet showed a readable intent. Only Phantom produced a signature, behind an "unsafe" override, so D32 was reopened and re-decided: in-house verification of a readable signed text. That was proven on 19 November 2026: Phantom and Solflare each showed the full text and signed it, and the two-party handover is finalized on devnet, paid by the sponsor (`programs/intent-spike`, ADR 0003). |
-| Thetis program | `programs/thetis` | Phase 1 started 22 November 2026 (setup, lots, positions, collection); not merged or deployed yet. |
+| Access API and relay | `services/api` | Invitations, wallet links, evidence; turns signed intents into sponsor-paid transactions. |
+| Fee sponsor | `services/sponsor` | Co-signs only allowlisted Thetis instructions. |
+| Indexer | `services/worker` | Indexes every instruction (39 of 39) and event (40 of 40) into the read model; halts on anything it does not recognise. |
+| Web app | `apps/web` | Next.js. Work queue, exceptions, lot dossier, lender actions, release, loading, and voice navigation with a typed fallback. |
+| Field app | `apps/field` | Expo, Android. Sign in, wallet, intake and issue, handover, border observation, loading. |
+| Data layer | `supabase/` | Invitation-only membership, access rules scoped by membership and per-document grants, write-once private originals whose fingerprint only the server sets, one-time wallet-link challenges and an audit log. Proved by 493 database assertions (pgTAP) in CI. |
+| AWS infrastructure | `infra` | CDK definitions for the API, fee sponsor and worker. **Not deployed.** |
+| Spikes | `programs/receipt-spike`, `programs/signing-spike`, `apps/signing-spike` | Phase-0 proofs behind ADRs; not part of the product. |
+
+## Limits
+
+- Devnet only. Every organisation, lot, quantity and amount is synthetic and labelled so.
+- Settlement is a lender-attested test bank confirmation. No money moves. The `token-simulation` instance uses a Thetis-minted test token with no value, never labelled as Circle's USDC.
+- There is no hosted demo yet: the web app, the API, the indexer and the database run locally against devnet. The AWS definitions in `infra` are not deployed.
+- This README links the deployment and seed transactions. It does not yet list the transactions of a start-to-finish run.
+- The program is upgradeable by a single devnet key held by the team.
+- No security audit, no legal opinion and no customer validation.
+- Thetis checks only pledges registered in Thetis.
+
+## Run it
 
 Toolchain: Node 24 LTS with pnpm 11, TypeScript 7.0.2, Vitest 5.1.0 and Biome 2.6.4; Rust 1.89.0 (pinned in `rust-toolchain.toml`), Solana 3.1.10 and Anchor 1.2.2; AWS CDK 2.275.0 (library) and 2.1147.0 (command-line tool).
 
@@ -61,8 +98,6 @@ pnpm --filter @thetis/infra synth          # CloudFormation templates, no AWS cr
 ```
 
 The infra tests that CI runs do synthesize each stack in memory. Accepted advisories with no available fix are listed in `osv-scanner.toml` and tracked in issues #4 and #5.
-
-Production-path behavior means lender-attested bank records; it does **not** mean permission to deploy with live assets. Both settlement adapters will first run in isolated test environments. The devnet token pool is labelled simulation. The open production lending pool remains a longer-term business hypothesis.
 
 ## Deployments
 
@@ -223,20 +258,54 @@ polled in the last 120 s, or when the deployer holds less than the plan's cost p
 Cost: about 0.053 SOL per `phone` run and 0.07 SOL per `lender` run, almost all of it rent. The dry run prints the
 exact figure.
 
-## Built before vs. during the event
+## Built before and during the event
 
-Everything in this repository today was built **before** the Dev3Pack build window (27–29
-November 2026), as phase 0. Work done during the window will be listed here, by pull request,
-when it lands. Every reused template, generated file and third-party binary, and the original
-pre-event deliverables, are recorded in the [reuse manifest](docs/reuse-manifest.md).
+Design and phase 0–2 work (pull requests #1–#62) was merged 18–26 November 2026, before the build window, which the organisers allow. Every reused template, generated file and third-party binary is in the [reuse manifest](docs/reuse-manifest.md).
 
-## Destination
+Merged during the window (27–28 November 2026):
 
-Master copy: `/home/kirito/Documents/projects/personal/Thetis` (this folder; git initialised 18 November 2026). The staged copy in the feasibility workspace (`Thetis/` and `Thetis-design-package.tar.gz`) is retired and must not be edited; see D28 in the [decision register](docs/decisions.md). All package-authored links are relative.
+| PR | Date | What |
+|---|---|---|
+| [#63](https://github.com/Katlego-tech/Thetis/pull/63) | 27 Nov | program: prepare, register and cancel shipments |
+| [#64](https://github.com/Katlego-tech/Thetis/pull/64) | 27 Nov | relay: lender commands and the sponsor allowlist |
+| [#65](https://github.com/Katlego-tech/Thetis/pull/65) | 27 Nov | worker: index lending events and accounts |
+| [#66](https://github.com/Katlego-tech/Thetis/pull/66) | 27 Nov | field: sign in, home, wallet, intake and issue review |
+| [#67](https://github.com/Katlego-tech/Thetis/pull/67) | 27 Nov | program: two-signature handover with partial arrival |
+| [#68](https://github.com/Katlego-tech/Thetis/pull/68) | 27 Nov | demo: one-command demo reset |
+| [#69](https://github.com/Katlego-tech/Thetis/pull/69) | 27 Nov | relay: issue_lot and handover |
+| [#70](https://github.com/Katlego-tech/Thetis/pull/70) | 27 Nov | program: record_observation |
+| [#71](https://github.com/Katlego-tech/Thetis/pull/71), [#74](https://github.com/Katlego-tech/Thetis/pull/74), [#77](https://github.com/Katlego-tech/Thetis/pull/77), [#78](https://github.com/Katlego-tech/Thetis/pull/78), [#82](https://github.com/Katlego-tech/Thetis/pull/82) | 27 Nov | worker: index shipments and batches, custody handovers, observations, loading and loan hand-offs, shortfalls and restrictions |
+| [#72](https://github.com/Katlego-tech/Thetis/pull/72) | 27 Nov | relay: record_observation |
+| [#73](https://github.com/Katlego-tech/Thetis/pull/73) | 27 Nov | program: loading intents, acceptance and loading |
+| [#75](https://github.com/Katlego-tech/Thetis/pull/75) | 27 Nov | web: lender actions and the live release screen |
+| [#76](https://github.com/Katlego-tech/Thetis/pull/76) | 27 Nov | relay: loading kinds |
+| [#79](https://github.com/Katlego-tech/Thetis/pull/79) | 27 Nov | program: shortfall attestation and restrictions |
+| [#80](https://github.com/Katlego-tech/Thetis/pull/80) | 27 Nov | relay: accept_loading |
+| [#81](https://github.com/Katlego-tech/Thetis/pull/81) | 27 Nov | scripts: demo reset fix |
+| [#83](https://github.com/Katlego-tech/Thetis/pull/83) | 27 Nov | web: loading pages and Accept loading |
+| [#84](https://github.com/Katlego-tech/Thetis/pull/84) | 28 Nov | relay: compute unit price |
+| [#85](https://github.com/Katlego-tech/Thetis/pull/85) | 28 Nov | web: navigation |
+| [#86](https://github.com/Katlego-tech/Thetis/pull/86) | 28 Nov | program tests: Phase 3 bypass sweep |
+| [#87](https://github.com/Katlego-tech/Thetis/pull/87) | 28 Nov | api: field read routes |
+| [#88](https://github.com/Katlego-tech/Thetis/pull/88) | 28 Nov | field: handover, observation and loading screens |
+| [#89](https://github.com/Katlego-tech/Thetis/pull/89) | 28 Nov | worker: unknown enums halt |
+| [#90](https://github.com/Katlego-tech/Thetis/pull/90) | 28 Nov | field: tab bar and Account |
+| [#91](https://github.com/Katlego-tech/Thetis/pull/91) | 28 Nov | web: per-position loading view |
+| [#92](https://github.com/Katlego-tech/Thetis/pull/92) | 28 Nov | relay: lookup table and size refusals |
+| [#94](https://github.com/Katlego-tech/Thetis/pull/94) | 28 Nov | web: voice navigation with typed fallback |
+| [#95](https://github.com/Katlego-tech/Thetis/pull/95) | 28 Nov | relay, web: shared contracts package |
 
-Device coverage: mobile signing **is planned to be tested** with the Mock MWA Wallet on an Android emulator, and with Solflare and Phantom on Android phones; that phase-0 spike (D27) has not run yet. It will not be tested on a Solana Seeker, so Seed Vault Wallet prompts and Seeker Connect stay unverified.
+## Design documents
 
-Design-review decisions of 18 November 2026 (settlement mode, tagline, durable nonces, fee sponsor, Token-2022 configuration, demo running order) are D20–D30 in the [decision register](docs/decisions.md).
+Read these in order. They are the design baseline of 18 November 2026; the code follows them.
+
+1. [Product and workflows](docs/product.md): roles, screens, mobile interactions and pilot measurement.
+2. [System design](DESIGN.md): architecture, authority, deployment boundaries and technical decisions.
+3. [Domain and transaction contracts](docs/domain.md): quantities, states, settlement and custody invariants.
+4. [Data and integration contracts](docs/contracts.md): authentication, evidence, API, indexing, voice and jobs.
+5. [Build and verification](docs/build.md): all ten phases, acceptance scenarios and reproducible demo.
+6. [Decision register](docs/decisions.md): adopted scope, proposed refinements, unresolved production conditions.
+7. [Research-to-design traceability](docs/traceability.md): evidence, implications and retained qualifications.
 
 ## Source provenance
 
@@ -250,7 +319,7 @@ The [retained FAQ evidence](references/dev3pack_faq_capture/faq_answers.md) reso
 python3 scripts/check_design.py
 ```
 
-This checks package-authored links and snapshot integrity. It does not test an application. The program and app checks are under [Built so far](#built-so-far).
+This checks package-authored links and snapshot integrity. It does not test an application. The program and app checks are under [What is in the repository](#what-is-in-the-repository).
 
 ## Licence
 
