@@ -374,7 +374,7 @@ export function Intake(props: { draftId: string }) {
               </Txt>
             ) : null}
             {reason === "Connect a wallet first." ? (
-              <TextLink label="Wallet" onPress={() => app.navigate({ name: "wallet" })} />
+              <TextLink label="Wallet" onPress={() => app.navigate({ name: "account" })} />
             ) : null}
           </>
         )

@@ -6,10 +6,9 @@ import { Button, TextLink } from "../components/Button";
 import { Frame } from "../components/Frame";
 import { Freshness } from "../components/Freshness";
 import { ErrorBlock, Note } from "../components/Note";
-import { Picker } from "../components/Picker";
 import { CustodyMark, RegistryMark } from "../components/RegistryMark";
 import { Txt } from "../components/Txt";
-import { useApp } from "../context";
+import { useApp, useRootChrome } from "../context";
 import { shortCode } from "../custody";
 import {
   type LotRow,
@@ -56,6 +55,7 @@ function filesLine(draft: IntakeDraft, online: boolean): string {
 export function Home() {
   const app = useApp();
   const signing = useSigning();
+  const chrome = useRootChrome();
   const [drafts, setDrafts] = useState<IntakeDraft[]>([]);
   const [lots, setLots] = useState<LotRow[] | null>(null);
   const [lotsError, setLotsError] = useState<ReadError | null>(null);
@@ -63,7 +63,6 @@ export function Home() {
   const [waiting, setWaiting] = useState<WaitingCommand[] | null>(null);
   const [waitingFailed, setWaitingFailed] = useState(false);
   const [waitingTick, setWaitingTick] = useState(0);
-  const [choosing, setChoosing] = useState(false);
   const orgId = app.organisation.organisationId;
   const orgName = app.organisation.name;
 
@@ -191,6 +190,7 @@ export function Home() {
   return (
     <Frame
       organisation={orgName}
+      {...chrome}
       footer={
         custodian ? (
           <>
@@ -273,7 +273,7 @@ export function Home() {
                 <TextLink
                   key={line}
                   label={line}
-                  onPress={() => app.navigate({ name: "wallet" })}
+                  onPress={() => app.navigate({ name: "account" })}
                 />
               ) : (
                 <Txt key={line} variant="small" tone="ink2">
@@ -282,7 +282,10 @@ export function Home() {
               ),
             )}
             {!app.wallet ? (
-              <TextLink label="Connect a wallet" onPress={() => app.navigate({ name: "wallet" })} />
+              <TextLink
+                label="Connect a wallet"
+                onPress={() => app.navigate({ name: "account" })}
+              />
             ) : null}
             {signing.asOf ? (
               <Txt variant="small" tone="ink2">
@@ -300,10 +303,10 @@ export function Home() {
           <Button label="Retry" kind="quiet" inline onPress={signing.reload} />
         ) : null}
         {app.wallet ? (
-          <TextLink label="Wallet and authority" onPress={() => app.navigate({ name: "wallet" })} />
-        ) : null}
-        {app.memberships.length > 1 ? (
-          <TextLink label="Switch organisation" onPress={() => setChoosing(true)} />
+          <TextLink
+            label="Wallet and authority"
+            onPress={() => app.navigate({ name: "account" })}
+          />
         ) : null}
         <Cert label={app.protocol.instanceLabel} />
       </Panel>
@@ -493,22 +496,6 @@ export function Home() {
           </ListBox>
         </Section>
       ) : null}
-
-      <Picker
-        visible={choosing}
-        title="Which organisation are you working for?"
-        options={app.memberships.map((m) => ({
-          key: m.organisationId,
-          title: m.name,
-          lines: [m.synthetic ? `${m.kind}, synthetic` : m.kind],
-        }))}
-        footnote="Drafts and wallets are kept per organisation. You can switch later from this screen."
-        onPick={(key) => {
-          setChoosing(false);
-          app.chooseOrganisation(key);
-        }}
-        onClose={() => setChoosing(false)}
-      />
     </Frame>
   );
 }

@@ -16,7 +16,7 @@ import {
   SIGN_BEFORE,
 } from "../custody-fixtures";
 import { commandView, TX_SIGNATURE } from "../fixtures";
-import { renderScreen, WALLET } from "./app";
+import { expectBusyBack, renderScreen, WALLET } from "./app";
 import {
   button,
   cannotPress,
@@ -66,6 +66,15 @@ async function open(who: Who, view: CommandView, batches = [fieldBatch()]) {
 }
 
 const press = async (name: string) => act(async () => fireEvent.click(await enabled(name)));
+
+describe("busy while signing (navigation.md §4.4)", () => {
+  it("marks the app busy while the signature is sending, and Back does nothing", async () => {
+    const { app } = await open("mosela", handoverView("awaiting_signatures"), []);
+    vi.mocked(app.commands.sign).mockReturnValue(new Promise(() => {}));
+    await press("Sign in your wallet");
+    await expectBusyBack(app);
+  });
+});
 
 describe("the next holder's phone: Take custody", () => {
   it("shows who hands over to whom, the load, the stage and what the signature confirms", async () => {
