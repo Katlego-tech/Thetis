@@ -195,10 +195,29 @@ describe("the holder's phone: Hand over to", () => {
     expect(app.commands.get).toHaveBeenCalledWith(HANDOVER_ID);
   });
 
-  it("uses the command's own fields when the batch is not on the list", async () => {
+  it("the batch is not on the list: the holder's check is unreadable, never the command's own fields", async () => {
     await open("kopano", handoverView("awaiting_signatures"), []);
-    await enabled("Sign in your wallet");
-    expect(screen.getByText("Matches what you entered: yes")).toBeTruthy();
+    await screen.findByText("Line 0, Text");
+    expect(screen.getByText("Expected a handover text for this batch")).toBeTruthy();
+    expect(screen.getByText("Matches what you entered: no")).toBeTruthy();
+    expect(screen.queryByText("Matches what you entered: yes")).toBeNull();
+    expect(cannotPress("Sign in your wallet")).toBe(true);
+    expect(transact).not.toHaveBeenCalled();
+  });
+
+  it("the batch list fails to read: a self-consistent text to a wrong recipient is unreadable, never a match", async () => {
+    const app = phone("kopano");
+    vi.mocked(app.commands.get).mockResolvedValue(
+      handoverView("awaiting_signatures", { text: handoverText({ To: "Someone Else" }) }),
+    );
+    vi.mocked(app.field.batches).mockRejectedValue(new Error("batches unavailable"));
+    await renderScreen(<Handover commandId={HANDOVER_ID} />, app);
+    await screen.findByText("Line 0, Text");
+    expect(screen.getByText("Matches what you entered: no")).toBeTruthy();
+    expect(screen.queryByText("Matches what you entered: yes")).toBeNull();
+    expect(cannotPress("Sign in your wallet")).toBe(true);
+    expect(transact).not.toHaveBeenCalled();
+    expect(signMessages).not.toHaveBeenCalled();
   });
 
   it("a text whose To is not the batch's next holder never opens the wallet", async () => {

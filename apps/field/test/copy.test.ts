@@ -114,6 +114,23 @@ describe("record_observation copy (field-app.md §6.7 observation rows, §7.8)",
       "Thetis could not prepare this text (NOT_AUTHORISED). Nothing was sent. Try again.",
     );
   });
+
+  it("relay refuses the evidence: an observation gets the retake line, every other kind the shared line", () => {
+    const org = "Khunou Ore Exports";
+    expect(
+      relayErrorCopy("EVIDENCE_INVALID", "create", {
+        org,
+        kind: "record_observation",
+        detail: "transport evidence of this batch",
+      }),
+    ).toBe(
+      "The photo must be of this batch, taken by your organisation. Retake it and try again. Nothing was sent.",
+    );
+    const generic = "One of the files is not stored for this record. Upload it again.";
+    for (const kind of ["record_loading", "handover", undefined]) {
+      expect(relayErrorCopy("EVIDENCE_INVALID", "create", { org, kind })).toBe(generic);
+    }
+  });
 });
 
 describe("record_loading copy (field-app.md T067r.3 fold 47: a loan in Recovery)", () => {

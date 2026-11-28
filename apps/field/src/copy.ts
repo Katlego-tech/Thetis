@@ -187,6 +187,9 @@ export function relayErrorCopy(code: string, phase: RelayPhase, v: RelayCopyVars
     return `${v.org} is neither the owner nor the terminal of this loading. Nothing was sent.`;
   }
   if (v.kind === "record_observation") {
+    if (code === "EVIDENCE_INVALID") {
+      return "The photo must be of this batch, taken by your organisation. Retake it and try again. Nothing was sent.";
+    }
     if (code === "NOT_AUTHORISED") {
       return `${v.org} can't record observations. Only a custodian, a transporter, a terminal or an inspector can. Nothing was sent.`;
     }

@@ -69,6 +69,9 @@ export function Handover(props: { commandId: string }) {
     const role = roleOf(candidate);
     if (!role) return null;
     const batch = batches.find((b) => b.batch === candidate.args.batch) ?? null;
+    // The holder holds the batch, so its own list must name it; the relay's fields are never trusted
+    // for the holder (fold 66 covers only the next holder, who is not listed on the batch route).
+    if (!batch && role === "holder") return "unreadable";
     let lotId: string;
     let index: number;
     let batchCount: number;
@@ -128,7 +131,7 @@ export function Handover(props: { commandId: string }) {
     app.field
       .batches(orgId)
       .then(setBatches)
-      // Without the list the command's own fields are what the text is checked against.
+      // Without the list the next holder checks against the command's own fields; the holder cannot.
       .catch(() => setBatches([]));
   }, [app.online]);
 

@@ -385,7 +385,12 @@ describe("Prepare text", () => {
       new ApiError(409, "EVIDENCE_INVALID", "", "transport photo of this batch"),
     );
     await press("Prepare text");
-    await screen.findByText("One of the files is not stored for this record. Upload it again.");
+    await screen.findByText(
+      "The photo must be of this batch, taken by your organisation. Retake it and try again. Nothing was sent.",
+    );
+    expect(
+      screen.queryByText("One of the files is not stored for this record. Upload it again."),
+    ).toBeNull();
     await screen.findByText(
       "The stored file did not match what was sent. Retry uploads a new version.",
     );

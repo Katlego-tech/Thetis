@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LoadingIntent } from "../api/field";
 import { Cert, Head, ListBox, ListItem, Rows, Skeleton } from "../components/Blocks";
 import { Button } from "../components/Button";
@@ -41,6 +41,11 @@ export function Loading(props: { intent: string }) {
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
+  // The SHA-256 of the text the intent was re-read for: a lender may accept between the first read
+  // and the relay building the text, so the text is checked against a read taken after it exists.
+  const [readFor, setReadFor] = useState<string | null>(null);
+  const [rereading, setRereading] = useState(false);
+  const rereadSeq = useRef(0);
   const orgId = app.organisation.organisationId;
   const org = app.organisation.name;
   const chain = facts.chainOrganisation;
@@ -67,10 +72,29 @@ export function Loading(props: { intent: string }) {
     };
   }, [app.field, orgId, props.intent, app.online, tick]);
 
+  /** Reads the intent again and keeps it, then marks the check as run for `sha`. */
+  async function rereadIntent(sha: string) {
+    const seq = ++rereadSeq.current;
+    setRereading(true);
+    try {
+      const rows = await app.field.loadingIntents(orgId);
+      const found = rows.find((row) => row.intent === props.intent);
+      if (seq === rereadSeq.current && found) setKept(found);
+    } catch {
+      // The earlier read stays; a failing check offers Check again.
+    } finally {
+      if (seq === rereadSeq.current) {
+        setReadFor(sha);
+        setRereading(false);
+      }
+    }
+  }
+
   const signing = useCommandSigning({
     role: "terminal",
     verify: (candidate) => {
       if (!intent || !chain || !candidate.text) return null;
+      if (candidate.text.messageSha256 !== readFor) return null;
       return verifyCommandText(
         candidate.text,
         expectedLoadingText({
@@ -95,6 +119,15 @@ export function Loading(props: { intent: string }) {
       candidate.kind === "record_loading" && candidate.intent === props.intent,
   });
   const { view, phase, problem } = signing;
+  const viewSha =
+    view?.status === "awaiting_signatures" ? (view.text?.messageSha256 ?? null) : null;
+
+  // Each prepared or opened text is checked against an intent read after the text was built.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one re-read per text
+  useEffect(() => {
+    if (!viewSha || viewSha === readFor || !app.online) return;
+    void rereadIntent(viewSha);
+  }, [viewSha, app.online]);
 
   async function prepare() {
     if (!app.online || busy) return;
@@ -170,8 +203,26 @@ export function Loading(props: { intent: string }) {
           </>
         );
       }
-    } else if (!usable || mismatches.length > 0) {
+    } else if (!usable) {
       footer = <Button label="Back to home" onPress={() => app.navigate({ name: "home" })} />;
+    } else if (mismatches.length > 0) {
+      const sha = viewSha;
+      footer = (
+        <>
+          <Button
+            label={rereading ? "Checking again" : "Check again"}
+            disabled={rereading || !app.online || sha === null}
+            onPress={() => {
+              if (sha) void rereadIntent(sha);
+            }}
+          />
+          <Button
+            label="Back to home"
+            kind="quiet"
+            onPress={() => app.navigate({ name: "home" })}
+          />
+        </>
+      );
     } else if (awaiting && signing.mySigner && !iSigned) {
       footer = (
         <>

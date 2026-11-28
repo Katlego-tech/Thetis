@@ -414,6 +414,51 @@ describe("Record loading: review and sign", () => {
     expect(app.commands.sign).not.toHaveBeenCalled();
   });
 
+  it("a lender accepts after the first read: the intent is read again for the text, and it matches", async () => {
+    const lenderTwoAccepted = { ...lenderTwoMissing, state: "accepted" as const };
+    const app = phone("port");
+    vi.mocked(app.field.loadingIntents)
+      .mockResolvedValueOnce([
+        loadingIntent({ acceptances: [lenderOneAccepted, lenderTwoMissing] }),
+      ])
+      .mockResolvedValue([loadingIntent({ acceptances: [lenderOneAccepted, lenderTwoAccepted] })]);
+    await renderScreen(<Loading intent={INTENT_ADDRESS} />, app);
+    await screen.findByText("Loading document");
+    const view = loadingView("awaiting_signatures", {
+      text: loadingText({ "Loan acceptances": "2" }),
+    });
+    vi.mocked(app.commands.create).mockResolvedValue(view);
+    vi.mocked(app.commands.get).mockResolvedValue(view);
+    await press("Prepare loading text");
+    await enabled("Sign in your wallet");
+    expect(screen.getByText("Matches what you entered: yes")).toBeTruthy();
+    expect(app.field.loadingIntents).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failing check offers Check again, which reads the intent again and passes once it agrees", async () => {
+    const lenderTwoAccepted = { ...lenderTwoMissing, state: "accepted" as const };
+    const app = phone("port");
+    const oneOfTwo = [loadingIntent({ acceptances: [lenderOneAccepted, lenderTwoMissing] })];
+    vi.mocked(app.field.loadingIntents)
+      .mockResolvedValueOnce(oneOfTwo)
+      .mockResolvedValueOnce(oneOfTwo)
+      .mockResolvedValue([loadingIntent({ acceptances: [lenderOneAccepted, lenderTwoAccepted] })]);
+    await renderScreen(<Loading intent={INTENT_ADDRESS} />, app);
+    await screen.findByText("Loading document");
+    const view = loadingView("awaiting_signatures", {
+      text: loadingText({ "Loan acceptances": "2" }),
+    });
+    vi.mocked(app.commands.create).mockResolvedValue(view);
+    vi.mocked(app.commands.get).mockResolvedValue(view);
+    await press("Prepare loading text");
+    await screen.findByText("Matches what you entered: no");
+    expect(button("Back to home")).not.toBeNull();
+    await press("Check again");
+    await enabled("Sign in your wallet");
+    expect(screen.getByText("Matches what you entered: yes")).toBeTruthy();
+    expect(app.field.loadingIntents).toHaveBeenCalledTimes(3);
+  });
+
   it("a text for another terminal never opens the wallet", async () => {
     await prepare(
       loadingView("awaiting_signatures", { text: loadingText({ Terminal: "Port Terminal T2" }) }),
