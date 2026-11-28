@@ -103,6 +103,20 @@ describe("routes on a running server", () => {
     }
   }, 120_000);
 
+  test("the terms and privacy pages answer a signed-out visitor in live mode without a redirect", async () => {
+    await withServer({ THETIS_DATA_SOURCE: "live", ...SUPABASE, ...CHAIN }, async (get) => {
+      for (const [path, title] of [
+        ["/terms", "Terms of use"],
+        ["/privacy", "Privacy notice"],
+      ] as const) {
+        const response = await get(path);
+        expect([path, response.status, response.location]).toEqual([path, 200, null]);
+        expect(response.body).toContain(title);
+        expect(response.body).toContain("Katlego Tlhapiso");
+      }
+    });
+  }, 120_000);
+
   test("the release route in live mode sends a signed-out visitor to sign in", async () => {
     for (const variables of [
       { THETIS_DATA_SOURCE: "live", ...SUPABASE, ...CHAIN },
