@@ -1,3 +1,4 @@
+import { VoicePanel } from "@/components/voice/voice-panel";
 import type { ScreenReader } from "@/data/live/types";
 import type { Context } from "@/data/types";
 import { formatTonnes } from "@/lib/format";
@@ -98,6 +99,7 @@ export function SideRail({
       <div className="rail-wordmark">THETIS</div>
       <ContextSwitcher current={current} contexts={reader.contexts()} />
       <RailNav sections={sections} fallback={fallback} />
+      <VoicePanel organisationId={current.organisationId} sections={sections} />
       <AccountBlock />
       <div className="rail-theme">
         <ThemeToggle />
