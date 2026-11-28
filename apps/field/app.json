@@ -5,9 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
     "platforms": ["android"],
     "android": {
       "package": "dev.thetis.field",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B2023"
+      },
       "predictiveBackGestureEnabled": false,
       "permissions": ["RECORD_AUDIO"]
     },
@@ -31,7 +36,8 @@
           }
         }
       ],
-      "@config-plugins/react-native-webrtc"
+      "@config-plugins/react-native-webrtc",
+      "./plugins/release-signing.js"
     ]
   }
 }
