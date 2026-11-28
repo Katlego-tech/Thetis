@@ -23,6 +23,10 @@ interface WorkerStackProps extends StackProps {
   instance: string;
   availabilityZones: string[];
   supabaseUrl: string;
+  /** The judged instance's protocol address (context thetisProtocol). */
+  thetisProtocol: string;
+  /** The program deploy signature, the oldest entry the indexer lists (thetisFirstSignature). */
+  thetisFirstSignature: string;
   supabaseServiceRole: Secret;
   solanaRpcUrl: Secret;
 }
@@ -30,10 +34,6 @@ interface WorkerStackProps extends StackProps {
 // The one CDK instance whose worker indexes the program: on-chain instance "fiat-attestation".
 const INDEXING_INSTANCE = "fiat-attestation-test";
 const THETIS_PROGRAM_ID = "jGJpdjtoDUtXMjvc4UaEi1mBeFZKqVfe9jL8ireHMs3";
-const THETIS_PROTOCOL = "G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3";
-// The program's deploy transaction on devnet (README, "Seed transactions").
-const THETIS_FIRST_SIGNATURE =
-  "vtK8h43bEg8zDn5w7u319t6VfNztCKB87nYBJ7LN6bsgFmMR2cFKA2iVLKgve8spmhri9mQJbSk28amZthbVviE";
 
 export class WorkerStack extends Stack {
   readonly cluster: Cluster;
@@ -102,8 +102,8 @@ export class WorkerStack extends Stack {
               THETIS_INDEXER: "on",
               THETIS_NETWORK: "devnet",
               THETIS_PROGRAM_ID,
-              THETIS_PROTOCOL,
-              THETIS_FIRST_SIGNATURE,
+              THETIS_PROTOCOL: props.thetisProtocol,
+              THETIS_FIRST_SIGNATURE: props.thetisFirstSignature,
               SUPABASE_URL: props.supabaseUrl,
             },
             // CDK concrete types expose undefined for some optional interface properties.

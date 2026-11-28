@@ -6,13 +6,17 @@ import { Topic } from "aws-cdk-lib/aws-sns";
 import { EmailSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import type { Construct } from "constructs";
 import type { ApiStack } from "./api.ts";
+import type { WebStack } from "./web.ts";
 import type { WorkerStack } from "./worker.ts";
 
 interface OpsStackProps extends StackProps {
   instance: string;
   alertEmail: string;
-  api: ApiStack;
+  /** Absent in the judge profile, which deploys no API or sponsor. */
+  api?: ApiStack;
   worker: WorkerStack;
+  /** Present in the judge profile only. */
+  web?: WebStack;
 }
 
 export class OpsStack extends Stack {
@@ -22,15 +26,17 @@ export class OpsStack extends Stack {
     const topic = new Topic(this, "Alerts");
     topic.addSubscription(new EmailSubscription(props.alertEmail));
 
-    for (const service of ["api", "sponsor"] as const) {
-      const alarm = new Alarm(this, `${service}-errors`, {
-        metric: props.api[service].metricErrors({ period: Duration.minutes(5), statistic: "Sum" }),
-        threshold: 1,
-        evaluationPeriods: 1,
-        comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-        treatMissingData: TreatMissingData.NOT_BREACHING,
-      });
-      alarm.addAlarmAction(new SnsAction(topic));
+    if (props.api) {
+      for (const service of ["api", "sponsor"] as const) {
+        const alarm = new Alarm(this, `${service}-errors`, {
+          metric: props.api[service].metricErrors({ period: Duration.minutes(5), statistic: "Sum" }),
+          threshold: 1,
+          evaluationPeriods: 1,
+          comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+          treatMissingData: TreatMissingData.NOT_BREACHING,
+        });
+        alarm.addAlarmAction(new SnsAction(topic));
+      }
     }
 
     const workerAlarm = new Alarm(this, "worker-running-tasks", {
@@ -68,6 +74,21 @@ export class OpsStack extends Stack {
         treatMissingData: TreatMissingData.NOT_BREACHING,
       });
       haltedAlarm.addAlarmAction(new SnsAction(topic));
+    }
+
+    if (props.web) {
+      // CloudFront publishes this metric in us-east-1, the judge profile's region.
+      const webAlarm = new Alarm(this, "web-5xx", {
+        metric: props.web.distribution.metric5xxErrorRate({
+          period: Duration.minutes(5),
+          statistic: "Average",
+        }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      });
+      webAlarm.addAlarmAction(new SnsAction(topic));
     }
   }
 }

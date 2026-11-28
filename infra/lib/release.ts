@@ -34,8 +34,11 @@ export class ReleaseStack extends Stack {
       assumedBy: new FederatedPrincipal(
         providerArn,
         {
-          StringEquals: { [`${githubIssuer}:aud`]: audience },
-          StringLike: { [`${githubIssuer}:sub`]: `repo:${props.githubRepo}:ref:refs/tags/v*` },
+          // One path: workflows on main only. No GitHub environment, which would change the sub.
+          StringEquals: {
+            [`${githubIssuer}:aud`]: audience,
+            [`${githubIssuer}:sub`]: `repo:${props.githubRepo}:ref:refs/heads/main`,
+          },
         },
         "sts:AssumeRoleWithWebIdentity",
       ),

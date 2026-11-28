@@ -1,8 +1,9 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { App, type Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createStacks } from "../lib/app.ts";
 
 const instance = "fiat-attestation-test";
@@ -16,12 +17,16 @@ const valid = {
   alertEmail: "alerts@example.invalid",
   // Declared placeholder until the hosted Supabase project exists.
   supabaseUrl: "https://aaaaaaaaaaaaaaaaaaaa.supabase.co",
+  thetisProtocol: "G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3",
+  // The program's deploy transaction on devnet (README, "Seed transactions").
+  thetisFirstSignature:
+    "vtK8h43bEg8zDn5w7u319t6VfNztCKB87nYBJ7LN6bsgFmMR2cFKA2iVLKgve8spmhri9mQJbSk28amZthbVviE",
 };
 const oidcHost = "token.actions.githubusercontent.com";
 
-function synth(context: Record<string, unknown>) {
+function synth(context: Record<string, unknown>, webLambdaDirectory?: string) {
   const app = new App({ context, autoSynth: false });
-  const stacks = createStacks(app);
+  const stacks = createStacks(app, webLambdaDirectory ? { webLambdaDirectory } : {});
   return { assembly: app.synth(), stacks };
 }
 
@@ -33,6 +38,8 @@ const invalidValues = {
   budgetMonthlyUsd: "0",
   alertEmail: "invalid",
   supabaseUrl: "https://example.supabase.co",
+  thetisProtocol: "0OIl-not-base58",
+  thetisFirstSignature: "G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3",
 };
 
 describe("required context", () => {
@@ -45,6 +52,18 @@ describe("required context", () => {
       expect(() => synth({ ...valid, [key]: invalid })).toThrow(key);
     },
   );
+
+  it("rejects an unknown profile by name and accepts full explicitly", { timeout: 30_000 }, () => {
+    expect(() => synth({ ...valid, profile: "demo" })).toThrow("profile");
+    const names = synth({ ...valid, profile: "full" })
+      .assembly.stacks.map(({ stackName }) => stackName)
+      .sort();
+    expect(names).toEqual(
+      ["Api", "Budget", "Ops", "Release", "Secrets", "Worker"].map(
+        (name) => `Thetis-${instance}-${name}`,
+      ),
+    );
+  });
 
   it("rejects missing or invalid availabilityZones by name", () => {
     for (const availabilityZones of [
@@ -113,7 +132,7 @@ describe("synthesized deployment", () => {
     templates = Object.fromEntries(
       Object.entries(stacks).map(([name, stack]) => [name, Template.fromStack(stack)]),
     );
-  });
+  }, 60_000);
 
   function template(name: string) {
     const result = templates[name];
@@ -273,7 +292,7 @@ describe("synthesized deployment", () => {
     }
   });
 
-  it("pins GitHub release trust to repository tags and the STS audience", () => {
+  it("pins GitHub release trust to the main branch and the STS audience", () => {
     template("release").hasResourceProperties("AWS::IAM::Role", {
       RoleName: `thetis-${instance}-release`,
       AssumeRolePolicyDocument: {
@@ -294,8 +313,10 @@ describe("synthesized deployment", () => {
               },
             },
             Condition: {
-              StringEquals: { [`${oidcHost}:aud`]: "sts.amazonaws.com" },
-              StringLike: { [`${oidcHost}:sub`]: "repo:Katlego-tech/Thetis:ref:refs/tags/v*" },
+              StringEquals: {
+                [`${oidcHost}:aud`]: "sts.amazonaws.com",
+                [`${oidcHost}:sub`]: "repo:Katlego-tech/Thetis:ref:refs/heads/main",
+              },
             },
           },
         ]),
@@ -496,7 +517,7 @@ describe("synthesized deployment", () => {
     });
   });
 
-  it("runs the devnet-token-simulation worker as the health loop only, with no indexer alarm", () => {
+  it("runs the devnet-token-simulation worker as the health loop only, with no indexer alarm", { timeout: 30_000 }, () => {
     const { stacks: simulation } = synth({ ...valid, instance: "devnet-token-simulation" });
     const worker = Template.fromStack(simulation.worker);
     const [task] = Object.values(worker.findResources("AWS::ECS::TaskDefinition"));
@@ -560,11 +581,292 @@ describe("synthesized deployment", () => {
     ]);
   });
 
-  it("creates GitHub OIDC when requested", () => {
+  it("creates GitHub OIDC when requested", { timeout: 30_000 }, () => {
     const { stacks } = synth({ ...valid, createGithubOidcProvider: "true" });
     Template.fromStack(stacks.release).hasResourceProperties("AWS::IAM::OIDCProvider", {
       Url: `https://${oidcHost}`,
       ClientIdList: ["sts.amazonaws.com"],
     });
+  });
+});
+
+const judgeContext = {
+  ...valid,
+  profile: "judge",
+  // A fixture key in the publishable format; the hosted key arrives as context at deploy.
+  supabaseAnonKey: "sb_publishable_fixture",
+};
+const webKeys = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "THETIS_SITE_MODE",
+  "NODE_ENV",
+  "PORT",
+  "HOSTNAME",
+  "AWS_LWA_PORT",
+];
+
+describe("judge profile", () => {
+  let staged: string;
+  let stacks: Record<string, Stack>;
+  let templates: Record<string, Template>;
+  let assembly: ReturnType<App["synth"]>;
+
+  beforeAll(() => {
+    // A staged tree with the two files the Web stack reads; the real one comes from build:judge.
+    staged = mkdtempSync(join(tmpdir(), "thetis-web-lambda-"));
+    mkdirSync(join(staged, "apps/web"), { recursive: true });
+    writeFileSync(join(staged, "apps/web/server.js"), "");
+    writeFileSync(join(staged, "Dockerfile"), 'CMD ["node", "apps/web/server.js"]\n');
+    ({ assembly, stacks } = synth(judgeContext, staged));
+    templates = Object.fromEntries(
+      Object.entries(stacks).map(([name, stack]) => [name, Template.fromStack(stack)]),
+    );
+  }, 60_000);
+
+  afterAll(() => {
+    rmSync(staged, { recursive: true, force: true });
+  });
+
+  function template(name: string) {
+    const result = templates[name];
+    if (!result) throw new Error(`Missing stack ${name}`);
+    return result;
+  }
+
+  function webFunction() {
+    const web = template("web");
+    const id = web.getResourceId("AWS::Lambda::Function", {
+      Properties: { FunctionName: `thetis-${instance}-web` },
+    });
+    const resource = web.findResources("AWS::Lambda::Function")[id];
+    if (!resource) throw new Error("web function missing");
+    return { id, properties: resource.Properties };
+  }
+
+  it("requires supabaseAnonKey by name, and refuses a key in neither format", { timeout: 30_000 }, () => {
+    const context: Record<string, unknown> = { ...judgeContext };
+    delete context.supabaseAnonKey;
+    expect(() => synth(context, staged)).toThrow("supabaseAnonKey");
+    expect(() => synth({ ...judgeContext, supabaseAnonKey: "service_role" }, staged)).toThrow(
+      "supabaseAnonKey",
+    );
+    // A JWT-shaped fixture (three dot-separated parts), not a real key.
+    const jwtShaped = ["eyJfixture", "eyJfixture", "fixture"].join(".");
+    expect(() => synth({ ...judgeContext, supabaseAnonKey: jwtShaped }, staged)).not.toThrow();
+  });
+
+  it("refuses to synthesize the Web stack without the staged web build", { timeout: 30_000 }, () => {
+    const empty = mkdtempSync(join(tmpdir(), "thetis-web-empty-"));
+    try {
+      expect(() => synth(judgeContext, empty)).toThrow("run pnpm --filter @thetis/web build:judge");
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("synthesizes exactly Secrets, Worker, Web, Ops, Budget and Release, tagged", () => {
+    expect(assembly.stacks.map(({ stackName }) => stackName).sort()).toEqual(
+      ["Budget", "Ops", "Release", "Secrets", "Web", "Worker"].map(
+        (name) => `Thetis-${instance}-${name}`,
+      ),
+    );
+    for (const stack of assembly.stacks) {
+      expect(stack.tags).toMatchObject({ project: "thetis", instance });
+    }
+  });
+
+  it("has no api or sponsor function, no HTTP API and no sponsor-key secret", () => {
+    for (const item of Object.values(templates)) {
+      item.resourceCountIs("AWS::ApiGatewayV2::Api", 0);
+      for (const { Properties } of Object.values(item.findResources("AWS::Lambda::Function"))) {
+        expect(Properties.FunctionName).not.toMatch(/^thetis-.*-(api|sponsor)$/);
+      }
+    }
+    const secrets = template("secrets");
+    secrets.resourceCountIs("AWS::SecretsManager::Secret", 2);
+    for (const name of ["supabase-service-role", "solana-rpc-url"]) {
+      secrets.hasResource("AWS::SecretsManager::Secret", {
+        DeletionPolicy: "Retain",
+        Properties: { Name: `thetis/${instance}/${name}`, SecretString: Match.absent() },
+      });
+    }
+  });
+
+  it("grants secret reads to the worker task execution role only, on its two secrets", () => {
+    const [task] = Object.values(template("worker").findResources("AWS::ECS::TaskDefinition"));
+    const executionRole = task?.Properties.ExecutionRoleArn["Fn::GetAtt"][0];
+    const grants = Object.entries(templates).flatMap(([name, item]) =>
+      policyStatements(item)
+        .filter(({ statement }) =>
+          actions(statement).some((action) => /^(secretsmanager:|\*)/i.test(action)),
+        )
+        .map((grant) => ({ name, ...grant })),
+    );
+    for (const { name, roles, statement } of grants) {
+      expect(name).toBe("worker");
+      expect(roles).toEqual([{ Ref: executionRole }]);
+      expect(statement.Effect).toBe("Allow");
+    }
+    const resources = new Set(
+      grants
+        .filter(({ statement }) => actions(statement).includes("secretsmanager:GetSecretValue"))
+        .flatMap(({ statement }) => [statement.Resource].flat().map((item) => JSON.stringify(item))),
+    );
+    expect(resources.size).toBe(2);
+    const webRole = webFunction().properties.Role["Fn::GetAtt"][0];
+    for (const { roles, statement } of policyStatements(template("web"))) {
+      if (JSON.stringify(roles).includes(webRole)) {
+        for (const action of actions(statement)) expect(action).toMatch(/^logs:/);
+      }
+    }
+  });
+
+  it("restricts IAM actions and wildcard resources to documented AWS requirements", () => {
+    const wildcardActions = new Set(["ecr:GetAuthorizationToken"]);
+    for (const item of Object.values(templates)) {
+      for (const statement of findAllStatements(item.toJSON().Resources)) {
+        expect(statement.NotAction).toBeUndefined();
+        expect(statement.NotResource).toBeUndefined();
+        for (const action of actions(statement)) {
+          expect(action).not.toMatch(/\*/);
+          if ([statement.Resource].flat().includes("*")) {
+            expect(wildcardActions.has(action), action).toBe(true);
+          }
+        }
+      }
+      for (const { Properties } of Object.values(item.findResources("AWS::IAM::Role"))) {
+        expect(Properties.ManagedPolicyArns).toBeUndefined();
+      }
+    }
+  });
+
+  it("gives the web function exactly its seven public variables and no secret", () => {
+    const { properties } = webFunction();
+    const environment: Record<string, unknown> = properties.Environment.Variables;
+    expect(Object.keys(environment).sort()).toEqual([...webKeys].sort());
+    expect(environment).toEqual({
+      NEXT_PUBLIC_SUPABASE_URL: valid.supabaseUrl,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: judgeContext.supabaseAnonKey,
+      THETIS_SITE_MODE: "judge",
+      NODE_ENV: "production",
+      PORT: "8080",
+      HOSTNAME: "0.0.0.0",
+      AWS_LWA_PORT: "8080",
+    });
+    for (const value of Object.values(environment)) {
+      expect(typeof value).toBe("string");
+      expect(value).not.toMatch(/service_role|secretsmanager|resolve:/i);
+    }
+  });
+
+  it("runs the web function as an ARM64 1024 MB image with a 15 second timeout", () => {
+    const { properties } = webFunction();
+    expect(properties).toMatchObject({
+      PackageType: "Image",
+      Architectures: ["arm64"],
+      MemorySize: 1024,
+      Timeout: 15,
+    });
+    const manifest: { dockerImages: Record<string, { source: { platform?: string } }> } =
+      JSON.parse(readFileSync(`${assembly.directory}/${stacks.web?.artifactId}.assets.json`, "utf8"));
+    expect(Object.values(manifest.dockerImages)).toEqual([
+      expect.objectContaining({ source: expect.objectContaining({ platform: "linux/arm64" }) }),
+    ]);
+  });
+
+  it("opens only the web function URL to the public, buffered, behind CloudFront GET and HEAD over HTTPS", () => {
+    const urls = Object.entries(templates).flatMap(([name, item]) =>
+      Object.values(item.findResources("AWS::Lambda::Url")).map(({ Properties }) => ({
+        name,
+        Properties,
+      })),
+    );
+    expect(urls).toEqual([
+      {
+        name: "web",
+        Properties: {
+          AuthType: "NONE",
+          InvokeMode: "BUFFERED",
+          TargetFunctionArn: { "Fn::GetAtt": [webFunction().id, "Arn"] },
+        },
+      },
+    ]);
+    const web = template("web");
+    web.resourceCountIs("AWS::CloudFront::Distribution", 1);
+    web.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: {
+        PriceClass: "PriceClass_100",
+        DefaultCacheBehavior: {
+          ViewerProtocolPolicy: "redirect-to-https",
+          AllowedMethods: ["GET", "HEAD"],
+        },
+        CustomErrorResponses: [{ ErrorCode: 503, ErrorCachingMinTTL: 0 }],
+      },
+    });
+    web.hasResourceProperties("AWS::CloudFront::CachePolicy", {
+      CachePolicyConfig: {
+        MinTTL: 30,
+        DefaultTTL: 30,
+        MaxTTL: 60,
+        ParametersInCacheKeyAndForwardedToOrigin: {
+          CookiesConfig: { CookieBehavior: "none" },
+          HeadersConfig: { HeaderBehavior: "none" },
+          QueryStringsConfig: { QueryStringBehavior: "none" },
+        },
+      },
+    });
+    // Cross-stack exports for the Ops alarm aside, the stack outputs the two URLs.
+    const outputs = Object.entries(web.findOutputs("*")).filter(([, output]) => !output.Export);
+    expect(outputs.map(([name]) => name).sort()).toEqual(["FunctionUrl", "JudgeUrl"]);
+    expect(JSON.stringify(web.findOutputs("JudgeUrl"))).toContain("/run");
+  });
+
+  it("retains every log group, the web one included, for 90 days", () => {
+    template("web").hasResource("AWS::Logs::LogGroup", {
+      Properties: { LogGroupName: `/aws/lambda/thetis-${instance}-web` },
+    });
+    for (const item of Object.values(templates)) {
+      for (const group of Object.values(item.findResources("AWS::Logs::LogGroup"))) {
+        expect(group).toMatchObject({
+          DeletionPolicy: "Retain",
+          UpdateReplacePolicy: "Retain",
+          Properties: { RetentionInDays: 90 },
+        });
+      }
+    }
+  });
+
+  it("alarms on worker running tasks, the indexer halting and web 5xx responses", () => {
+    const ops = template("ops");
+    const topic = { Ref: ops.getResourceId("AWS::SNS::Topic") };
+    ops.resourceCountIs("AWS::CloudWatch::Alarm", 3);
+    const names = Object.values(ops.findResources("AWS::CloudWatch::Alarm"))
+      .map(({ Properties }) => Properties.MetricName)
+      .sort();
+    expect(names).toEqual(["5xxErrorRate", "IndexerHalted", "RunningTaskCount"]);
+    ops.hasResourceProperties("AWS::CloudWatch::Alarm", {
+      Namespace: "AWS/CloudFront",
+      MetricName: "5xxErrorRate",
+      AlarmActions: [topic],
+    });
+  });
+
+  it("keeps the release role's main-branch trust", () => {
+    template("release").hasResourceProperties("AWS::IAM::Role", {
+      AssumeRolePolicyDocument: {
+        Statement: [
+          Match.objectLike({
+            Condition: {
+              StringEquals: {
+                [`${oidcHost}:aud`]: "sts.amazonaws.com",
+                [`${oidcHost}:sub`]: "repo:Katlego-tech/Thetis:ref:refs/heads/main",
+              },
+            },
+          }),
+        ],
+      },
+    });
+    template("release").resourceCountIs("AWS::IAM::OIDCProvider", 0);
   });
 });

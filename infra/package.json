@@ -7,7 +7,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && tsc -p tsconfig.json --noEmit",
     "test": "pnpm --filter @thetis/worker build && vitest run",
-    "synth": "pnpm --filter @thetis/worker build && cdk synth -c account=111111111111 -c region=af-south-1 -c availabilityZones=af-south-1a,af-south-1b -c instance=fiat-attestation-test -c githubRepo=Katlego-tech/Thetis -c budgetMonthlyUsd=25 -c alertEmail=alerts@example.invalid -c supabaseUrl=https://aaaaaaaaaaaaaaaaaaaa.supabase.co"
+    "synth": "pnpm --filter @thetis/worker build && cdk synth -c account=111111111111 -c region=af-south-1 -c availabilityZones=af-south-1a,af-south-1b -c instance=fiat-attestation-test -c githubRepo=Katlego-tech/Thetis -c budgetMonthlyUsd=25 -c alertEmail=alerts@example.invalid -c supabaseUrl=https://aaaaaaaaaaaaaaaaaaaa.supabase.co -c thetisProtocol=G9GNDdbYKQY14xv1xgNw1D6EY8SFnZxgHrDBdEbHsoo3 -c thetisFirstSignature=vtK8h43bEg8zDn5w7u319t6VfNztCKB87nYBJ7LN6bsgFmMR2cFKA2iVLKgve8spmhri9mQJbSk28amZthbVviE"
   },
   "dependencies": {
     "aws-cdk-lib": "2.275.0",
